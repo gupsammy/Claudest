@@ -1,0 +1,15 @@
+{
+  "name": "claudest",
+  "description": "Samarth's Claude Code plugin marketplace",
+  "owner": {
+    "name": "Samarth Gupta"
+  },
+  "plugins": [
+    {
+      "name": "claude-memory",
+      "description": "Searchable conversation memory with FTS5 indexing",
+      "version": "0.1.0",
+      "source": "./plugins/claude-memory"
+    }
+  ]
+}

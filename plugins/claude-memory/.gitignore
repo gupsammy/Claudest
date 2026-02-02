@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+*.pyo
+*.cpython-*.pyc
+.DS_Store
+docs/

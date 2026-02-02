@@ -10,19 +10,73 @@ import json
 import sqlite3
 import sys
 from pathlib import Path
+from typing import Generator
 
-# Import from local import_conversations module
-from import_conversations import (
-    DEFAULT_DB_PATH,
+# Add path to shared utils
+SCRIPT_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(SCRIPT_DIR.parent / "skills" / "past-conversations" / "scripts"))
+
+from memory_utils import (
     DEFAULT_PROJECTS_DIR,
-    parse_jsonl_file,
+    get_db_connection,
+    load_settings,
+    setup_logging,
     extract_text_content,
-    extract_session_metadata,
     extract_files_modified,
     extract_commits,
     is_tool_result,
-    init_database,
 )
+
+
+def parse_jsonl_file(filepath: Path) -> Generator[dict, None, None]:
+    """Parse JSONL file line by line, yielding relevant entries."""
+    with open(filepath, "r", encoding="utf-8", errors="replace") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+                entry_type = obj.get("type")
+
+                # Skip noise entries
+                if entry_type in ("progress", "file-history-snapshot", "queue-operation"):
+                    continue
+
+                # Skip meta messages
+                if obj.get("isMeta"):
+                    continue
+
+                if entry_type in ("user", "assistant"):
+                    yield obj
+
+            except json.JSONDecodeError:
+                pass
+
+
+def extract_session_metadata(entries: list[dict]) -> dict:
+    """Extract session metadata from entries."""
+    metadata = {
+        "started_at": None,
+        "ended_at": None,
+        "git_branch": None,
+        "cwd": None,
+    }
+
+    for entry in entries:
+        ts = entry.get("timestamp")
+        if ts:
+            if metadata["started_at"] is None or ts < metadata["started_at"]:
+                metadata["started_at"] = ts
+            if metadata["ended_at"] is None or ts > metadata["ended_at"]:
+                metadata["ended_at"] = ts
+
+        if not metadata["git_branch"]:
+            metadata["git_branch"] = entry.get("gitBranch")
+        if not metadata["cwd"]:
+            metadata["cwd"] = entry.get("cwd")
+
+    return metadata
 
 
 def get_session_file(projects_dir: Path, session_id: str) -> Path | None:
@@ -189,6 +243,16 @@ def sync_session(conn: sqlite3.Connection, filepath: Path, project_dir: Path) ->
 
 
 def main():
+    # Load settings
+    settings = load_settings()
+    logger = setup_logging(settings)
+
+    # Check if sync is disabled
+    if not settings.get("sync_on_stop", True):
+        logger.info("Sync disabled by settings")
+        print(json.dumps({"continue": True}))
+        return
+
     # Read hook input from stdin
     try:
         hook_input = json.load(sys.stdin)
@@ -211,7 +275,7 @@ def main():
 
     # Sync
     try:
-        conn = init_database(DEFAULT_DB_PATH)
+        conn = get_db_connection(settings)
         project_dir = session_file.parent
 
         # Handle subagent paths
@@ -222,6 +286,9 @@ def main():
         conn.commit()
         conn.close()
 
+        if new_messages > 0:
+            logger.info(f"Synced {new_messages} new message(s) from session {session_id[:8]}")
+
         # Output for hook (continue = True means don't block)
         output = {"continue": True}
         if new_messages > 0:
@@ -230,6 +297,7 @@ def main():
         print(json.dumps(output))
 
     except Exception as e:
+        logger.error(f"Sync error: {e}")
         # Don't block Claude on sync errors
         print(json.dumps({"continue": True}))
         sys.exit(0)

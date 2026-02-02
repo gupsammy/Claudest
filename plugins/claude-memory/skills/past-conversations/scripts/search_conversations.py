@@ -9,21 +9,14 @@ import argparse
 import json
 import sqlite3
 import sys
-from datetime import datetime
 from pathlib import Path
 
-DEFAULT_DB_PATH = Path.home() / ".claude-memory" / "conversations.db"
-
-
-def format_time(ts_str: str | None) -> str:
-    """Format ISO timestamp to readable form."""
-    if not ts_str:
-        return "?"
-    try:
-        dt = datetime.fromisoformat(ts_str.replace('Z', '+00:00'))
-        return dt.strftime("%Y-%m-%d %H:%M")
-    except:
-        return ts_str[:16] if ts_str else "?"
+# Local imports
+from memory_utils import (
+    DEFAULT_DB_PATH,
+    format_markdown_session,
+    format_json_sessions,
+)
 
 
 def search_sessions(
@@ -117,50 +110,10 @@ def format_markdown(sessions: list[dict], query: str, verbose: bool = False) -> 
         return f"No sessions found for query: {query}"
 
     lines = [f"# Search Results: \"{query}\" ({len(sessions)} sessions)\n"]
-
     for session in sessions:
-        started = format_time(session["started_at"])
-        lines.append(f"## {session['project']} | {started}")
-        lines.append(f"Session: {session['uuid'][:8]}")
-
-        if session.get("git_branch"):
-            lines.append(f"Branch: {session['git_branch']}")
-
-        if verbose:
-            files = session.get("files_modified", [])
-            if files:
-                lines.append("\n### Files Modified")
-                for f in files[-10:]:
-                    lines.append(f"- `{f}`")
-                if len(files) > 10:
-                    lines.append(f"- ...and {len(files) - 10} more")
-
-            commits = session.get("commits", [])
-            if commits:
-                lines.append("\n### Commits")
-                for c in commits:
-                    lines.append(f"- {c}")
-
-        lines.append("\n### Conversation\n")
-
-        for msg in session["messages"]:
-            role = "User" if msg["role"] == "user" else "Assistant"
-            lines.append(f"**{role}:** {msg['content']}\n")
-
-        lines.append("---\n")
+        lines.append(format_markdown_session(session, verbose=verbose))
 
     return "\n".join(lines)
-
-
-def format_json(sessions: list[dict], query: str) -> str:
-    """Format sessions as JSON."""
-    total_messages = sum(len(s["messages"]) for s in sessions)
-    return json.dumps({
-        "sessions": sessions,
-        "total_sessions": len(sessions),
-        "total_messages": total_messages,
-        "query": query
-    }, indent=2)
 
 
 def main():
@@ -190,7 +143,7 @@ def main():
         conn.close()
 
         if args.format == "json":
-            print(format_json(sessions, args.query))
+            print(format_json_sessions(sessions, {"query": args.query}))
         else:
             print(format_markdown(sessions, args.query, verbose=args.verbose))
 

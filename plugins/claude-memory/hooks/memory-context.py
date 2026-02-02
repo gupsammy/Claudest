@@ -14,30 +14,22 @@ Output: JSON with hookSpecificOutput for context injection
 import json
 import sqlite3
 import sys
-from datetime import datetime
 from pathlib import Path
 
-DEFAULT_DB_PATH = Path.home() / ".claude-memory" / "conversations.db"
-MAX_SESSIONS = 2
+# Add path to shared utils
+SCRIPT_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(SCRIPT_DIR.parent / "skills" / "past-conversations" / "scripts"))
+
+from memory_utils import (
+    get_db_path,
+    load_settings,
+    format_time,
+    get_project_key,
+    setup_logging,
+)
 
 
-def format_time(ts_str: str | None) -> str:
-    """Format ISO timestamp to HH:MM."""
-    if not ts_str:
-        return "??:??"
-    try:
-        dt = datetime.fromisoformat(ts_str.replace('Z', '+00:00'))
-        return dt.strftime("%H:%M")
-    except:
-        return "??:??"
-
-
-def get_project_key(cwd: str) -> str:
-    """Convert working directory to project key format."""
-    return cwd.replace("/", "-").replace(".", "-")
-
-
-def select_sessions(conn: sqlite3.Connection, project_key: str, current_session_id: str) -> list[dict]:
+def select_sessions(conn: sqlite3.Connection, project_key: str, current_session_id: str, max_sessions: int) -> list[dict]:
     """
     Select sessions for context using the exchange-count algorithm.
     Returns list of session dicts with messages.
@@ -96,7 +88,7 @@ def select_sessions(conn: sqlite3.Connection, project_key: str, current_session_
         # 2-exchange: load it, keep looking unless at limit
         if exchange_count == 2:
             selected.append(session_data)
-            if len(selected) >= MAX_SESSIONS:
+            if len(selected) >= max_sessions:
                 break
             continue
 
@@ -108,7 +100,7 @@ def select_sessions(conn: sqlite3.Connection, project_key: str, current_session_
     return selected
 
 
-def build_context(sessions: list[dict]) -> str:
+def build_context(sessions: list[dict], truncation_limit: int) -> str:
     """Build markdown context from selected sessions."""
     if not sessions:
         return ""
@@ -122,7 +114,7 @@ def build_context(sessions: list[dict]) -> str:
         # Session timeline
         start = format_time(session["started_at"])
         end = format_time(session["ended_at"])
-        lines.append(f"### Session: {start} → {end}\n")
+        lines.append(f"### Session: {start} -> {end}\n")
 
         # Files modified
         files = session.get("files_modified", [])
@@ -187,21 +179,25 @@ def build_context(sessions: list[dict]) -> str:
         if current_user is not None:
             exchanges.append({"user": current_user, "asst": "\n\n".join(current_asst), "ts": None})
 
-        # Show last 3 exchanges
+        # Show last 3 exchanges (truncated by limit)
         for ex in exchanges[-3:]:
             t = format_time(ex.get("ts"))
             lines.append(f"**[{t}] User:**")
-            lines.append(ex["user"][:2000])
+            lines.append(ex["user"][:truncation_limit])
             lines.append("")
             if ex["asst"]:
                 lines.append(f"**[{t}] Assistant:**")
-                lines.append(ex["asst"][:2000])
+                lines.append(ex["asst"][:truncation_limit])
                 lines.append("")
 
     return "\n".join(lines)
 
 
 def main():
+    # Load settings
+    settings = load_settings()
+    logger = setup_logging(settings)
+
     # Read hook input from stdin
     try:
         hook_input = json.load(sys.stdin)
@@ -217,29 +213,40 @@ def main():
         print(json.dumps({}))
         return
 
+    # Check if auto-inject is disabled
+    if not settings.get("auto_inject_context", True):
+        logger.info("Context injection disabled by settings")
+        print(json.dumps({}))
+        return
+
     if not cwd or not session_id:
         print(json.dumps({}))
         return
 
     # Check if database exists
-    if not DEFAULT_DB_PATH.exists():
+    db_path = get_db_path(settings)
+    if not db_path.exists():
         print(json.dumps({}))
         return
 
     try:
-        conn = sqlite3.connect(DEFAULT_DB_PATH)
+        conn = sqlite3.connect(db_path)
         project_key = get_project_key(cwd)
-        sessions = select_sessions(conn, project_key, session_id)
+        max_sessions = settings.get("max_context_sessions", 2)
+        sessions = select_sessions(conn, project_key, session_id, max_sessions)
         conn.close()
 
         if not sessions:
             print(json.dumps({}))
             return
 
-        context = build_context(sessions)
+        truncation_limit = settings.get("context_truncation_limit", 2000)
+        context = build_context(sessions, truncation_limit)
         if not context:
             print(json.dumps({}))
             return
+
+        logger.info(f"Injecting context from {len(sessions)} session(s) for project {project_key}")
 
         # Wrap in section header
         full_context = f"## Previous Session Context\n\n{context}"
@@ -253,6 +260,7 @@ def main():
         print(json.dumps(output))
 
     except Exception as e:
+        logger.error(f"Context injection error: {e}")
         # Don't block session start on errors
         print(json.dumps({}))
         sys.exit(0)

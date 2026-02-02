@@ -8,103 +8,29 @@ Extracts only searchable text content, skipping progress entries (90% of file si
 import argparse
 import hashlib
 import json
-import os
-import re
 import sqlite3
-from datetime import datetime
+import sys
 from pathlib import Path
 from typing import Optional, Generator
 
-# Default paths
-DEFAULT_PROJECTS_DIR = Path.home() / ".claude" / "projects"
-DEFAULT_DB_PATH = Path.home() / ".claude-memory" / "conversations.db"
+# Add path to shared utils
+SCRIPT_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(SCRIPT_DIR.parent / "skills" / "past-conversations" / "scripts"))
 
-# Database schema (FTS triggers auto-index on INSERT/UPDATE/DELETE)
-SCHEMA = """
--- Projects table (derived from directory structure)
-CREATE TABLE IF NOT EXISTS projects (
-  id INTEGER PRIMARY KEY,
-  path TEXT UNIQUE NOT NULL,
-  key TEXT UNIQUE NOT NULL,
-  name TEXT,
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-CREATE INDEX IF NOT EXISTS idx_projects_key ON projects(key);
-
--- Sessions table
-CREATE TABLE IF NOT EXISTS sessions (
-  id INTEGER PRIMARY KEY,
-  uuid TEXT UNIQUE NOT NULL,
-  project_id INTEGER REFERENCES projects(id),
-  parent_session_id INTEGER REFERENCES sessions(id),
-  started_at DATETIME,
-  ended_at DATETIME,
-  git_branch TEXT,
-  cwd TEXT,
-  message_count INTEGER DEFAULT 0,
-  exchange_count INTEGER DEFAULT 0,
-  files_modified TEXT,
-  commits TEXT,
-  imported_at DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project_id);
-CREATE INDEX IF NOT EXISTS idx_sessions_started ON sessions(started_at);
-CREATE INDEX IF NOT EXISTS idx_sessions_exchange ON sessions(exchange_count);
-
--- Messages table (core content)
-CREATE TABLE IF NOT EXISTS messages (
-  id INTEGER PRIMARY KEY,
-  session_id INTEGER NOT NULL REFERENCES sessions(id),
-  uuid TEXT,
-  parent_uuid TEXT,
-  timestamp DATETIME,
-  role TEXT CHECK(role IN ('user', 'assistant')),
-  content TEXT NOT NULL,
-  has_tool_use INTEGER DEFAULT 0,
-  has_thinking INTEGER DEFAULT 0
-);
-CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id);
-CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp);
-CREATE INDEX IF NOT EXISTS idx_messages_role ON messages(role);
-
--- FTS5 full-text search (auto-synced via triggers)
-CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
-  content,
-  content=messages,
-  content_rowid=id,
-  tokenize='porter unicode61'
-);
-
-CREATE TRIGGER IF NOT EXISTS messages_ai AFTER INSERT ON messages BEGIN
-  INSERT INTO messages_fts(rowid, content) VALUES (new.id, new.content);
-END;
-CREATE TRIGGER IF NOT EXISTS messages_ad AFTER DELETE ON messages BEGIN
-  INSERT INTO messages_fts(messages_fts, rowid, content) VALUES('delete', old.id, old.content);
-END;
-CREATE TRIGGER IF NOT EXISTS messages_au AFTER UPDATE ON messages BEGIN
-  INSERT INTO messages_fts(messages_fts, rowid, content) VALUES('delete', old.id, old.content);
-  INSERT INTO messages_fts(rowid, content) VALUES (new.id, new.content);
-END;
-
--- Import tracking
-CREATE TABLE IF NOT EXISTS import_log (
-  id INTEGER PRIMARY KEY,
-  file_path TEXT UNIQUE NOT NULL,
-  file_hash TEXT,
-  imported_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  messages_imported INTEGER DEFAULT 0
-);
-
--- Views
-CREATE VIEW IF NOT EXISTS search_results AS
-SELECT m.id, m.timestamp, m.role, m.content, s.uuid as session_uuid, p.name as project_name, p.path as project_path
-FROM messages m JOIN sessions s ON m.session_id = s.id JOIN projects p ON s.project_id = p.id;
-
-CREATE VIEW IF NOT EXISTS recent_conversations AS
-SELECT s.uuid as session_uuid, p.name as project, s.started_at, s.ended_at,
-       s.message_count, s.exchange_count, s.files_modified, s.commits, s.git_branch
-FROM sessions s JOIN projects p ON s.project_id = p.id ORDER BY s.started_at DESC;
-"""
+from memory_utils import (
+    DEFAULT_DB_PATH,
+    DEFAULT_PROJECTS_DIR,
+    SCHEMA,
+    get_db_path,
+    load_settings,
+    setup_logging,
+    parse_project_key,
+    extract_project_name,
+    extract_text_content,
+    extract_files_modified,
+    extract_commits,
+    is_tool_result,
+)
 
 
 def get_file_hash(filepath: Path) -> str:
@@ -116,99 +42,10 @@ def get_file_hash(filepath: Path) -> str:
     return h.hexdigest()
 
 
-def parse_project_key(key: str) -> str:
-    """Convert directory key back to original path."""
-    # -Users-samarthgupta-repos-forks-clawdbot -> /Users/samarthgupta/repos/forks/clawdbot
-    return "/" + key.replace("-", "/").lstrip("/")
-
-
-def extract_project_name(path: str) -> str:
-    """Extract short project name from path."""
-    return Path(path).name
-
-
-def extract_text_content(content) -> tuple[str, bool, bool]:
-    """
-    Extract text from message content.
-    Returns: (text, has_tool_use, has_thinking)
-    """
-    has_tool_use = False
-    has_thinking = False
-
-    if isinstance(content, str):
-        # Clean up command artifacts
-        text = re.sub(r'<command-name>.*?</command-name>', '', content, flags=re.DOTALL)
-        text = re.sub(r'<command-message>.*?</command-message>', '', text, flags=re.DOTALL)
-        text = re.sub(r'<command-args>.*?</command-args>', '', text, flags=re.DOTALL)
-        text = re.sub(r'<local-command-stdout>.*?</local-command-stdout>', '', text, flags=re.DOTALL)
-        return text.strip(), False, False
-
-    if isinstance(content, list):
-        texts = []
-        for item in content:
-            if isinstance(item, dict):
-                item_type = item.get("type", "")
-                if item_type == "text":
-                    texts.append(item.get("text", ""))
-                elif item_type == "tool_use":
-                    has_tool_use = True
-                    # Optionally capture tool name for searchability
-                    tool_name = item.get("name", "")
-                    if tool_name:
-                        texts.append(f"[Tool: {tool_name}]")
-                elif item_type == "thinking":
-                    has_thinking = True
-                    # Skip thinking content by default (can be large)
-                    pass
-                elif item_type == "tool_result":
-                    # Skip tool results (file contents, command outputs)
-                    pass
-        return "\n".join(texts).strip(), has_tool_use, has_thinking
-
-    return "", False, False
-
-
-def is_tool_result(content) -> bool:
-    """Check if content is a tool result (not a real user message)."""
-    if isinstance(content, list) and content:
-        first = content[0]
-        if isinstance(first, dict) and first.get("type") == "tool_result":
-            return True
-    return False
-
-
-def extract_files_modified(content) -> list[str]:
-    """Extract file paths from Edit/Write/MultiEdit tool uses."""
-    files = []
-    if isinstance(content, list):
-        for item in content:
-            if isinstance(item, dict) and item.get("type") == "tool_use":
-                name = item.get("name", "")
-                inp = item.get("input", {})
-                if name in ("Edit", "Write", "MultiEdit") and "file_path" in inp:
-                    files.append(inp["file_path"])
-    return files
-
-
-def extract_commits(content) -> list[str]:
-    """Extract git commit messages from Bash tool uses."""
-    commits = []
-    if isinstance(content, list):
-        for item in content:
-            if isinstance(item, dict) and item.get("type") == "tool_use":
-                if item.get("name") == "Bash":
-                    cmd = item.get("input", {}).get("command", "")
-                    if "git commit" in cmd:
-                        m = re.search(r'-m\s+["\']([^"\']+)["\']', cmd)
-                        if m:
-                            commits.append(m.group(1)[:100])
-    return commits
-
-
 def parse_jsonl_file(filepath: Path) -> Generator[dict, None, None]:
     """Parse JSONL file line by line, yielding relevant entries."""
     with open(filepath, "r", encoding="utf-8", errors="replace") as f:
-        for line_num, line in enumerate(f, 1):
+        for line in f:
             line = line.strip()
             if not line:
                 continue
@@ -227,8 +64,7 @@ def parse_jsonl_file(filepath: Path) -> Generator[dict, None, None]:
                 if entry_type in ("user", "assistant"):
                     yield obj
 
-            except json.JSONDecodeError as e:
-                # Skip malformed lines
+            except json.JSONDecodeError:
                 pass
 
 
@@ -404,7 +240,11 @@ def import_session(
     return session_id, message_count
 
 
-def import_project(conn: sqlite3.Connection, project_dir: Path) -> tuple[int, int, int]:
+def import_project(
+    conn: sqlite3.Connection,
+    project_dir: Path,
+    exclude_projects: list[str] | None = None
+) -> tuple[int, int, int]:
     """
     Import all sessions from a project directory.
     Returns: (sessions_imported, messages_imported, sessions_skipped)
@@ -415,6 +255,10 @@ def import_project(conn: sqlite3.Connection, project_dir: Path) -> tuple[int, in
     project_key = project_dir.name
     project_path = parse_project_key(project_key)
     project_name = extract_project_name(project_path)
+
+    # Check if excluded
+    if exclude_projects and project_name in exclude_projects:
+        return 0, 0, 0
 
     # Insert or get project
     cursor.execute("""
@@ -496,7 +340,7 @@ def search(conn: sqlite3.Connection, query: str, limit: int = 20, project: Optio
         WHERE messages_fts MATCH ?
     """
 
-    params = [fts_query]
+    params: list = [fts_query]
 
     if project:
         sql += " AND p.name LIKE ?"
@@ -564,8 +408,16 @@ def main():
 
     args = parser.parse_args()
 
+    # Load settings
+    settings = load_settings()
+    logger = setup_logging(settings)
+
+    # Use settings-based DB path if not overridden
+    db_path = args.db if args.db != DEFAULT_DB_PATH else get_db_path(settings)
+    exclude_projects = settings.get("exclude_projects", [])
+
     # Initialize or connect to database
-    conn = init_database(args.db)
+    conn = init_database(db_path)
 
     if args.stats:
         cursor = conn.cursor()
@@ -576,9 +428,9 @@ def main():
         cursor.execute("SELECT COUNT(*) FROM messages")
         messages = cursor.fetchone()[0]
 
-        db_size = args.db.stat().st_size if args.db.exists() else 0
+        db_size = db_path.stat().st_size if db_path.exists() else 0
 
-        print(f"Database: {args.db}")
+        print(f"Database: {db_path}")
         print(f"Size: {db_size / 1024 / 1024:.2f} MB")
         print(f"Projects: {projects}")
         print(f"Sessions: {sessions}")
@@ -592,10 +444,10 @@ def main():
             return
 
         for r in results:
-            print(f"\n{'─' * 60}")
-            print(f"{r['project']} / {r['session_uuid'][:8]} · {r['timestamp']} · {r['role']}")
+            print(f"\n{'-' * 60}")
+            print(f"{r['project']} / {r['session_uuid'][:8]} - {r['timestamp']} - {r['role']}")
             print(f"{r['snippet']}")
-        print(f"\n{'─' * 60}")
+        print(f"\n{'-' * 60}")
         print(f"Found {len(results)} results")
         return
 
@@ -611,7 +463,7 @@ def main():
             print(f"Project not found: {project_dir}")
             return
 
-        sessions, messages, skipped = import_project(conn, project_dir)
+        sessions, messages, skipped = import_project(conn, project_dir, exclude_projects)
         total_sessions += sessions
         total_messages += messages
         total_skipped += skipped
@@ -622,7 +474,7 @@ def main():
             if not project_dir.is_dir() or project_dir.name.startswith("."):
                 continue
 
-            sessions, messages, skipped = import_project(conn, project_dir)
+            sessions, messages, skipped = import_project(conn, project_dir, exclude_projects)
             total_sessions += sessions
             total_messages += messages
             total_skipped += skipped
@@ -633,11 +485,12 @@ def main():
     conn.commit()
     conn.close()
 
+    logger.info(f"Import complete: {total_sessions} sessions, {total_messages} messages")
     print(f"\nTotal: {total_sessions} sessions, {total_messages} messages imported ({total_skipped} unchanged)")
 
     # Show database size
-    if args.db.exists():
-        db_size = args.db.stat().st_size
+    if db_path.exists():
+        db_size = db_path.stat().st_size
         print(f"Database size: {db_size / 1024 / 1024:.2f} MB")
 
 

@@ -1,6 +1,6 @@
-# claudest
+# Claudest
 
-A Claude Code plugin marketplace for tools that actually work.
+The only Claude Code plugin marketplace that isn't trash.
 
 ## Philosophy
 
@@ -30,7 +30,7 @@ claude plugin marketplace add gupsammy/claudest
 
 ### Enable Auto-Updates
 
-Run `/plugin`, go to the **Marketplaces** tab, and toggle **Enable auto-update** for claudest.
+Run `/plugin`, go to the **Marketplaces** tab, and toggle **Enable auto-update** for Claudest.
 
 ### Install a Plugin
 

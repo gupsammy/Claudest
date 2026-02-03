@@ -1,5 +1,4 @@
 ---
-name: claude-memory
 description: Manage conversation memory database
 allowed-tools: [Bash, Read]
 argument-hint: "<subcommand: sync|search|stats|import>"

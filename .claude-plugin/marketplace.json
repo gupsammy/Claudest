@@ -10,6 +10,12 @@
       "description": "Searchable conversation memory with FTS5 indexing",
       "version": "0.2.0",
       "source": "./plugins/claude-memory"
+    },
+    {
+      "name": "claude-utilities",
+      "description": "A collection of useful utilities, tools, and skills for Claude Code",
+      "version": "0.1.0",
+      "source": "./plugins/claude-utilities"
     }
   ]
 }

@@ -32,21 +32,23 @@ def get_recent_sessions(
     cursor = conn.cursor()
 
     sql = """
-        SELECT s.id, s.uuid, s.started_at, s.ended_at, s.exchange_count,
-               s.files_modified, s.commits, s.git_branch,
-               p.name as project, p.path as project_path
+        SELECT s.id, s.uuid, b.started_at, b.ended_at, b.exchange_count,
+               b.files_modified, b.commits, s.git_branch,
+               p.name as project, p.path as project_path,
+               b.id as branch_db_id
         FROM sessions s
+        JOIN branches b ON b.session_id = s.id AND b.is_active = 1
         JOIN projects p ON s.project_id = p.id
         WHERE 1=1
     """
     params = []
 
     if before:
-        sql += " AND s.started_at < ?"
+        sql += " AND b.started_at < ?"
         params.append(before)
 
     if after:
-        sql += " AND s.started_at > ?"
+        sql += " AND b.started_at > ?"
         params.append(after)
 
     if projects:
@@ -55,7 +57,7 @@ def get_recent_sessions(
         params.extend(projects)
 
     order = "DESC" if sort_order == "desc" else "ASC"
-    sql += f" ORDER BY s.started_at {order} LIMIT ?"
+    sql += f" ORDER BY b.ended_at {order} LIMIT ?"
     params.append(n)
 
     cursor.execute(sql, params)
@@ -64,15 +66,16 @@ def get_recent_sessions(
     results = []
 
     for session in sessions:
-        (session_id, uuid, started_at, ended_at, _exchange_count,
-         files_json, commits_json, git_branch, project, _project_path) = session
+        (_session_id, uuid, started_at, ended_at, _exchange_count,
+         files_json, commits_json, git_branch, project, _project_path, branch_db_id) = session
 
         cursor.execute("""
-            SELECT role, content, timestamp
-            FROM messages
-            WHERE session_id = ?
-            ORDER BY timestamp ASC
-        """, (session_id,))
+            SELECT m.role, m.content, m.timestamp
+            FROM branch_messages bm
+            JOIN messages m ON bm.message_id = m.id
+            WHERE bm.branch_id = ?
+            ORDER BY m.timestamp ASC
+        """, (branch_db_id,))
 
         messages = [{"role": r, "content": c, "timestamp": t} for r, c, t in cursor.fetchall()]
 

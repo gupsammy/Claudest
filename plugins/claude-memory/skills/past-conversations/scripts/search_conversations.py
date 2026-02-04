@@ -35,7 +35,7 @@ def search_sessions(
 
     fts_query = " OR ".join(f'"{term}"' for term in terms)
 
-    # Find distinct session IDs with matches
+    # Find distinct session IDs with matches (messages are already deduplicated in v3)
     sql = """
         SELECT DISTINCT s.id
         FROM messages_fts
@@ -60,29 +60,32 @@ def search_sessions(
     if not session_ids:
         return []
 
-    # Fetch full session details
+    # Fetch full session details with active branch metadata
     placeholders = ",".join("?" * len(session_ids))
     cursor.execute(f"""
-        SELECT s.id, s.uuid, s.started_at, s.ended_at, s.files_modified,
-               s.commits, s.git_branch, p.name as project
+        SELECT s.id, s.uuid, b.started_at, b.ended_at, b.files_modified,
+               b.commits, s.git_branch, p.name as project, b.id as branch_db_id
         FROM sessions s
+        JOIN branches b ON b.session_id = s.id AND b.is_active = 1
         JOIN projects p ON s.project_id = p.id
         WHERE s.id IN ({placeholders})
-        ORDER BY s.started_at DESC
+        ORDER BY b.ended_at DESC
     """, session_ids)
     sessions = cursor.fetchall()
 
     results = []
 
     for session in sessions:
-        session_id, uuid, started_at, ended_at, files_json, commits_json, git_branch, project = session
+        _session_id, uuid, started_at, ended_at, files_json, commits_json, git_branch, project, branch_db_id = session
 
+        # Get messages for active branch via branch_messages
         cursor.execute("""
-            SELECT role, content, timestamp
-            FROM messages
-            WHERE session_id = ?
-            ORDER BY timestamp ASC
-        """, (session_id,))
+            SELECT m.role, m.content, m.timestamp
+            FROM branch_messages bm
+            JOIN messages m ON bm.message_id = m.id
+            WHERE bm.branch_id = ?
+            ORDER BY m.timestamp ASC
+        """, (branch_db_id,))
 
         messages = [{"role": r, "content": c, "timestamp": t} for r, c, t in cursor.fetchall()]
 
@@ -143,7 +146,7 @@ def main():
         conn.close()
 
         if args.format == "json":
-            print(format_json_sessions(sessions, {"query": args.query}))
+            print(format_json_sessions(sessions, {"query": args.query})  )
         else:
             print(format_markdown(sessions, args.query, verbose=args.verbose))
 

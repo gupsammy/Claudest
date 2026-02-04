@@ -43,14 +43,16 @@ def select_sessions(conn: sqlite3.Connection, project_key: str, current_session_
         return []
     project_id = row[0]
 
-    # Get recent sessions (newest first), excluding current and subagents
+    # Get recent active branches (by last activity), excluding current and subagents
     cursor.execute("""
-        SELECT id, uuid, started_at, ended_at, exchange_count, files_modified, commits, git_branch
-        FROM sessions
-        WHERE project_id = ?
-          AND uuid != ?
-          AND parent_session_id IS NULL
-        ORDER BY started_at DESC
+        SELECT s.id, s.uuid, b.started_at, b.ended_at, b.exchange_count,
+               b.files_modified, b.commits, s.git_branch, b.id as branch_db_id
+        FROM sessions s
+        JOIN branches b ON b.session_id = s.id AND b.is_active = 1
+        WHERE s.project_id = ?
+          AND s.uuid != ?
+          AND s.parent_session_id IS NULL
+        ORDER BY b.ended_at DESC
         LIMIT 20
     """, (project_id, current_session_id))
 
@@ -58,19 +60,20 @@ def select_sessions(conn: sqlite3.Connection, project_key: str, current_session_
     selected = []
 
     for session in candidates:
-        session_id, uuid, started_at, ended_at, exchange_count, files_json, commits_json, git_branch = session
+        _session_id, uuid, started_at, ended_at, exchange_count, files_json, commits_json, git_branch, branch_db_id = session
 
         # Skip 1-exchange sessions (noise)
         if exchange_count <= 1:
             continue
 
-        # Get messages for this session
+        # Get messages for this branch via branch_messages
         cursor.execute("""
-            SELECT role, content, timestamp
-            FROM messages
-            WHERE session_id = ?
-            ORDER BY timestamp ASC
-        """, (session_id,))
+            SELECT m.role, m.content, m.timestamp
+            FROM branch_messages bm
+            JOIN messages m ON bm.message_id = m.id
+            WHERE bm.branch_id = ?
+            ORDER BY m.timestamp ASC
+        """, (branch_db_id,))
 
         messages = [{"role": r, "content": c, "timestamp": t} for r, c, t in cursor.fetchall()]
 

@@ -3,6 +3,9 @@
 Import Claude Code JSONL conversations into SQLite memory database.
 
 Extracts only searchable text content, skipping progress entries (90% of file size).
+Detects conversation branches (from rewind) and stores each branch separately.
+
+v3 schema: messages stored once per session, branches as separate index.
 """
 
 import argparse
@@ -11,7 +14,7 @@ import json
 import sqlite3
 import sys
 from pathlib import Path
-from typing import Optional, Generator
+from typing import Optional
 
 # Add path to shared utils
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -20,16 +23,19 @@ sys.path.insert(0, str(SCRIPT_DIR.parent / "skills" / "past-conversations" / "sc
 from memory_utils import (
     DEFAULT_DB_PATH,
     DEFAULT_PROJECTS_DIR,
-    SCHEMA,
     get_db_path,
+    get_db_connection,
     load_settings,
     setup_logging,
     parse_project_key,
     extract_project_name,
     extract_text_content,
-    extract_files_modified,
-    extract_commits,
     is_tool_result,
+    parse_jsonl_file,
+    parse_all_with_uuids,
+    extract_session_metadata,
+    find_all_branches,
+    compute_branch_metadata,
 )
 
 
@@ -42,57 +48,6 @@ def get_file_hash(filepath: Path) -> str:
     return h.hexdigest()
 
 
-def parse_jsonl_file(filepath: Path) -> Generator[dict, None, None]:
-    """Parse JSONL file line by line, yielding relevant entries."""
-    with open(filepath, "r", encoding="utf-8", errors="replace") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                obj = json.loads(line)
-                entry_type = obj.get("type")
-
-                # Skip noise entries (90% of file size)
-                if entry_type in ("progress", "file-history-snapshot", "queue-operation"):
-                    continue
-
-                # Skip meta messages
-                if obj.get("isMeta"):
-                    continue
-
-                if entry_type in ("user", "assistant"):
-                    yield obj
-
-            except json.JSONDecodeError:
-                pass
-
-
-def extract_session_metadata(entries: list[dict]) -> dict:
-    """Extract session metadata from entries."""
-    metadata = {
-        "started_at": None,
-        "ended_at": None,
-        "git_branch": None,
-        "cwd": None,
-    }
-
-    for entry in entries:
-        ts = entry.get("timestamp")
-        if ts:
-            if metadata["started_at"] is None or ts < metadata["started_at"]:
-                metadata["started_at"] = ts
-            if metadata["ended_at"] is None or ts > metadata["ended_at"]:
-                metadata["ended_at"] = ts
-
-        if not metadata["git_branch"]:
-            metadata["git_branch"] = entry.get("gitBranch")
-        if not metadata["cwd"]:
-            metadata["cwd"] = entry.get("cwd")
-
-    return metadata
-
-
 def import_session(
     conn: sqlite3.Connection,
     filepath: Path,
@@ -100,8 +55,9 @@ def import_session(
     parent_session_id: Optional[int] = None
 ) -> tuple[int, int]:
     """
-    Import a single session JSONL file.
-    Returns: (session_id, message_count)
+    Import a single session JSONL file with v3 schema.
+    Messages stored once, branches tracked via branch_messages.
+    Returns: (branches_imported, total_message_count)
     """
     cursor = conn.cursor()
 
@@ -111,57 +67,50 @@ def import_session(
         "SELECT id, file_hash FROM import_log WHERE file_path = ?",
         (str(filepath),)
     )
-    row = cursor.fetchone()
-    if row and row[1] == file_hash:
-        # Already imported, skip
+    log_row = cursor.fetchone()
+    if log_row and log_row[1] == file_hash:
         return -1, 0
 
-    # Parse all entries first
-    entries = list(parse_jsonl_file(filepath))
-    if not entries:
+    # Parse all entries for branch detection
+    all_entries = list(parse_all_with_uuids(filepath))
+    if not all_entries:
+        return -1, 0
+
+    # Find all branches
+    branches = find_all_branches(all_entries)
+    if not branches:
+        return -1, 0
+
+    # Parse user/assistant messages
+    messages = list(parse_jsonl_file(filepath))
+    if not messages:
         return -1, 0
 
     # Extract session UUID from filename
     session_uuid = filepath.stem
     if session_uuid.startswith("agent-"):
-        session_uuid = session_uuid[6:]  # Remove "agent-" prefix for subagents
+        session_uuid = session_uuid[6:]
 
-    # Extract metadata
-    metadata = extract_session_metadata(entries)
+    # Extract session-level metadata
+    meta = extract_session_metadata(all_entries)
 
-    # Insert or update session
+    # Step 1: Upsert ONE session row
     cursor.execute("""
-        INSERT INTO sessions (uuid, project_id, parent_session_id, started_at, ended_at, git_branch, cwd)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO sessions (uuid, project_id, parent_session_id, git_branch, cwd)
+        VALUES (?, ?, ?, ?, ?)
         ON CONFLICT(uuid) DO UPDATE SET
-            started_at = excluded.started_at,
-            ended_at = excluded.ended_at,
-            git_branch = excluded.git_branch,
-            cwd = excluded.cwd
+            git_branch = COALESCE(excluded.git_branch, sessions.git_branch),
+            cwd = COALESCE(excluded.cwd, sessions.cwd),
+            parent_session_id = COALESCE(excluded.parent_session_id, sessions.parent_session_id)
         RETURNING id
-    """, (
-        session_uuid,
-        project_id,
-        parent_session_id,
-        metadata["started_at"],
-        metadata["ended_at"],
-        metadata["git_branch"],
-        metadata["cwd"]
-    ))
+    """, (session_uuid, project_id, parent_session_id, meta["git_branch"], meta["cwd"]))
     session_id = cursor.fetchone()[0]
 
-    # Delete existing messages for this session (for re-import)
+    # Step 2: Insert ALL messages once (delete + reinsert for re-import)
     cursor.execute("DELETE FROM messages WHERE session_id = ?", (session_id,))
 
-    # Track session-level metadata
-    message_count = 0
-    exchange_count = 0
-    all_files = []
-    all_commits = []
-    has_user = False
-
-    # Insert messages and collect metadata
-    for entry in entries:
+    total_messages = 0
+    for entry in messages:
         entry_type = entry.get("type")
         if entry_type not in ("user", "assistant"):
             continue
@@ -169,7 +118,6 @@ def import_session(
         message = entry.get("message", {})
         content = message.get("content", "")
 
-        # Skip tool results for exchange counting
         if entry_type == "user" and is_tool_result(content):
             continue
 
@@ -177,67 +125,113 @@ def import_session(
         if not text:
             continue
 
-        role = entry_type
-        timestamp = entry.get("timestamp")
-        uuid = entry.get("uuid")
-        parent_uuid = entry.get("parentUuid")
-
         cursor.execute("""
             INSERT INTO messages (session_id, uuid, parent_uuid, timestamp, role, content, has_tool_use, has_thinking)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """, (session_id, uuid, parent_uuid, timestamp, role, text, has_tool_use, has_thinking))
-        message_count += 1
+            ON CONFLICT(session_id, uuid) DO NOTHING
+        """, (
+            session_id,
+            entry.get("uuid"),
+            entry.get("parentUuid"),
+            entry.get("timestamp"),
+            entry_type,
+            text,
+            has_tool_use,
+            has_thinking,
+        ))
+        if cursor.rowcount > 0:
+            total_messages += 1
 
-        # Count exchanges (real user messages)
-        if entry_type == "user":
-            if has_user:
-                exchange_count += 1
-            has_user = True
+    # Step 3: Build uuid -> message_id mapping
+    cursor.execute(
+        "SELECT id, uuid FROM messages WHERE session_id = ? AND uuid IS NOT NULL",
+        (session_id,)
+    )
+    uuid_to_msg_id = {row[1]: row[0] for row in cursor.fetchall()}
 
-        # Extract files and commits from assistant messages
-        if entry_type == "assistant":
-            all_files.extend(extract_files_modified(content))
-            all_commits.extend(extract_commits(content))
+    # Step 4: Upsert branches + rebuild branch_messages
+    # First, clear old branches for this session
+    cursor.execute(
+        "SELECT id FROM branches WHERE session_id = ?",
+        (session_id,)
+    )
+    old_branch_ids = [row[0] for row in cursor.fetchall()]
+    for bid in old_branch_ids:
+        cursor.execute("DELETE FROM branch_messages WHERE branch_id = ?", (bid,))
+    cursor.execute("DELETE FROM branches WHERE session_id = ?", (session_id,))
 
-    # Final exchange count
-    if has_user:
-        exchange_count += 1
+    branches_imported = 0
 
-    # Deduplicate files (preserve order, keep last occurrence)
-    seen_files = {}
-    for f in all_files:
-        seen_files[f] = True
-    unique_files = list(seen_files.keys())
+    for branch in branches:
+        leaf_uuid = branch["leaf_uuid"]
+        branch_uuids = branch["uuids"]
+        is_active = branch["is_active"]
+        fork_point_uuid = branch.get("fork_point_uuid")
 
-    # Update session with all metadata
+        # Filter messages to this branch
+        branch_msgs = [m for m in messages if m.get("uuid") in branch_uuids]
+        branch_msgs.sort(key=lambda e: e.get("timestamp") or "")
+
+        if not branch_msgs:
+            continue
+
+        # Compute branch metadata
+        branch_meta = extract_session_metadata(branch_msgs)
+        exchange_count, files, commits = compute_branch_metadata(branch_msgs)
+
+        # Insert branch
+        cursor.execute("""
+            INSERT INTO branches (session_id, leaf_uuid, fork_point_uuid, is_active,
+                                  started_at, ended_at, exchange_count, files_modified, commits)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            RETURNING id
+        """, (
+            session_id,
+            leaf_uuid,
+            fork_point_uuid,
+            int(is_active),
+            branch_meta["started_at"],
+            branch_meta["ended_at"],
+            exchange_count,
+            json.dumps(files) if files else None,
+            json.dumps(commits) if commits else None
+        ))
+        branch_db_id = cursor.fetchone()[0]
+
+        # Insert branch_messages mapping
+        for uuid in branch_uuids:
+            msg_id = uuid_to_msg_id.get(uuid)
+            if msg_id:
+                cursor.execute(
+                    "INSERT OR IGNORE INTO branch_messages (branch_id, message_id) VALUES (?, ?)",
+                    (branch_db_id, msg_id)
+                )
+
+        branches_imported += 1
+
+    # Clean up orphaned messages (not referenced by any branch)
     cursor.execute("""
-        UPDATE sessions SET
-            message_count = ?,
-            exchange_count = ?,
-            files_modified = ?,
-            commits = ?
-        WHERE id = ?
-    """, (
-        message_count,
-        exchange_count,
-        json.dumps(unique_files) if unique_files else None,
-        json.dumps(all_commits) if all_commits else None,
-        session_id
-    ))
+        DELETE FROM messages
+        WHERE session_id = ? AND id NOT IN (
+            SELECT DISTINCT bm.message_id FROM branch_messages bm
+            JOIN branches b ON bm.branch_id = b.id
+            WHERE b.session_id = ?
+        )
+    """, (session_id, session_id))
 
-    # Log import
-    if row:
+    # Step 5: Update import_log
+    if log_row:
         cursor.execute(
             "UPDATE import_log SET file_hash = ?, imported_at = CURRENT_TIMESTAMP, messages_imported = ? WHERE file_path = ?",
-            (file_hash, message_count, str(filepath))
+            (file_hash, total_messages, str(filepath))
         )
     else:
         cursor.execute(
             "INSERT INTO import_log (file_path, file_hash, messages_imported) VALUES (?, ?, ?)",
-            (str(filepath), file_hash, message_count)
+            (str(filepath), file_hash, total_messages)
         )
 
-    return session_id, message_count
+    return branches_imported, total_messages
 
 
 def import_project(
@@ -251,16 +245,13 @@ def import_project(
     """
     cursor = conn.cursor()
 
-    # Parse project info
     project_key = project_dir.name
     project_path = parse_project_key(project_key)
     project_name = extract_project_name(project_path)
 
-    # Check if excluded
     if exclude_projects and project_name in exclude_projects:
         return 0, 0, 0
 
-    # Insert or get project
     cursor.execute("""
         INSERT INTO projects (path, key, name)
         VALUES (?, ?, ?)
@@ -273,16 +264,15 @@ def import_project(
     messages_imported = 0
     sessions_skipped = 0
 
-    # Import main session files
     for jsonl_file in project_dir.glob("*.jsonl"):
         if jsonl_file.name.startswith("."):
             continue
 
-        session_id, msg_count = import_session(conn, jsonl_file, project_id)
-        if session_id == -1:
+        branches_count, msg_count = import_session(conn, jsonl_file, project_id)
+        if branches_count == -1:
             sessions_skipped += 1
         else:
-            sessions_imported += 1
+            sessions_imported += branches_count
             messages_imported += msg_count
 
         # Check for subagents
@@ -290,82 +280,24 @@ def import_project(
         subagents_dir = project_dir / session_uuid / "subagents"
         if subagents_dir.exists():
             for subagent_file in subagents_dir.glob("*.jsonl"):
-                sub_session_id, sub_msg_count = import_session(
-                    conn, subagent_file, project_id, parent_session_id=session_id
+                # For subagents, find parent session id
+                cursor.execute(
+                    "SELECT id FROM sessions WHERE uuid = ? LIMIT 1",
+                    (session_uuid,)
                 )
-                if sub_session_id != -1:
-                    sessions_imported += 1
+                parent_row = cursor.fetchone()
+                parent_sid = parent_row[0] if parent_row else None
+
+                sub_branches, sub_msg_count = import_session(
+                    conn, subagent_file, project_id, parent_session_id=parent_sid
+                )
+                if sub_branches != -1:
+                    sessions_imported += sub_branches
                     messages_imported += sub_msg_count
                 else:
                     sessions_skipped += 1
 
     return sessions_imported, messages_imported, sessions_skipped
-
-
-def init_database(db_path: Path) -> sqlite3.Connection:
-    """Initialize database with schema."""
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(db_path)
-    conn.executescript(SCHEMA)
-    conn.commit()
-    return conn
-
-
-def search(conn: sqlite3.Connection, query: str, limit: int = 20, project: Optional[str] = None) -> list[dict]:
-    """
-    Search conversations using FTS5.
-    Returns list of results with context.
-    """
-    cursor = conn.cursor()
-
-    # Build FTS query
-    terms = query.split()
-    fts_query = " OR ".join(f'"{term}"' for term in terms)
-
-    sql = """
-        SELECT
-            m.id,
-            m.timestamp,
-            m.role,
-            snippet(messages_fts, 0, '>>>', '<<<', '...', 32) as snippet,
-            m.content,
-            s.uuid as session_uuid,
-            p.name as project_name,
-            p.path as project_path,
-            bm25(messages_fts) as rank
-        FROM messages_fts
-        JOIN messages m ON messages_fts.rowid = m.id
-        JOIN sessions s ON m.session_id = s.id
-        JOIN projects p ON s.project_id = p.id
-        WHERE messages_fts MATCH ?
-    """
-
-    params: list = [fts_query]
-
-    if project:
-        sql += " AND p.name LIKE ?"
-        params.append(f"%{project}%")
-
-    sql += " ORDER BY rank LIMIT ?"
-    params.append(limit)
-
-    cursor.execute(sql, params)
-
-    results = []
-    for row in cursor.fetchall():
-        results.append({
-            "id": row[0],
-            "timestamp": row[1],
-            "role": row[2],
-            "snippet": row[3],
-            "content": row[4],
-            "session_uuid": row[5],
-            "project": row[6],
-            "project_path": row[7],
-            "rank": row[8]
-        })
-
-    return results
 
 
 def main():
@@ -408,16 +340,14 @@ def main():
 
     args = parser.parse_args()
 
-    # Load settings
     settings = load_settings()
     logger = setup_logging(settings)
 
-    # Use settings-based DB path if not overridden
     db_path = args.db if args.db != DEFAULT_DB_PATH else get_db_path(settings)
     exclude_projects = settings.get("exclude_projects", [])
 
-    # Initialize or connect to database
-    conn = init_database(db_path)
+    # Use get_db_connection which handles migration
+    conn = get_db_connection(settings)
 
     if args.stats:
         cursor = conn.cursor()
@@ -427,6 +357,12 @@ def main():
         sessions = cursor.fetchone()[0]
         cursor.execute("SELECT COUNT(*) FROM messages")
         messages = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(*) FROM branches")
+        total_branches = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(*) FROM branches WHERE is_active = 1")
+        active = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(*) FROM branches WHERE is_active = 0")
+        abandoned = cursor.fetchone()[0]
 
         db_size = db_path.stat().st_size if db_path.exists() else 0
 
@@ -434,19 +370,48 @@ def main():
         print(f"Size: {db_size / 1024 / 1024:.2f} MB")
         print(f"Projects: {projects}")
         print(f"Sessions: {sessions}")
+        print(f"Branches: {total_branches} ({active} active, {abandoned} abandoned)")
         print(f"Messages: {messages}")
         return
 
     if args.search:
-        results = search(conn, args.search, args.limit, args.project)
+        cursor = conn.cursor()
+        terms = args.search.split()
+        fts_query = " OR ".join(f'"{term}"' for term in terms)
+
+        sql = """
+            SELECT
+                m.id, m.timestamp, m.role,
+                snippet(messages_fts, 0, '>>>', '<<<', '...', 32) as snippet,
+                m.content, s.uuid as session_uuid,
+                p.name as project_name, p.path as project_path,
+                bm25(messages_fts) as rank
+            FROM messages_fts
+            JOIN messages m ON messages_fts.rowid = m.id
+            JOIN sessions s ON m.session_id = s.id
+            JOIN projects p ON s.project_id = p.id
+            WHERE messages_fts MATCH ?
+        """
+        params: list = [fts_query]
+
+        if args.project:
+            sql += " AND p.name LIKE ?"
+            params.append(f"%{args.project}%")
+
+        sql += " ORDER BY rank LIMIT ?"
+        params.append(args.limit)
+
+        cursor.execute(sql, params)
+
+        results = cursor.fetchall()
         if not results:
             print("No results found.")
             return
 
-        for r in results:
+        for row in results:
             print(f"\n{'-' * 60}")
-            print(f"{r['project']} / {r['session_uuid'][:8]} - {r['timestamp']} - {r['role']}")
-            print(f"{r['snippet']}")
+            print(f"{row[6]} / {row[5][:8]} - {row[1]} - {row[2]}")
+            print(f"{row[3]}")
         print(f"\n{'-' * 60}")
         print(f"Found {len(results)} results")
         return
@@ -457,7 +422,6 @@ def main():
     total_skipped = 0
 
     if args.project:
-        # Import specific project
         project_dir = args.projects_dir / args.project
         if not project_dir.exists():
             print(f"Project not found: {project_dir}")
@@ -467,9 +431,8 @@ def main():
         total_sessions += sessions
         total_messages += messages
         total_skipped += skipped
-        print(f"Imported {args.project}: {sessions} sessions, {messages} messages")
+        print(f"Imported {args.project}: {sessions} branches, {messages} messages")
     else:
-        # Import all projects
         for project_dir in args.projects_dir.iterdir():
             if not project_dir.is_dir() or project_dir.name.startswith("."):
                 continue
@@ -480,15 +443,14 @@ def main():
             total_skipped += skipped
 
             if sessions > 0 or messages > 0:
-                print(f"Imported {project_dir.name}: {sessions} sessions, {messages} messages")
+                print(f"Imported {project_dir.name}: {sessions} branches, {messages} messages")
 
     conn.commit()
     conn.close()
 
-    logger.info(f"Import complete: {total_sessions} sessions, {total_messages} messages")
-    print(f"\nTotal: {total_sessions} sessions, {total_messages} messages imported ({total_skipped} unchanged)")
+    logger.info(f"Import complete: {total_sessions} branches, {total_messages} messages")
+    print(f"\nTotal: {total_sessions} branches, {total_messages} messages imported ({total_skipped} unchanged)")
 
-    # Show database size
     if db_path.exists():
         db_size = db_path.stat().st_size
         print(f"Database size: {db_size / 1024 / 1024:.2f} MB")

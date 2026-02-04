@@ -4,13 +4,15 @@ Incremental sync for current session only.
 Designed to be called from a Stop hook - fast and lightweight.
 
 Reads session_id from stdin (hook input) and only syncs that session file.
+Detects conversation branches (from rewind) and stores each branch separately.
+
+v3 schema: messages stored once per session, branches as a separate index.
 """
 
 import json
 import sqlite3
 import sys
 from pathlib import Path
-from typing import Generator
 
 # Add path to shared utils
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -22,61 +24,13 @@ from memory_utils import (
     load_settings,
     setup_logging,
     extract_text_content,
-    extract_files_modified,
-    extract_commits,
     is_tool_result,
+    parse_jsonl_file,
+    parse_all_with_uuids,
+    extract_session_metadata,
+    find_all_branches,
+    compute_branch_metadata,
 )
-
-
-def parse_jsonl_file(filepath: Path) -> Generator[dict, None, None]:
-    """Parse JSONL file line by line, yielding relevant entries."""
-    with open(filepath, "r", encoding="utf-8", errors="replace") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                obj = json.loads(line)
-                entry_type = obj.get("type")
-
-                # Skip noise entries
-                if entry_type in ("progress", "file-history-snapshot", "queue-operation"):
-                    continue
-
-                # Skip meta messages
-                if obj.get("isMeta"):
-                    continue
-
-                if entry_type in ("user", "assistant"):
-                    yield obj
-
-            except json.JSONDecodeError:
-                pass
-
-
-def extract_session_metadata(entries: list[dict]) -> dict:
-    """Extract session metadata from entries."""
-    metadata = {
-        "started_at": None,
-        "ended_at": None,
-        "git_branch": None,
-        "cwd": None,
-    }
-
-    for entry in entries:
-        ts = entry.get("timestamp")
-        if ts:
-            if metadata["started_at"] is None or ts < metadata["started_at"]:
-                metadata["started_at"] = ts
-            if metadata["ended_at"] is None or ts > metadata["ended_at"]:
-                metadata["ended_at"] = ts
-
-        if not metadata["git_branch"]:
-            metadata["git_branch"] = entry.get("gitBranch")
-        if not metadata["cwd"]:
-            metadata["cwd"] = entry.get("cwd")
-
-    return metadata
 
 
 def get_session_file(projects_dir: Path, session_id: str) -> Path | None:
@@ -103,8 +57,9 @@ def get_session_file(projects_dir: Path, session_id: str) -> Path | None:
 
 def sync_session(conn: sqlite3.Connection, filepath: Path, project_dir: Path) -> int:
     """
-    Sync a single session file incrementally.
-    Returns number of new messages added.
+    Sync a single session file using v3 schema.
+    Messages stored once, branches tracked via branch_messages mapping.
+    Returns total number of new messages added.
     """
     cursor = conn.cursor()
 
@@ -127,46 +82,45 @@ def sync_session(conn: sqlite3.Connection, filepath: Path, project_dir: Path) ->
     if session_uuid.startswith("agent-"):
         session_uuid = session_uuid[6:]
 
-    # Parse file
-    entries = list(parse_jsonl_file(filepath))
-    if not entries:
+    # Parse all entries with UUIDs for branch detection
+    all_entries = list(parse_all_with_uuids(filepath))
+    if not all_entries:
         return 0
 
-    metadata = extract_session_metadata(entries)
+    # Find all branches
+    branches = find_all_branches(all_entries)
+    if not branches:
+        return 0
 
-    # Get or create session
+    # Parse user/assistant messages for import
+    messages = list(parse_jsonl_file(filepath))
+    if not messages:
+        return 0
+
+    # Extract session-level metadata from all entries
+    meta = extract_session_metadata(all_entries)
+
+    # Step 1: Upsert ONE session row
     cursor.execute("""
-        INSERT INTO sessions (uuid, project_id, started_at, ended_at, git_branch, cwd)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO sessions (uuid, project_id, git_branch, cwd)
+        VALUES (?, ?, ?, ?)
         ON CONFLICT(uuid) DO UPDATE SET
-            ended_at = excluded.ended_at
+            git_branch = COALESCE(excluded.git_branch, sessions.git_branch),
+            cwd = COALESCE(excluded.cwd, sessions.cwd)
         RETURNING id
-    """, (
-        session_uuid,
-        project_id,
-        metadata["started_at"],
-        metadata["ended_at"],
-        metadata["git_branch"],
-        metadata["cwd"]
-    ))
+    """, (session_uuid, project_id, meta["git_branch"], meta["cwd"]))
     session_id = cursor.fetchone()[0]
 
-    # Get existing message UUIDs for this session
+    # Step 2: Insert ALL messages once, dedup by (session_id, uuid)
+    existing_uuids = set()
     cursor.execute(
         "SELECT uuid FROM messages WHERE session_id = ? AND uuid IS NOT NULL",
         (session_id,)
     )
     existing_uuids = {row[0] for row in cursor.fetchall()}
 
-    # Track session-level metadata
     new_count = 0
-    exchange_count = 0
-    all_files = []
-    all_commits = []
-    has_user = False
-
-    # Insert only new messages and collect metadata
-    for entry in entries:
+    for entry in messages:
         entry_type = entry.get("type")
         if entry_type not in ("user", "assistant"):
             continue
@@ -174,33 +128,21 @@ def sync_session(conn: sqlite3.Connection, filepath: Path, project_dir: Path) ->
         message = entry.get("message", {})
         content = message.get("content", "")
 
-        # Skip tool results for exchange counting
         if entry_type == "user" and is_tool_result(content):
             continue
 
-        # Count exchanges (all user messages, not just new ones)
-        if entry_type == "user":
-            if has_user:
-                exchange_count += 1
-            has_user = True
-
-        # Extract files and commits from all assistant messages
-        if entry_type == "assistant":
-            all_files.extend(extract_files_modified(content))
-            all_commits.extend(extract_commits(content))
+        text, has_tool_use, has_thinking = extract_text_content(content)
+        if not text:
+            continue
 
         uuid = entry.get("uuid")
         if uuid and uuid in existing_uuids:
-            continue  # Already imported
-
-        text, has_tool_use, has_thinking = extract_text_content(content)
-
-        if not text:
             continue
 
         cursor.execute("""
             INSERT INTO messages (session_id, uuid, parent_uuid, timestamp, role, content, has_tool_use, has_thinking)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(session_id, uuid) DO NOTHING
         """, (
             session_id,
             uuid,
@@ -211,33 +153,118 @@ def sync_session(conn: sqlite3.Connection, filepath: Path, project_dir: Path) ->
             has_tool_use,
             has_thinking
         ))
-        new_count += 1
+        if cursor.rowcount > 0:
+            new_count += 1
+            if uuid:
+                existing_uuids.add(uuid)
 
-    # Final exchange count
-    if has_user:
-        exchange_count += 1
+    # Step 3: Build uuid -> message_id mapping
+    cursor.execute(
+        "SELECT id, uuid FROM messages WHERE session_id = ? AND uuid IS NOT NULL",
+        (session_id,)
+    )
+    uuid_to_msg_id = {row[1]: row[0] for row in cursor.fetchall()}
 
-    # Deduplicate files
-    seen_files = {}
-    for f in all_files:
-        seen_files[f] = True
-    unique_files = list(seen_files.keys())
+    # Step 4: Get existing branch leaf_uuids for this session
+    cursor.execute(
+        "SELECT id, leaf_uuid FROM branches WHERE session_id = ?",
+        (session_id,)
+    )
+    existing_branches = {row[1]: row[0] for row in cursor.fetchall()}
 
-    # Update session with all metadata
+    current_leaf_uuids = set()
+
+    for branch in branches:
+        leaf_uuid = branch["leaf_uuid"]
+        branch_uuids = branch["uuids"]
+        is_active = branch["is_active"]
+        fork_point_uuid = branch.get("fork_point_uuid")
+        current_leaf_uuids.add(leaf_uuid)
+
+        # Filter messages to this branch
+        branch_msgs = [m for m in messages if m.get("uuid") in branch_uuids]
+        branch_msgs.sort(key=lambda e: e.get("timestamp") or "")
+
+        # Compute branch metadata
+        branch_meta = extract_session_metadata(branch_msgs)
+        exchange_count, files, commits = compute_branch_metadata(branch_msgs)
+
+        if leaf_uuid in existing_branches:
+            # Update existing branch
+            branch_db_id = existing_branches[leaf_uuid]
+            cursor.execute("""
+                UPDATE branches SET
+                    is_active = ?,
+                    fork_point_uuid = ?,
+                    started_at = ?,
+                    ended_at = ?,
+                    exchange_count = ?,
+                    files_modified = ?,
+                    commits = ?
+                WHERE id = ?
+            """, (
+                int(is_active),
+                fork_point_uuid,
+                branch_meta["started_at"],
+                branch_meta["ended_at"],
+                exchange_count,
+                json.dumps(files) if files else None,
+                json.dumps(commits) if commits else None,
+                branch_db_id
+            ))
+        else:
+            # Insert new branch
+            cursor.execute("""
+                INSERT INTO branches (session_id, leaf_uuid, fork_point_uuid, is_active,
+                                      started_at, ended_at, exchange_count, files_modified, commits)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                RETURNING id
+            """, (
+                session_id,
+                leaf_uuid,
+                fork_point_uuid,
+                int(is_active),
+                branch_meta["started_at"],
+                branch_meta["ended_at"],
+                exchange_count,
+                json.dumps(files) if files else None,
+                json.dumps(commits) if commits else None
+            ))
+            branch_db_id = cursor.fetchone()[0]
+
+        # Ensure only one active branch
+        if is_active:
+            cursor.execute("""
+                UPDATE branches SET is_active = 0
+                WHERE session_id = ? AND id != ? AND is_active = 1
+            """, (session_id, branch_db_id))
+
+        # Rebuild branch_messages for this branch
+        cursor.execute("DELETE FROM branch_messages WHERE branch_id = ?", (branch_db_id,))
+
+        for uuid in branch_uuids:
+            msg_id = uuid_to_msg_id.get(uuid)
+            if msg_id:
+                cursor.execute(
+                    "INSERT OR IGNORE INTO branch_messages (branch_id, message_id) VALUES (?, ?)",
+                    (branch_db_id, msg_id)
+                )
+
+    # Step 5: Clean up stale branches
+    for old_leaf, old_branch_id in existing_branches.items():
+        if old_leaf not in current_leaf_uuids:
+            cursor.execute("DELETE FROM branch_messages WHERE branch_id = ?", (old_branch_id,))
+            cursor.execute("DELETE FROM branches WHERE id = ?", (old_branch_id,))
+
+    # Clean up orphaned messages (not referenced by any branch)
     cursor.execute("""
-        UPDATE sessions SET
-            message_count = (SELECT COUNT(*) FROM messages WHERE session_id = ?),
-            exchange_count = ?,
-            files_modified = ?,
-            commits = ?
-        WHERE id = ?
-    """, (
-        session_id,
-        exchange_count,
-        json.dumps(unique_files) if unique_files else None,
-        json.dumps(all_commits) if all_commits else None,
-        session_id
-    ))
+        DELETE FROM messages
+        WHERE session_id = ? AND id NOT IN (
+            SELECT DISTINCT bm.message_id FROM branch_messages bm
+            JOIN branches b ON bm.branch_id = b.id
+            WHERE b.session_id = ?
+        )
+    """, (session_id, session_id))
 
     return new_count
 

@@ -37,7 +37,6 @@ DEFAULT_SETTINGS = {
     "auto_inject_context": True,
     "max_context_sessions": 2,
     "exclude_projects": [],
-    "context_truncation_limit": 2000,
     "logging_enabled": False,
     "sync_on_stop": True,
 }
@@ -92,6 +91,7 @@ CREATE TABLE IF NOT EXISTS messages (
   timestamp DATETIME,
   role TEXT CHECK(role IN ('user', 'assistant')),
   content TEXT NOT NULL,
+  tool_summary TEXT,
   has_tool_use INTEGER DEFAULT 0,
   has_thinking INTEGER DEFAULT 0,
   UNIQUE(session_id, uuid)
@@ -232,6 +232,16 @@ def get_db_path(settings: Optional[dict] = None) -> Path:
     return DEFAULT_DB_PATH
 
 
+def _migrate_columns(conn: sqlite3.Connection) -> None:
+    """Add any missing columns to existing tables (idempotent)."""
+    cursor = conn.cursor()
+    cursor.execute("PRAGMA table_info(messages)")
+    existing = {row[1] for row in cursor.fetchall()}
+    if "tool_summary" not in existing:
+        cursor.execute("ALTER TABLE messages ADD COLUMN tool_summary TEXT")
+        conn.commit()
+
+
 def get_db_connection(settings: Optional[dict] = None) -> sqlite3.Connection:
     """
     Get database connection, initializing schema and running migrations if needed.
@@ -250,6 +260,9 @@ def get_db_connection(settings: Optional[dict] = None) -> sqlite3.Connection:
         # Apply schema (handles fresh databases, idempotent)
         conn.executescript(SCHEMA)
         conn.commit()
+
+    # Add any missing columns (e.g. tool_summary)
+    _migrate_columns(conn)
 
     return conn
 
@@ -371,13 +384,17 @@ def format_json_sessions(sessions: list[dict], extra: Optional[dict] = None) -> 
 
 # Content extraction utilities
 
-def extract_text_content(content) -> tuple[str, bool, bool]:
+def extract_text_content(content) -> tuple[str, bool, bool, str | None]:
     """
     Extract text from message content.
-    Returns: (text, has_tool_use, has_thinking)
+    Returns: (text, has_tool_use, has_thinking, tool_summary_json)
+
+    tool_summary_json is a JSON string like '{"Bash":3,"Read":2}' or None.
+    Tool use markers are NOT materialized into text.
     """
     has_tool_use = False
     has_thinking = False
+    tool_counts: dict[str, int] = {}
 
     if isinstance(content, str):
         # Clean up command artifacts
@@ -385,7 +402,7 @@ def extract_text_content(content) -> tuple[str, bool, bool]:
         text = re.sub(r'<command-message>.*?</command-message>', '', text, flags=re.DOTALL)
         text = re.sub(r'<command-args>.*?</command-args>', '', text, flags=re.DOTALL)
         text = re.sub(r'<local-command-stdout>.*?</local-command-stdout>', '', text, flags=re.DOTALL)
-        return text.strip(), False, False
+        return text.strip(), False, False, None
 
     if isinstance(content, list):
         texts = []
@@ -398,12 +415,13 @@ def extract_text_content(content) -> tuple[str, bool, bool]:
                     has_tool_use = True
                     tool_name = item.get("name", "")
                     if tool_name:
-                        texts.append(f"[Tool: {tool_name}]")
+                        tool_counts[tool_name] = tool_counts.get(tool_name, 0) + 1
                 elif item_type == "thinking":
                     has_thinking = True
-        return "\n".join(texts).strip(), has_tool_use, has_thinking
+        tool_summary = json.dumps(tool_counts) if tool_counts else None
+        return "\n".join(texts).strip(), has_tool_use, has_thinking, tool_summary
 
-    return "", False, False
+    return "", False, False, None
 
 
 def is_tool_result(content) -> bool:

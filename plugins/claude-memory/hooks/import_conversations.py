@@ -121,13 +121,13 @@ def import_session(
         if entry_type == "user" and is_tool_result(content):
             continue
 
-        text, has_tool_use, has_thinking = extract_text_content(content)
+        text, has_tool_use, has_thinking, tool_summary = extract_text_content(content)
         if not text:
             continue
 
         cursor.execute("""
-            INSERT INTO messages (session_id, uuid, parent_uuid, timestamp, role, content, has_tool_use, has_thinking)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO messages (session_id, uuid, parent_uuid, timestamp, role, content, tool_summary, has_tool_use, has_thinking)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(session_id, uuid) DO NOTHING
         """, (
             session_id,
@@ -136,6 +136,7 @@ def import_session(
             entry.get("timestamp"),
             entry_type,
             text,
+            tool_summary,
             has_tool_use,
             has_thinking,
         ))

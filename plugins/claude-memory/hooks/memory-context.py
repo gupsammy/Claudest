@@ -12,6 +12,7 @@ Output: JSON with hookSpecificOutput for context injection
 """
 
 import json
+import re
 import sqlite3
 import sys
 from pathlib import Path
@@ -103,7 +104,7 @@ def select_sessions(conn: sqlite3.Connection, project_key: str, current_session_
     return selected
 
 
-def build_context(sessions: list[dict], truncation_limit: int) -> str:
+def build_context(sessions: list[dict]) -> str:
     """Build markdown context from selected sessions."""
     if not sessions:
         return ""
@@ -137,35 +138,11 @@ def build_context(sessions: list[dict], truncation_limit: int) -> str:
                 lines.append(f"- {c}")
             lines.append("")
 
-        # Messages - structure: first (goal), middle (summarized), last 3 (full)
+        # Build exchange pairs from all messages
         messages = session.get("messages", [])
-        user_messages = [m for m in messages if m["role"] == "user"]
-        total = len(user_messages)
-
-        if total == 0:
+        if not messages:
             continue
 
-        last3_start = max(0, total - 3)
-        last3_idx = set(range(last3_start, total))
-
-        # First exchange if not in last 3
-        if 0 not in last3_idx and total > 3:
-            lines.append("### Session Goal")
-            lines.append(user_messages[0]["content"][:1000])
-            lines.append("")
-
-        # Middle requests (summarized)
-        if total > 4:
-            lines.append("### Other Requests")
-            for idx in range(1, last3_start):
-                msg = user_messages[idx]["content"]
-                lines.append(f"- {msg[:300]}..." if len(msg) > 300 else f"- {msg}")
-            lines.append("")
-
-        # Last 3 exchanges in full
-        lines.append("### Where We Left Off\n")
-
-        # Build exchange pairs from all messages
         exchanges = []
         current_user = None
         current_asst = []
@@ -177,20 +154,26 @@ def build_context(sessions: list[dict], truncation_limit: int) -> str:
                 current_user = m["content"]
                 current_asst = []
             elif m["role"] == "assistant" and current_user is not None:
-                current_asst.append(m["content"])
+                cleaned = re.sub(r'\[Tool: \w+\]', '', m["content"]).strip()
+                if cleaned:
+                    current_asst.append(cleaned)
 
         if current_user is not None:
             exchanges.append({"user": current_user, "asst": "\n\n".join(current_asst), "ts": None})
 
-        # Show last 3 exchanges (truncated by limit)
-        for ex in exchanges[-3:]:
+        if not exchanges:
+            continue
+
+        lines.append("### Where We Left Off\n")
+
+        for ex in exchanges:
             t = format_time(ex.get("ts"))
             lines.append(f"**[{t}] User:**")
-            lines.append(ex["user"][:truncation_limit])
+            lines.append(ex["user"])
             lines.append("")
             if ex["asst"]:
                 lines.append(f"**[{t}] Assistant:**")
-                lines.append(ex["asst"][:truncation_limit])
+                lines.append(ex["asst"])
                 lines.append("")
 
     return "\n".join(lines)
@@ -243,8 +226,7 @@ def main():
             print(json.dumps({}))
             return
 
-        truncation_limit = settings.get("context_truncation_limit", 2000)
-        context = build_context(sessions, truncation_limit)
+        context = build_context(sessions)
         if not context:
             print(json.dumps({}))
             return

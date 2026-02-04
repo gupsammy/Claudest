@@ -23,7 +23,6 @@ db_path: ~/.claude-memory/conversations.db
 auto_inject_context: true
 max_context_sessions: 2
 exclude_projects: []
-context_truncation_limit: 2000
 logging_enabled: false
 sync_on_stop: true
 ---
@@ -38,7 +37,6 @@ This file configures the claude-memory plugin behavior.
 - `auto_inject_context`: Whether to inject previous session context on startup
 - `max_context_sessions`: Maximum number of sessions to include in context
 - `exclude_projects`: List of project names to exclude from import
-- `context_truncation_limit`: Max characters per message in context
 - `logging_enabled`: Enable logging to ~/.claude-memory/memory.log
 - `sync_on_stop`: Whether to sync session on Stop hook
 EOF

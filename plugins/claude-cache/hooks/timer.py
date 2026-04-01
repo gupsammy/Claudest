@@ -50,8 +50,11 @@ def main() -> None:
 
         notify(message)
 
-    # Mark cache as expired
-    state_file(session_id).write_text("expired")
+    # Mark cache as expired — but only if keepalive isn't active.
+    # If keepalive pings are running, the cache is warm; writing "expired"
+    # would cause a spurious block on the next user message.
+    if not keepalive_file(session_id).exists():
+        state_file(session_id).write_text("expired")
 
     # Clean up PID file — timer has completed its job
     try:

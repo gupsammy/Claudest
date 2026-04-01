@@ -31,8 +31,16 @@ def _unlink_safe(path: Path) -> None:
 
 
 def session_dir(session_id: str) -> Path:
-    """Return the state directory for a specific session."""
-    return SESSIONS_DIR / session_id
+    """Return the state directory for a specific session.
+
+    Validates that the resolved path stays within SESSIONS_DIR to prevent
+    path traversal via crafted session_id values (e.g. '../../.bashrc').
+    """
+    candidate = (SESSIONS_DIR / session_id).resolve()
+    resolved_base = SESSIONS_DIR.resolve()
+    if not str(candidate).startswith(str(resolved_base) + os.sep) and candidate != resolved_base:
+        raise ValueError(f"Invalid session_id: {session_id!r}")
+    return candidate
 
 
 def pid_file(session_id: str) -> Path:
@@ -106,7 +114,13 @@ def cleanup_session(session_id: str) -> None:
 
 
 def cleanup_stale_sessions() -> None:
-    """Remove session directories older than STALE_THRESHOLD. Best-effort."""
+    """Remove session directories where all files are older than STALE_THRESHOLD.
+
+    Checks the newest file mtime within each directory, not the directory mtime
+    itself. Directory mtime only updates on file creation/deletion, not content
+    writes — so a long-running session whose timer.py overwrites state files
+    would appear stale by directory mtime while still being active.
+    """
     if not SESSIONS_DIR.exists():
         return
     now = time.time()
@@ -115,8 +129,15 @@ def cleanup_stale_sessions() -> None:
             if not entry.is_dir():
                 continue
             try:
-                mtime = entry.stat().st_mtime
-                if now - mtime > STALE_THRESHOLD:
+                # Find the newest file mtime in the session directory
+                newest = 0.0
+                for f in entry.iterdir():
+                    try:
+                        newest = max(newest, f.stat().st_mtime)
+                    except OSError:
+                        pass
+                # Only prune if all files are older than threshold (or dir is empty)
+                if now - newest > STALE_THRESHOLD:
                     for f in entry.iterdir():
                         _unlink_safe(f)
                     entry.rmdir()

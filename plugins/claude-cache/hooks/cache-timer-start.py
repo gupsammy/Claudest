@@ -29,10 +29,14 @@ def main() -> None:
         print(json.dumps({"continue": True}))
         return
 
+    # Extract project name from cwd for notification context
+    cwd = hook_input.get("cwd", "")
+    project_name = Path(cwd).name if cwd else ""
+
     try:
         ensure_session_dir(session_id)
         kill_timer(session_id)
-        spawn_background("timer.py", session_id)
+        spawn_background("timer.py", session_id, project_name)
     except Exception:
         pass
 

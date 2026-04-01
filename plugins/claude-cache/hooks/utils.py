@@ -148,7 +148,12 @@ def cleanup_stale_sessions() -> None:
 
 
 def spawn_background(script: str, *args: str) -> None:
-    """Spawn a Python script as a detached background process."""
+    """Spawn a Python script as a background process.
+
+    On macOS the child stays in the hook runner's process tree (no
+    start_new_session) so it inherits session membership — required for
+    cmux socket access. On Windows it fully detaches via creation flags.
+    """
     script_path = Path(__file__).resolve().parent / script
     cmd = [sys.executable, str(script_path)] + list(args)
 
@@ -157,34 +162,125 @@ def spawn_background(script: str, *args: str) -> None:
         kwargs["creationflags"] = (
             subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS  # type: ignore[attr-defined]
         )
-    else:
-        kwargs["start_new_session"] = True
 
     subprocess.Popen(cmd, **kwargs)
 
 
-def notify(message: str, title: str = "Claude Code") -> None:
-    """Send a desktop notification. Cross-platform: macOS, Linux, Windows."""
+def _play_sound(sound: str = "Glass") -> None:
+    """Play a macOS system sound in the background (non-blocking)."""
+    try:
+        subprocess.Popen(
+            ["afplay", f"/System/Library/Sounds/{sound}.aiff"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except (FileNotFoundError, OSError):
+        pass
+
+
+def _detect_terminal_bundle() -> str:
+    """Walk process tree to find the terminal emulator's macOS bundle ID.
+
+    Looks for an ancestor whose binary lives inside /Applications/*.app/.
+    Returns e.g. 'com.cmuxterm.app' or '' if not found.
+    """
+    try:
+        pid = os.getpid()
+        while pid > 1:
+            result = subprocess.run(
+                ["ps", "-o", "comm=,ppid=", "-p", str(pid)],
+                capture_output=True, text=True, timeout=2,
+            )
+            parts = result.stdout.strip().rsplit(None, 1)
+            if len(parts) < 2:
+                break
+            comm, ppid = parts[0], parts[1]
+            if comm.startswith("/Applications/") and ".app/" in comm:
+                app_path = comm[:comm.index(".app/") + 4]
+                mdls = subprocess.run(
+                    ["mdls", "-name", "kMDItemCFBundleIdentifier", app_path],
+                    capture_output=True, text=True, timeout=2,
+                )
+                for part in mdls.stdout.split('"'):
+                    if "." in part and "kMDItem" not in part:
+                        return part
+            pid = int(ppid)
+    except (subprocess.TimeoutExpired, ValueError, OSError):
+        pass
+    return ""
+
+
+def _notify_cmux(message: str, title: str = "Claude Code") -> bool:
+    """Send notification via cmux CLI with pane-level targeting.
+
+    Returns True if successful. Requires CMUX_SURFACE_ID env var and the
+    cmux binary at the standard path.
+    """
+    surface = os.environ.get("CMUX_SURFACE_ID", "")
+    if not surface:
+        return False
+    cmux_bin = "/Applications/cmux.app/Contents/Resources/bin/cmux"
+    if not os.path.isfile(cmux_bin):
+        return False
+    try:
+        result = subprocess.run(
+            [cmux_bin, "notify", "--title", title, "--body", message, "--surface", surface],
+            capture_output=True, text=True, timeout=5,
+        )
+        return result.returncode == 0
+    except (subprocess.TimeoutExpired, OSError):
+        return False
+
+
+def _notify_terminal_notifier(message: str, title: str = "Claude Code") -> bool:
+    """Send notification via terminal-notifier with click-to-activate terminal app.
+
+    Returns True if successful. Auto-detects terminal bundle ID for -activate.
+    """
+    try:
+        cmd = ["terminal-notifier", "-title", title, "-message", message, "-sound", "Glass"]
+        bundle = _detect_terminal_bundle()
+        if bundle:
+            cmd += ["-activate", bundle]
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=5,
+        )
+        return result.returncode == 0
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        return False
+
+
+def notify(message: str, title: str = "Claude Code", project: str = "") -> None:
+    """Send a desktop notification. Cross-platform: macOS, Linux, Windows.
+
+    On macOS, tries three tiers:
+    1. cmux notify — pane-level focus via surface targeting (best UX)
+    2. terminal-notifier — app-level focus via bundle activation
+    3. osascript — no click-to-focus but always available
+    """
     try:
         if sys.platform == "darwin":
-            # Escape backslashes and double quotes for AppleScript string literals
-            safe_msg = message.replace("\\", "\\\\").replace('"', '\\"')
-            safe_title = title.replace("\\", "\\\\").replace('"', '\\"')
-            subprocess.run(
-                [
-                    "osascript", "-e",
-                    f'display notification "{safe_msg}" with title "{safe_title}"',
-                ],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                timeout=5,
-            )
+            if _notify_cmux(message, title):
+                _play_sound()
+            elif _notify_terminal_notifier(message, title):
+                pass  # terminal-notifier handles sound via -sound flag
+            else:
+                safe_msg = message.replace("\\", "\\\\").replace('"', '\\"')
+                safe_title = title.replace("\\", "\\\\").replace('"', '\\"')
+                script = f'display notification "{safe_msg}" with title "{safe_title}"'
+                if project:
+                    safe_project = project.replace("\\", "\\\\").replace('"', '\\"')
+                    script = f'display notification "{safe_msg}" with title "{safe_title}" subtitle "{safe_project}"'
+                subprocess.run(
+                    ["osascript", "-e", script],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=5,
+                )
+                _play_sound()
         elif sys.platform == "win32":
-            # Escape single quotes for PowerShell string literals
             safe_msg = message.replace("'", "''")
             safe_title = title.replace("'", "''")
-            # Use BurntToast for non-blocking toast notifications (if installed).
-            # Silently skip if unavailable — never use MessageBox (blocks timer).
             ps_cmd = (
                 f"if (Get-Module -ListAvailable -Name BurntToast) {{ "
                 f"New-BurntToastNotification -Text '{safe_title}', '{safe_msg}' "
@@ -196,7 +292,6 @@ def notify(message: str, title: str = "Claude Code") -> None:
                 stderr=subprocess.DEVNULL,
             )
         else:
-            # Linux — notify-send is available on most desktop distros
             subprocess.run(
                 ["notify-send", title, message],
                 stdout=subprocess.DEVNULL,
@@ -204,5 +299,4 @@ def notify(message: str, title: str = "Claude Code") -> None:
                 timeout=5,
             )
     except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
-        # Notification is best-effort — never block on failure
         pass

@@ -61,12 +61,19 @@ def main() -> None:
         if expired and not bf.exists():
             # First submission after expiry — block and set bypass
             bf.write_text("bypass")
+            # ANSI codes for visual distinction in terminal output
+            BOLD = "\033[1m"
+            DIM = "\033[2m"
+            RESET = "\033[0m"
+            CYAN = "\033[36m"
+            YELLOW = "\033[33m"
             print(json.dumps({
                 "decision": "block",
                 "reason": (
                     "Cache likely invalidated \u2014 idle time exceeded 5 minutes.\n\n"
-                    "Recommended: type /clear to start a fresh session (saves tokens)\n"
-                    "Continue anyway: press \u2191 then Enter to re-submit your message"
+                    f"{BOLD}{CYAN}Recommended:{RESET} type /clear to start a fresh session (saves tokens)\n"
+                    f"{BOLD}{YELLOW}Continue anyway:{RESET} copy your original prompt and resubmit\n\n"
+                    f"{DIM}Your original prompt is shown below.{RESET}"
                 ),
             }))
             return

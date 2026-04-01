@@ -1,0 +1,15 @@
+{
+  "name": "claude-cache",
+  "description": "Cache warmth management — notifications and keepalive pings to prevent prompt cache expiry",
+  "version": "0.1.0",
+  "author": {
+    "name": "Samarth Gupta"
+  },
+  "keywords": [
+    "cache",
+    "prompt-caching",
+    "notifications",
+    "keepalive",
+    "token-optimization"
+  ]
+}

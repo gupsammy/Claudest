@@ -52,6 +52,12 @@
       "description": "OpenClaw tools: advisory, troubleshooting, and skill building for OpenClaw",
       "version": "0.3.2",
       "source": "./plugins/claude-claw"
+    },
+    {
+      "name": "claude-cache",
+      "description": "Cache warmth management — notifications and keepalive pings to prevent prompt cache expiry",
+      "version": "0.1.0",
+      "source": "./plugins/claude-cache"
     }
   ]
 }

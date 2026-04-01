@@ -51,6 +51,12 @@ def keepalive_file(session_id: str) -> Path:
     return session_dir(session_id) / "keepalive-active"
 
 
+def keepalive_job_file(session_id: str) -> Path:
+    """Stores the CronCreate job ID separately from the sentinel, so the cron
+    prompt can still read the ID after the sentinel is deleted."""
+    return session_dir(session_id) / "keepalive-job-id"
+
+
 def ensure_session_dir(session_id: str) -> None:
     """Create session state directory if it doesn't exist."""
     session_dir(session_id).mkdir(parents=True, exist_ok=True)
@@ -156,15 +162,17 @@ def notify(message: str, title: str = "Claude Code") -> None:
             # Escape single quotes for PowerShell string literals
             safe_msg = message.replace("'", "''")
             safe_title = title.replace("'", "''")
+            # Use BurntToast for non-blocking toast notifications (if installed).
+            # Silently skip if unavailable — never use MessageBox (blocks timer).
             ps_cmd = (
-                f"Add-Type -AssemblyName System.Windows.Forms; "
-                f"[System.Windows.Forms.MessageBox]::Show('{safe_msg}','{safe_title}')"
+                f"if (Get-Module -ListAvailable -Name BurntToast) {{ "
+                f"New-BurntToastNotification -Text '{safe_title}', '{safe_msg}' "
+                f"}}"
             )
-            subprocess.run(
+            subprocess.Popen(
                 ["powershell", "-Command", ps_cmd],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
-                timeout=5,
             )
         else:
             # Linux — notify-send is available on most desktop distros

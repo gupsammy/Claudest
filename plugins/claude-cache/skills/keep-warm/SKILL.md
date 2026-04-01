@@ -9,7 +9,9 @@ allowed-tools:
   - Write
   - CronCreate
   - CronDelete
+  - CronList
   - Bash(echo:*)
+  - Bash(mkdir:*)
 ---
 
 # Cache Keepalive
@@ -19,39 +21,33 @@ keeping the prompt cache warm. Auto-deactivates when the user sends their next m
 
 ## Workflow
 
-1. Determine the session-specific keepalive file path. The current session ID is
-   available in the environment or hook context. Construct the path:
-   `~/.claude-cache/sessions/<session_id>/keepalive-active`
-
-   To get the session ID, run:
+1. Determine the session-specific state directory. Run:
    ```bash
    echo $CLAUDE_SESSION_ID
    ```
-   If the env var is empty, check the most recent session directory under
-   `~/.claude-cache/sessions/` as a fallback.
-
-   Ensure the session directory exists:
+   Set `SESSION_DIR` to `~/.claude-cache/sessions/<session_id>`. Ensure it exists:
    ```bash
    mkdir -p ~/.claude-cache/sessions/<session_id>
    ```
 
-2. Write the text `pending` to the keepalive file.
+2. Write `active` to `SESSION_DIR/keepalive-active` (the sentinel file).
 
-3. Create a recurring cron job:
+3. Create a recurring cron job. The prompt must reference the session-specific paths:
    ```
    CronCreate: cron "*/4 * * * *", prompt below
    ```
 
-   Prompt for the cron job (substitute the actual keepalive file path):
+   Prompt for the cron job (substitute actual session_id):
    ```
    Cache keepalive ping. Read the file ~/.claude-cache/sessions/<session_id>/keepalive-active.
-   If the file exists and contains a cron job ID, respond with just: ✓
-   If the file does NOT exist, call CronDelete with the job ID that was
-   stored in the file, then respond with: keepalive deactivated.
+   If the file exists, respond with just: ✓
+   If the file does NOT exist, read ~/.claude-cache/sessions/<session_id>/keepalive-job-id
+   to get the cron job ID. Call CronDelete with that ID. Then delete the keepalive-job-id
+   file. Respond: keepalive deactivated.
    ```
 
-4. After CronCreate returns the job ID, overwrite the keepalive file with the job ID
-   string (so the cron prompt can read it for self-destruction).
+4. After CronCreate returns the job ID, write the job ID string to
+   `SESSION_DIR/keepalive-job-id` (a separate file from the sentinel).
 
 5. Respond to the user:
    ```
@@ -61,7 +57,16 @@ keeping the prompt cache warm. Auto-deactivates when the user sends their next m
 
 ## How Deactivation Works
 
-When the user returns and sends a message, the `UserPromptSubmit` hook deletes
-the session-specific `keepalive-active` file. On the next cron fire, the prompt
-reads the file, finds it missing, and calls `CronDelete` to remove itself. At most
-one extra ping fires after the user returns.
+Two files are used: `keepalive-active` (sentinel) and `keepalive-job-id` (stores the
+cron job ID separately).
+
+When the user returns and sends a message, the `UserPromptSubmit` hook deletes only
+the sentinel (`keepalive-active`). The job ID file is preserved.
+
+On the next cron fire, the prompt reads the sentinel — it's gone. The prompt then reads
+the job ID from `keepalive-job-id`, calls `CronDelete` with that ID, cleans up the job
+ID file, and responds "keepalive deactivated." At most one extra ping fires after the
+user returns.
+
+This two-file design ensures the cron job always has access to its own ID for
+self-destruction, even after the deactivation signal is sent.

@@ -27,5 +27,14 @@ Claude API prompt caching has a 5-minute TTL. When you're idle for longer than t
 ## Requirements
 
 - Python 3.7+
-- macOS (`osascript`), Linux (`notify-send`), or Windows (PowerShell) for notifications
 - No external dependencies (stdlib only)
+
+### Desktop Notifications
+
+| Platform | Mechanism | Notes |
+|----------|-----------|-------|
+| macOS | `osascript` (built-in) | Works out of the box |
+| Linux | `notify-send` | Install `libnotify` if not present |
+| Windows | BurntToast PowerShell module | Install via `Install-Module BurntToast`. Notifications silently skip if not installed |
+
+Notifications are best-effort — the plugin works without them (the 5-minute block gate is the safety net).

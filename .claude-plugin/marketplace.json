@@ -55,8 +55,8 @@
     },
     {
       "name": "claude-cache",
-      "description": "Cache warmth management — notifications and keepalive pings to prevent prompt cache expiry",
-      "version": "0.1.0",
+      "description": "Cache warmth management \u2014 notifications and keepalive pings to prevent prompt cache expiry",
+      "version": "0.1.1",
       "source": "./plugins/claude-cache"
     }
   ]

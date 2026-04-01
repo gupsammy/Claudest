@@ -17,20 +17,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from utils import (
+    _unlink_safe,
     bypass_file,
     keepalive_file,
     kill_timer,
     read_hook_input,
     state_file,
 )
-
-
-def _unlink_safe(path: Path) -> None:
-    """Remove a file, ignoring if it doesn't exist."""
-    try:
-        path.unlink()
-    except FileNotFoundError:
-        pass
 
 
 def main() -> None:

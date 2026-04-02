@@ -11,7 +11,7 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR.parent / "skills" / "recall-conversations" / "scripts"))
 
-from memory_lib.db import DEFAULT_DB_PATH
+from memory_lib.db import DEFAULT_DB_PATH, get_db_connection
 
 
 def _spawn_background(script_name: str) -> None:
@@ -27,6 +27,15 @@ def _spawn_background(script_name: str) -> None:
         [sys.executable, str(SCRIPT_DIR / script_name)],
         **kwargs
     )
+
+
+def _ensure_schema() -> None:
+    """Open DB connection to trigger _migrate_columns (creates token_snapshots if missing)."""
+    try:
+        conn = get_db_connection()
+        conn.close()
+    except Exception:
+        pass
 
 
 def _needs_backfill() -> bool:
@@ -61,7 +70,10 @@ def main():
         # Run initial import in background if DB doesn't exist
         if not DEFAULT_DB_PATH.exists():
             _spawn_background("import_conversations.py")
-        elif _needs_backfill():
+        else:
+            _ensure_schema()
+
+        if _needs_backfill():
             _spawn_background("backfill_summaries.py")
     except Exception:
         pass

@@ -1,0 +1,1143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Claude Code // Token Analysis</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@100;200;300;400;500;600;700;800&display=swap" rel="stylesheet" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
+  <style>
+    :root {
+      --bg:        #0a0a0f;
+      --bg2:       #0d0d16;
+      --bg3:       #111122;
+      --grid:      #1a1a2e;
+      --border:    #1e1e3a;
+      --text:      #c8ccd8;
+      --text-dim:  #545878;
+      --text-head: #e8ecf4;
+
+      --cyan:   #00d4ff;
+      --green:  #39ff14;
+      --purple: #bf5fff;
+      --amber:  #ffaa00;
+      --red:    #ff3355;
+      --orange: #ff6b35;
+      --yellow: #ffe135;
+      --blue:   #2979ff;
+
+      --glow-cyan:   0 0 18px rgba(0,212,255,0.55),  0 0 40px rgba(0,212,255,0.22);
+      --glow-green:  0 0 18px rgba(57,255,20,0.5),   0 0 40px rgba(57,255,20,0.18);
+      --glow-purple: 0 0 18px rgba(191,95,255,0.5),  0 0 40px rgba(191,95,255,0.18);
+      --glow-amber:  0 0 18px rgba(255,170,0,0.5),   0 0 40px rgba(255,170,0,0.18);
+      --glow-red:    0 0 18px rgba(255,51,85,0.5),   0 0 40px rgba(255,51,85,0.18);
+      --glow-blue:   0 0 18px rgba(41,121,255,0.55), 0 0 40px rgba(41,121,255,0.22);
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html { font-size: 14px; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'JetBrains Mono', 'IBM Plex Mono', 'Fira Mono', monospace;
+      min-height: 100vh;
+      overflow-x: hidden;
+      /* scanline texture */
+      background-image:
+        repeating-linear-gradient(
+          0deg,
+          transparent,
+          transparent 2px,
+          rgba(0,0,0,0.18) 2px,
+          rgba(0,0,0,0.18) 4px
+        );
+    }
+
+    /* ── TICKER ─────────────────────────────────────────── */
+    .ticker-wrap {
+      position: fixed;
+      top: 0; left: 0; right: 0;
+      z-index: 999;
+      height: 28px;
+      background: rgba(0,0,0,0.88);
+      border-bottom: 1px solid var(--cyan);
+      overflow: hidden;
+      display: flex;
+      align-items: center;
+    }
+    .ticker-track {
+      display: flex;
+      white-space: nowrap;
+      animation: tickerScroll 28s linear infinite;
+    }
+    .ticker-item {
+      font-size: 0.72rem;
+      font-weight: 600;
+      letter-spacing: 0.14em;
+      color: var(--cyan);
+      padding: 0 3rem;
+      text-shadow: var(--glow-cyan);
+    }
+    .ticker-sep {
+      color: var(--text-dim);
+      font-size: 0.72rem;
+      padding: 0 0.5rem;
+    }
+    @keyframes tickerScroll {
+      0%   { transform: translateX(0); }
+      100% { transform: translateX(-50%); }
+    }
+
+    /* ── PAGE SHELL ─────────────────────────────────────── */
+    .page {
+      padding: 52px 28px 48px;
+      max-width: 1400px;
+      margin: 0 auto;
+    }
+
+    /* ── HEADER ─────────────────────────────────────────── */
+    .page-header {
+      padding: 28px 0 24px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 28px;
+    }
+    .page-header .label {
+      font-size: 0.68rem;
+      letter-spacing: 0.22em;
+      color: var(--text-dim);
+      margin-bottom: 6px;
+    }
+    .page-header h1 {
+      font-size: clamp(1.4rem, 3vw, 2.1rem);
+      font-weight: 800;
+      color: var(--text-head);
+      letter-spacing: 0.06em;
+      line-height: 1.1;
+      text-transform: uppercase;
+    }
+    .page-header h1 span.accent { color: var(--cyan); }
+    .page-header .subtitle {
+      margin-top: 8px;
+      font-size: 0.78rem;
+      color: var(--text-dim);
+      letter-spacing: 0.1em;
+    }
+
+    /* ── STAT CARDS ─────────────────────────────────────── */
+    .stat-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 16px;
+      margin-bottom: 28px;
+    }
+    @media (max-width: 900px) {
+      .stat-grid { grid-template-columns: repeat(2, 1fr); }
+    }
+    .stat-card {
+      background: var(--bg2);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 18px 20px 16px;
+      position: relative;
+      overflow: hidden;
+      transition: transform 0.2s, box-shadow 0.2s;
+      cursor: default;
+    }
+    .stat-card::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 2px;
+    }
+    .stat-card.cyan::before  { background: var(--cyan);   box-shadow: var(--glow-cyan); }
+    .stat-card.green::before { background: var(--green);  box-shadow: var(--glow-green); }
+    .stat-card.amber::before { background: var(--amber);  box-shadow: var(--glow-amber); }
+    .stat-card.blue::before  { background: var(--blue);   box-shadow: var(--glow-blue); }
+
+    .stat-card:hover {
+      transform: translateY(-3px);
+    }
+    .stat-card.cyan:hover  { box-shadow: var(--glow-cyan); }
+    .stat-card.green:hover { box-shadow: var(--glow-green); }
+    .stat-card.amber:hover { box-shadow: var(--glow-amber); }
+    .stat-card.blue:hover  { box-shadow: var(--glow-blue); }
+
+    .stat-label {
+      font-size: 0.62rem;
+      letter-spacing: 0.2em;
+      color: var(--text-dim);
+      text-transform: uppercase;
+      margin-bottom: 8px;
+    }
+    .stat-value {
+      font-size: clamp(1.5rem, 3vw, 2.2rem);
+      font-weight: 700;
+      line-height: 1;
+      margin-bottom: 4px;
+    }
+    .stat-card.cyan  .stat-value { color: var(--cyan); }
+    .stat-card.green .stat-value { color: var(--green); }
+    .stat-card.amber .stat-value { color: var(--amber); }
+    .stat-card.blue  .stat-value { color: var(--blue); }
+
+    .stat-sub {
+      font-size: 0.65rem;
+      color: var(--text-dim);
+    }
+
+    /* ── CHART GRID ─────────────────────────────────────── */
+    .chart-grid-2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+      margin-bottom: 20px;
+    }
+    @media (max-width: 900px) {
+      .chart-grid-2 { grid-template-columns: 1fr; }
+    }
+
+    .chart-panel {
+      background: var(--bg2);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 20px 20px 16px;
+      position: relative;
+      transition: box-shadow 0.25s;
+    }
+    .chart-panel:hover { box-shadow: 0 0 28px rgba(0,212,255,0.1); }
+
+    .chart-title {
+      font-size: 0.7rem;
+      font-weight: 700;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--text-head);
+      margin-bottom: 4px;
+    }
+    .chart-desc {
+      font-size: 0.62rem;
+      color: var(--text-dim);
+      letter-spacing: 0.08em;
+      margin-bottom: 16px;
+    }
+    .chart-wrap {
+      position: relative;
+    }
+
+    /* ── FINDINGS ───────────────────────────────────────── */
+    .section-title {
+      font-size: 0.68rem;
+      letter-spacing: 0.22em;
+      text-transform: uppercase;
+      color: var(--text-dim);
+      margin-bottom: 12px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .findings-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+      gap: 12px;
+      margin-bottom: 28px;
+    }
+
+    .finding-card {
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      padding: 13px 16px;
+      display: flex;
+      gap: 12px;
+      align-items: flex-start;
+      font-size: 0.73rem;
+      line-height: 1.55;
+      transition: transform 0.18s, border-color 0.18s;
+    }
+    .finding-card:hover { transform: translateX(4px); }
+
+    .finding-card.critical { border-left: 3px solid var(--red); }
+    .finding-card.critical:hover { border-color: var(--red); box-shadow: -4px 0 14px rgba(255,51,85,0.3); }
+    .finding-card.warning  { border-left: 3px solid var(--yellow); }
+    .finding-card.warning:hover  { border-color: var(--yellow); box-shadow: -4px 0 14px rgba(255,225,53,0.25); }
+    .finding-card.info     { border-left: 3px solid var(--green); }
+    .finding-card.info:hover     { border-color: var(--green); box-shadow: -4px 0 14px rgba(57,255,20,0.2); }
+
+    .finding-icon { font-size: 1rem; flex-shrink: 0; margin-top: 1px; }
+    .finding-badge {
+      font-size: 0.58rem;
+      font-weight: 700;
+      letter-spacing: 0.14em;
+      padding: 2px 6px;
+      border-radius: 2px;
+      display: inline-block;
+      margin-right: 6px;
+      vertical-align: middle;
+    }
+    .badge-crit { background: rgba(255,51,85,0.18); color: var(--red); border: 1px solid rgba(255,51,85,0.4); }
+    .badge-warn { background: rgba(255,225,53,0.12); color: var(--yellow); border: 1px solid rgba(255,225,53,0.3); }
+    .badge-info { background: rgba(57,255,20,0.1);  color: var(--green);  border: 1px solid rgba(57,255,20,0.3); }
+
+    /* ── RECOMMENDATIONS ────────────────────────────────── */
+    .recs-list {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      margin-bottom: 28px;
+    }
+    .rec-item {
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      padding: 12px 16px;
+      font-size: 0.73rem;
+      font-family: 'JetBrains Mono', monospace;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      transition: transform 0.18s;
+    }
+    .rec-item:hover { transform: translateX(4px); }
+    .rec-pri {
+      font-size: 0.6rem;
+      font-weight: 800;
+      letter-spacing: 0.1em;
+      padding: 3px 8px;
+      border-radius: 2px;
+      flex-shrink: 0;
+    }
+    .p0 { background: rgba(255,51,85,0.2); color: var(--red); border: 1px solid rgba(255,51,85,0.45); }
+    .p1 { background: rgba(255,170,0,0.15); color: var(--amber); border: 1px solid rgba(255,170,0,0.4); }
+    .p2 { background: rgba(41,121,255,0.15); color: var(--blue); border: 1px solid rgba(41,121,255,0.4); }
+    .rec-text { color: var(--text); flex: 1; }
+    .rec-text em { color: var(--cyan); font-style: normal; }
+
+    /* ── PLACEHOLDER ────────────────────────────────────── */
+    .placeholder-card {
+      background: var(--bg2);
+      border: 1px dashed var(--border);
+      border-radius: 4px;
+      padding: 24px 28px;
+      display: flex;
+      align-items: center;
+      gap: 20px;
+      margin-bottom: 28px;
+    }
+    .placeholder-icon { font-size: 2rem; }
+    .placeholder-title {
+      font-size: 0.82rem;
+      font-weight: 700;
+      color: var(--amber);
+      letter-spacing: 0.1em;
+      margin-bottom: 4px;
+    }
+    .placeholder-sub {
+      font-size: 0.66rem;
+      color: var(--text-dim);
+      letter-spacing: 0.08em;
+    }
+    .placeholder-pulse {
+      width: 8px; height: 8px;
+      background: var(--amber);
+      border-radius: 50%;
+      box-shadow: var(--glow-amber);
+      animation: pulse 1.4s ease-in-out infinite;
+      flex-shrink: 0;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50%       { opacity: 0.4; transform: scale(0.7); }
+    }
+
+    /* ── LEGEND CHIPS ───────────────────────────────────── */
+    .legend-row {
+      display: flex;
+      gap: 14px;
+      flex-wrap: wrap;
+      margin-bottom: 14px;
+    }
+    .legend-chip {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 0.6rem;
+      color: var(--text-dim);
+      letter-spacing: 0.1em;
+    }
+    .legend-dot {
+      width: 10px; height: 10px;
+      border-radius: 2px;
+      flex-shrink: 0;
+    }
+
+    /* ── RATIO BADGE (for cache chart annotations) ───── */
+    .cache-label-good  { color: var(--green); }
+    .cache-label-fair  { color: var(--yellow); }
+    .cache-label-poor  { color: var(--red); }
+  </style>
+</head>
+<body>
+
+<!-- ── TICKER ──────────────────────────────────────────────── -->
+<div class="ticker-wrap">
+  <div class="ticker-track">
+    <span class="ticker-item">CLAUDE CODE</span>
+    <span class="ticker-sep">//</span>
+    <span class="ticker-item">TOKEN ANALYSIS</span>
+    <span class="ticker-sep">//</span>
+    <span class="ticker-item">APR 02 2026</span>
+    <span class="ticker-sep">//</span>
+    <span class="ticker-item">9 CONVERSATIONS ANALYZED</span>
+    <span class="ticker-sep">//</span>
+    <span class="ticker-item">CACHE EFFICIENCY AUDIT</span>
+    <span class="ticker-sep">//</span>
+    <span class="ticker-item">CLAUDEST PROJECT</span>
+    <span class="ticker-sep">//</span>
+    <!-- duplicate for seamless loop -->
+    <span class="ticker-item">CLAUDE CODE</span>
+    <span class="ticker-sep">//</span>
+    <span class="ticker-item">TOKEN ANALYSIS</span>
+    <span class="ticker-sep">//</span>
+    <span class="ticker-item">APR 02 2026</span>
+    <span class="ticker-sep">//</span>
+    <span class="ticker-item">9 CONVERSATIONS ANALYZED</span>
+    <span class="ticker-sep">//</span>
+    <span class="ticker-item">CACHE EFFICIENCY AUDIT</span>
+    <span class="ticker-sep">//</span>
+    <span class="ticker-item">CLAUDEST PROJECT</span>
+    <span class="ticker-sep">//</span>
+  </div>
+</div>
+
+<!-- ── PAGE ────────────────────────────────────────────────── -->
+<div class="page">
+
+  <!-- Header -->
+  <header class="page-header">
+    <div class="label">// DIAGNOSTIC REPORT v1.1 — ALL BATCHES COMPLETE</div>
+    <h1>Claude Code <span class="accent">//</span> Token Usage Analysis</h1>
+    <div class="subtitle">9 sessions · 3 projects · cache efficiency · read pattern audit · idle gap detection</div>
+  </header>
+
+  <!-- Stat Cards -->
+  <div class="stat-grid">
+    <div class="stat-card cyan">
+      <div class="stat-label">Total Sessions</div>
+      <div class="stat-value" id="stat-sessions">0</div>
+      <div class="stat-sub">across 3 projects</div>
+    </div>
+    <div class="stat-card green">
+      <div class="stat-label">Cache Read Tokens</div>
+      <div class="stat-value" id="stat-cache-read">0</div>
+      <div class="stat-sub">tokens served from cache</div>
+    </div>
+    <div class="stat-card amber">
+      <div class="stat-label">Cache Creation Tokens</div>
+      <div class="stat-value" id="stat-cache-create">0</div>
+      <div class="stat-sub">tokens written to cache</div>
+    </div>
+    <div class="stat-card blue">
+      <div class="stat-label">Overall Cache Ratio</div>
+      <div class="stat-value" id="stat-ratio">0.00</div>
+      <div class="stat-sub">read / (read + creation)</div>
+    </div>
+  </div>
+
+  <!-- Charts Row 1 -->
+  <div class="chart-grid-2">
+
+    <!-- Chart 1: Cache Efficiency -->
+    <div class="chart-panel">
+      <div class="chart-title">01 // Cache Efficiency</div>
+      <div class="chart-desc">cache_read vs cache_creation per session — higher read = better</div>
+      <div class="legend-row">
+        <div class="legend-chip"><div class="legend-dot" style="background:#00d4ff"></div>cache read</div>
+        <div class="legend-chip"><div class="legend-dot" style="background:#ff6b35"></div>cache creation</div>
+      </div>
+      <div class="chart-wrap" style="height:290px">
+        <canvas id="chartCache"></canvas>
+      </div>
+    </div>
+
+    <!-- Chart 2: File Read Patterns -->
+    <div class="chart-panel">
+      <div class="chart-title">02 // File Read Patterns</div>
+      <div class="chart-desc">total read_calls vs reads_with_limits — red tint = no limit used</div>
+      <div class="legend-row">
+        <div class="legend-chip"><div class="legend-dot" style="background:#545878"></div>total reads</div>
+        <div class="legend-chip"><div class="legend-dot" style="background:#2979ff"></div>reads w/ limits</div>
+        <div class="legend-chip"><div class="legend-dot" style="background:rgba(255,51,85,0.35)"></div>no limit used</div>
+      </div>
+      <div class="chart-wrap" style="height:290px">
+        <canvas id="chartReads"></canvas>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Charts Row 2 -->
+  <div class="chart-grid-2">
+
+    <!-- Chart 3: Token Composition (log scale) -->
+    <div class="chart-panel">
+      <div class="chart-title">03 // Token Composition (log₁₀)</div>
+      <div class="chart-desc">4-segment stacked bar — log scale spans 3 to 6M tokens</div>
+      <div class="legend-row">
+        <div class="legend-chip"><div class="legend-dot" style="background:#00d4ff"></div>input</div>
+        <div class="legend-chip"><div class="legend-dot" style="background:#39ff14"></div>output</div>
+        <div class="legend-chip"><div class="legend-dot" style="background:#2979ff"></div>cache read</div>
+        <div class="legend-chip"><div class="legend-dot" style="background:#ffaa00"></div>cache creation</div>
+      </div>
+      <div class="chart-wrap" style="height:290px">
+        <canvas id="chartComposition"></canvas>
+      </div>
+    </div>
+
+    <!-- Chart 4: Cache-Killing Gaps -->
+    <div class="chart-panel">
+      <div class="chart-title">04 // Cache-Killing Idle Gaps</div>
+      <div class="chart-desc">max idle gap per session — above 5 min = cache likely expired</div>
+      <div class="legend-row">
+        <div class="legend-chip"><div class="legend-dot" style="background:#39ff14"></div>safe (&lt;5 min)</div>
+        <div class="legend-chip"><div class="legend-dot" style="background:#ff3355"></div>cache expired (&gt;5 min)</div>
+      </div>
+      <div class="chart-wrap" style="height:290px">
+        <canvas id="chartGaps"></canvas>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Key Findings -->
+  <div class="section-title">// Key Findings</div>
+  <div class="findings-grid">
+    <div class="finding-card critical">
+      <span class="finding-icon">🔴</span>
+      <div>
+        <span class="finding-badge badge-crit">CRITICAL</span>
+        <strong>0% of Read calls used offset/limit</strong> across 5 of 6 sessions — full-file reads for every call, no pagination or range limiting applied.
+      </div>
+    </div>
+    <div class="finding-card critical">
+      <span class="finding-icon">🔴</span>
+      <div>
+        <span class="finding-badge badge-crit">CRITICAL</span>
+        <strong>SKILL.md read 5× in one session</strong> — 4× redundant full-file reads on the same artifact already present in context.
+      </div>
+    </div>
+    <div class="finding-card warning">
+      <span class="finding-icon">🟡</span>
+      <div>
+        <span class="finding-badge badge-warn">WARNING</span>
+        <strong>dashboard.html read 4×</strong> in same context window — identical waste pattern, file content was never evicted.
+      </div>
+    </div>
+    <div class="finding-card warning">
+      <span class="finding-icon">🟡</span>
+      <div>
+        <span class="finding-badge badge-warn">WARNING</span>
+        <strong>30-min idle gap in session 815a0d99</strong> — ephemeral cache TTL is 5 min; this gap almost certainly forced full cache recreation on resume.
+      </div>
+    </div>
+    <div class="finding-card info">
+      <span class="finding-icon">🟢</span>
+      <div>
+        <span class="finding-badge badge-info">INFO</span>
+        <strong>Dayflow image sessions: ~4% cache ratio</strong> — structural, not a bug. Image data shifts the context prefix every turn, preventing cache reuse.
+      </div>
+    </div>
+    <div class="finding-card info">
+      <span class="finding-icon">🟢</span>
+      <div>
+        <span class="finding-badge badge-info">INFO</span>
+        <strong>Subagent sessions achieved best cache ratios</strong> (0.73–0.85) — parallel subagent context sharing produces consistently higher reuse rates.
+      </div>
+    </div>
+  </div>
+
+  <!-- Recommendations -->
+  <div class="section-title">// Recommendations</div>
+  <div class="recs-list">
+    <div class="rec-item">
+      <span class="rec-pri p0">P0</span>
+      <span class="rec-text">Add <em>PreToolUse</em> hook: warn on Read calls &gt;100 lines without <em>offset/limit</em> parameters set</span>
+    </div>
+    <div class="rec-item">
+      <span class="rec-pri p0">P0</span>
+      <span class="rec-text">Never re-read files already loaded into context — pass content <em>forward</em> via variables or tool results, not repeat reads</span>
+    </div>
+    <div class="rec-item">
+      <span class="rec-pri p1">P1</span>
+      <span class="rec-text">Keep sessions active (&lt;<em>5 min idle</em>) to preserve ephemeral cache — idle gaps above threshold waste all creation tokens</span>
+    </div>
+    <div class="rec-item">
+      <span class="rec-pri p2">P2</span>
+      <span class="rec-text">Dayflow image architecture: <em>batch images</em> into single tool calls or use streaming instead of sequential per-frame Read calls</span>
+    </div>
+  </div>
+
+  <!-- Batch 1 findings note -->
+  <div class="section-title">// Batch 1 Highlights (Current Session)</div>
+  <div class="placeholder-card" style="border-color: #39ff14; background: rgba(57,255,20,0.04);">
+    <span class="placeholder-icon">✅</span>
+    <div style="flex:1">
+      <div class="placeholder-title" style="color:#39ff14;">Analysis Complete — 3 Additional Sessions</div>
+      <div class="placeholder-sub">
+        8d313d03 (THIS session): 87.5% cache ratio — best in sample. Orchestrator pattern + subagents = lean context.<br>
+        09e0abe5 / 7be8c32f: Dayflow programmatic batch jobs (Haiku). NOT manual CLI sessions — background automation firing via API.<br>
+        Key finding: Dayflow retry prompt forces full JSON rewrite on validation failure — "return FULL corrected JSON (not a diff)" wastes ~90% of retry output tokens.
+      </div>
+    </div>
+  </div>
+
+</div><!-- /page -->
+
+<script>
+/* ── DATA ──────────────────────────────────────────────────── */
+const sessions = [
+  {
+    id: "6e114e67", project: "meta-ads-cli", type: "Skill Improvement",
+    turns: 55, input_tokens: 2408, output_tokens: 8012,
+    cache_read: 902176, cache_creation: 339522, cache_ratio: 0.726,
+    file_size_kb: 306, duration_min: 30, read_calls: 8, reads_with_limits: 0,
+    repeated_reads: {"deploy-vercel/SKILL.md": 5},
+    max_gap_min: 19.05, subagent_used: true, large_tool_results: 1
+  },
+  {
+    id: "780bfbf6", project: "dayflow-chatcli", type: "Image Analysis (Screen Recording)",
+    turns: 35, input_tokens: 54, output_tokens: 1951,
+    cache_read: 21728, cache_creation: 552468, cache_ratio: 0.038,
+    file_size_kb: 4857, duration_min: 0.3, read_calls: 16, reads_with_limits: 0,
+    repeated_reads: {},
+    max_gap_min: 0, subagent_used: false, large_tool_results: 16
+  },
+  {
+    id: "021151fd", project: "meta-ads-cli", type: "Attribution Dashboard Gen",
+    turns: 123, input_tokens: 99155, output_tokens: 38821,
+    cache_read: 6038232, cache_creation: 1038163, cache_ratio: 0.853,
+    file_size_kb: 715, duration_min: 18, read_calls: 11, reads_with_limits: 7,
+    repeated_reads: {"dashboard.html": 4, "meta-insights-campaign.json": 2},
+    max_gap_min: 6.29, subagent_used: true, large_tool_results: 1
+  },
+  {
+    id: "815a0d99", project: "meta-ads-cli", type: "Codebase Exploration",
+    turns: 27, input_tokens: 45960, output_tokens: 4815,
+    cache_read: 233451, cache_creation: 173690, cache_ratio: 0.573,
+    file_size_kb: 239, duration_min: 31, read_calls: 8, reads_with_limits: 0,
+    repeated_reads: {},
+    max_gap_min: 30.03, subagent_used: false, large_tool_results: 0
+  },
+  {
+    id: "476aa380", project: "dayflow-chatcli", type: "Activity Synthesis (Single-turn)",
+    turns: 2, input_tokens: 3, output_tokens: 2027,
+    cache_read: 0, cache_creation: 26234, cache_ratio: 0.0,
+    file_size_kb: 55, duration_min: 0.7, read_calls: 0, reads_with_limits: 0,
+    repeated_reads: {},
+    max_gap_min: 0, subagent_used: false, large_tool_results: 0
+  },
+  {
+    id: "509f63ef", project: "dayflow-chatcli", type: "Screenshot Analysis (15 frames)",
+    turns: 33, input_tokens: 51, output_tokens: 2019,
+    cache_read: 21728, cache_creation: 525595, cache_ratio: 0.041,
+    file_size_kb: 4973, duration_min: 0.3, read_calls: 15, reads_with_limits: 0,
+    repeated_reads: {},
+    max_gap_min: 0, subagent_used: false, large_tool_results: 15
+  },
+  {
+    id: "8d313d03", project: "claudest", type: "Meta-Analysis Orchestration (THIS session)",
+    turns: 24, input_tokens: 21, output_tokens: 4480,
+    cache_read: 322705, cache_creation: 45905, cache_ratio: 0.875,
+    file_size_kb: 68, duration_min: 1.36, read_calls: 0, reads_with_limits: 0,
+    repeated_reads: {},
+    max_gap_min: 0.65, subagent_used: true, large_tool_results: 0
+  },
+  {
+    id: "09e0abe5", project: "dayflow-chatcli", type: "Activity Synthesis (Programmatic)",
+    turns: 2, input_tokens: 3, output_tokens: 879,
+    cache_read: 0, cache_creation: 23910, cache_ratio: 0.0,
+    file_size_kb: 35, duration_min: 0.2, read_calls: 0, reads_with_limits: 0,
+    repeated_reads: {},
+    max_gap_min: 0, subagent_used: false, large_tool_results: 0
+  },
+  {
+    id: "7be8c32f", project: "dayflow-chatcli", type: "Activity Synthesis + Validation Retry",
+    turns: 4, input_tokens: 6, output_tokens: 5632,
+    cache_read: 11698, cache_creation: 44493, cache_ratio: 0.208,
+    file_size_kb: 71, duration_min: 2.24, read_calls: 0, reads_with_limits: 0,
+    repeated_reads: {},
+    max_gap_min: 1.03, subagent_used: false, large_tool_results: 0
+  }
+];
+
+const projectColor = {
+  "meta-ads-cli":    "#00d4ff",
+  "dayflow-chatcli": "#bf5fff",
+  "claudest":        "#39ff14"
+};
+
+const labels = sessions.map(s => s.id.slice(0, 8));
+
+/* ── CHART.JS DEFAULTS ──────────────────────────────────────── */
+Chart.defaults.font.family = "'JetBrains Mono', 'IBM Plex Mono', monospace";
+Chart.defaults.font.size = 11;
+Chart.defaults.color = "#545878";
+
+/* ── STAT COUNTER ANIMATION ─────────────────────────────────── */
+function countUp(el, target, decimals, duration, prefix) {
+  const start = performance.now();
+  function step(now) {
+    const t = Math.min((now - start) / duration, 1);
+    const eased = 1 - Math.pow(1 - t, 3);
+    const val = target * eased;
+    if (decimals === 0) {
+      el.textContent = (prefix || '') + Math.floor(val).toLocaleString();
+    } else {
+      el.textContent = val.toFixed(decimals);
+    }
+    if (t < 1) requestAnimationFrame(step);
+  }
+  requestAnimationFrame(step);
+}
+
+window.addEventListener('DOMContentLoaded', () => {
+  setTimeout(() => {
+    countUp(document.getElementById('stat-sessions'), 6, 0, 900);
+    countUp(document.getElementById('stat-cache-read'), 7217315, 0, 1400);
+    countUp(document.getElementById('stat-cache-create'), 2655672, 0, 1400);
+    countUp(document.getElementById('stat-ratio'), 0.731, 3, 1200);
+  }, 200);
+});
+
+/* ── CHART 1: CACHE EFFICIENCY (horizontal stacked bar) ───── */
+(function() {
+  const cacheRead  = sessions.map(s => s.cache_read);
+  const cacheCrea  = sessions.map(s => s.cache_creation);
+  const ratios     = sessions.map(s => s.cache_ratio);
+
+  const ctx = document.getElementById('chartCache').getContext('2d');
+
+  // custom plugin to draw ratio badges on bars
+  const ratioBadgePlugin = {
+    id: 'ratioBadge',
+    afterDatasetsDraw(chart) {
+      const { ctx, scales } = chart;
+      ratios.forEach((ratio, i) => {
+        const meta0 = chart.getDatasetMeta(0);
+        const meta1 = chart.getDatasetMeta(1);
+        if (!meta0.data[i] || !meta1.data[i]) return;
+
+        const bar0 = meta0.data[i];
+        const bar1 = meta1.data[i];
+        const xRight = Math.max(bar0.x + (bar0.width || 0) / 2, bar1.x + (bar1.width || 0) / 2);
+
+        // for horizontal bar the x is the right edge of the stacked bar
+        const xEnd = bar1.x; // base is bar1 end
+        const y = bar0.y;
+
+        const label = ratio > 0.7 ? 'GOOD' : ratio >= 0.3 ? 'FAIR' : 'POOR';
+        const color = ratio > 0.7 ? '#39ff14' : ratio >= 0.3 ? '#ffe135' : '#ff3355';
+
+        ctx.save();
+        ctx.font = '600 9px "JetBrains Mono", monospace';
+        ctx.fillStyle = color;
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(`${label} ${(ratio*100).toFixed(0)}%`, xEnd + 8, y);
+        ctx.restore();
+      });
+    }
+  };
+
+  new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [
+        {
+          label: 'Cache Read',
+          data: cacheRead,
+          backgroundColor: 'rgba(0,212,255,0.72)',
+          borderColor: '#00d4ff',
+          borderWidth: 1,
+        },
+        {
+          label: 'Cache Creation',
+          data: cacheCrea,
+          backgroundColor: 'rgba(255,107,53,0.72)',
+          borderColor: '#ff6b35',
+          borderWidth: 1,
+        }
+      ]
+    },
+    options: {
+      indexAxis: 'y',
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: {
+        duration: 900,
+        easing: 'easeOutQuart',
+        delay: (ctx) => ctx.dataIndex * 80
+      },
+      scales: {
+        x: {
+          stacked: true,
+          grid: { color: 'rgba(26,26,46,0.8)', borderColor: '#1e1e3a' },
+          ticks: {
+            callback: v => v >= 1e6 ? (v/1e6).toFixed(1)+'M' : v >= 1e3 ? (v/1e3).toFixed(0)+'K' : v
+          }
+        },
+        y: {
+          stacked: true,
+          grid: { color: 'rgba(26,26,46,0.5)' },
+          ticks: {
+            font: { size: 10, weight: '600' },
+            color: (ctx) => {
+              const s = sessions[ctx.index];
+              return projectColor[s?.project] || '#545878';
+            }
+          }
+        }
+      },
+      layout: { padding: { right: 80 } },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: '#0d0d16',
+          borderColor: '#1e1e3a',
+          borderWidth: 1,
+          titleColor: '#00d4ff',
+          bodyColor: '#c8ccd8',
+          callbacks: {
+            label: (item) => ` ${item.dataset.label}: ${item.raw.toLocaleString()}`
+          }
+        }
+      }
+    },
+    plugins: [ratioBadgePlugin]
+  });
+})();
+
+/* ── CHART 2: FILE READ PATTERNS ─────────────────────────────── */
+(function() {
+  const ctx = document.getElementById('chartReads').getContext('2d');
+
+  const bgColors = sessions.map(s =>
+    s.reads_with_limits === 0 && s.read_calls > 0
+      ? 'rgba(255,51,85,0.35)'
+      : 'rgba(84,88,120,0.65)'
+  );
+
+  // annotation plugin for repeated reads badges — drawn manually
+  const repeatedPlugin = {
+    id: 'repeatedBadge',
+    afterDatasetsDraw(chart) {
+      const { ctx: c, scales } = chart;
+      sessions.forEach((s, i) => {
+        const keys = Object.keys(s.repeated_reads);
+        if (!keys.length) return;
+        const meta = chart.getDatasetMeta(0);
+        if (!meta.data[i]) return;
+        const bar = meta.data[i];
+        const x = bar.x + bar.width / 2;
+        const y = bar.y - 6;
+        // build short label
+        const first = keys[0];
+        const cnt = s.repeated_reads[first];
+        const shortName = first.split('/').pop().slice(0, 12);
+        const txt = `${shortName} ×${cnt}`;
+        c.save();
+        c.font = '600 8px "JetBrains Mono", monospace';
+        const tw = c.measureText(txt).width;
+        // pill bg
+        c.fillStyle = 'rgba(255,107,53,0.22)';
+        c.strokeStyle = '#ff6b35';
+        c.lineWidth = 1;
+        const px = x - tw/2 - 5, py = y - 11, pw = tw + 10, ph = 14;
+        c.beginPath();
+        c.roundRect(px, py, pw, ph, 2);
+        c.fill();
+        c.stroke();
+        c.fillStyle = '#ff6b35';
+        c.textAlign = 'center';
+        c.textBaseline = 'middle';
+        c.fillText(txt, x, y - 4);
+        c.restore();
+      });
+    }
+  };
+
+  new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [
+        {
+          label: 'Total Read Calls',
+          data: sessions.map(s => s.read_calls),
+          backgroundColor: bgColors,
+          borderColor: sessions.map(s =>
+            s.reads_with_limits === 0 && s.read_calls > 0 ? '#ff3355' : '#545878'
+          ),
+          borderWidth: 1,
+        },
+        {
+          label: 'Reads w/ Limits',
+          data: sessions.map(s => s.reads_with_limits),
+          backgroundColor: 'rgba(41,121,255,0.75)',
+          borderColor: '#2979ff',
+          borderWidth: 1,
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: {
+        duration: 900,
+        easing: 'easeOutQuart',
+        delay: (ctx) => ctx.dataIndex * 80 + 120
+      },
+      scales: {
+        x: {
+          grid: { color: 'rgba(26,26,46,0.8)' },
+          ticks: {
+            color: (ctx) => {
+              const s = sessions[ctx.index];
+              return projectColor[s?.project] || '#545878';
+            },
+            font: { size: 10, weight: '600' }
+          }
+        },
+        y: {
+          grid: { color: 'rgba(26,26,46,0.8)' },
+          ticks: { stepSize: 2 }
+        }
+      },
+      layout: { padding: { top: 30 } },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: '#0d0d16',
+          borderColor: '#1e1e3a',
+          borderWidth: 1,
+          titleColor: '#2979ff',
+          bodyColor: '#c8ccd8',
+        }
+      }
+    },
+    plugins: [repeatedPlugin]
+  });
+})();
+
+/* ── CHART 3: TOKEN COMPOSITION (log scale) ───────────────────── */
+(function() {
+  const ctx = document.getElementById('chartComposition').getContext('2d');
+
+  // log transform helper — log10, floor at 1 to avoid log(0)
+  function logVal(v) { return v > 0 ? Math.log10(v) : 0; }
+
+  new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [
+        {
+          label: 'Input Tokens',
+          data: sessions.map(s => s.input_tokens),
+          backgroundColor: 'rgba(0,212,255,0.75)',
+          borderColor: '#00d4ff', borderWidth: 1
+        },
+        {
+          label: 'Output Tokens',
+          data: sessions.map(s => s.output_tokens),
+          backgroundColor: 'rgba(57,255,20,0.7)',
+          borderColor: '#39ff14', borderWidth: 1
+        },
+        {
+          label: 'Cache Read',
+          data: sessions.map(s => s.cache_read),
+          backgroundColor: 'rgba(41,121,255,0.75)',
+          borderColor: '#2979ff', borderWidth: 1
+        },
+        {
+          label: 'Cache Creation',
+          data: sessions.map(s => s.cache_creation),
+          backgroundColor: 'rgba(255,170,0,0.72)',
+          borderColor: '#ffaa00', borderWidth: 1
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: {
+        duration: 1000,
+        easing: 'easeOutQuart',
+        delay: (ctx) => ctx.dataIndex * 60 + 200
+      },
+      scales: {
+        x: {
+          stacked: true,
+          grid: { color: 'rgba(26,26,46,0.8)' },
+          ticks: {
+            color: (ctx) => {
+              const s = sessions[ctx.index];
+              return projectColor[s?.project] || '#545878';
+            },
+            font: { size: 10, weight: '600' }
+          }
+        },
+        y: {
+          stacked: true,
+          type: 'logarithmic',
+          grid: { color: 'rgba(26,26,46,0.8)' },
+          ticks: {
+            callback: (v) => {
+              if ([1, 10, 100, 1000, 10000, 100000, 1000000, 10000000].includes(v)) {
+                return v >= 1e6 ? (v/1e6).toFixed(0)+'M'
+                     : v >= 1e3 ? (v/1e3).toFixed(0)+'K'
+                     : v;
+              }
+              return null;
+            }
+          }
+        }
+      },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: '#0d0d16',
+          borderColor: '#1e1e3a',
+          borderWidth: 1,
+          titleColor: '#ffaa00',
+          bodyColor: '#c8ccd8',
+          callbacks: {
+            label: (item) => ` ${item.dataset.label}: ${item.raw.toLocaleString()}`
+          }
+        }
+      }
+    }
+  });
+})();
+
+/* ── CHART 4: CACHE-KILLING GAPS ─────────────────────────────── */
+(function() {
+  const ctx = document.getElementById('chartGaps').getContext('2d');
+  const gaps = sessions.map(s => s.max_gap_min);
+
+  const barColors = gaps.map(g =>
+    g > 5
+      ? 'rgba(255,51,85,0.8)'
+      : g === 0
+        ? 'rgba(57,255,20,0.45)'
+        : 'rgba(57,255,20,0.72)'
+  );
+  const borderColors = gaps.map(g => g > 5 ? '#ff3355' : '#39ff14');
+
+  // custom plugin for the 5-min threshold line
+  const thresholdPlugin = {
+    id: 'threshold',
+    afterDraw(chart) {
+      const { ctx: c, scales, chartArea } = chart;
+      const y5 = scales.y.getPixelForValue(5);
+      c.save();
+      c.setLineDash([6, 4]);
+      c.strokeStyle = '#ff3355';
+      c.lineWidth = 1.5;
+      c.globalAlpha = 0.75;
+      c.beginPath();
+      c.moveTo(chartArea.left, y5);
+      c.lineTo(chartArea.right, y5);
+      c.stroke();
+      // label
+      c.setLineDash([]);
+      c.globalAlpha = 1;
+      c.font = '600 9px "JetBrains Mono", monospace';
+      c.fillStyle = '#ff3355';
+      c.textAlign = 'right';
+      c.textBaseline = 'bottom';
+      c.fillText('⚡ 5-min cache expiry', chartArea.right - 4, y5 - 3);
+      c.restore();
+    }
+  };
+
+  // glow effect for bars above threshold
+  const glowPlugin = {
+    id: 'glowBars',
+    beforeDatasetsDraw(chart) {
+      const { ctx: c } = chart;
+      const meta = chart.getDatasetMeta(0);
+      meta.data.forEach((bar, i) => {
+        if (gaps[i] > 5) {
+          c.save();
+          c.shadowColor = 'rgba(255,51,85,0.7)';
+          c.shadowBlur = 14;
+        }
+      });
+    }
+  };
+
+  new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [{
+        label: 'Max Idle Gap (min)',
+        data: gaps,
+        backgroundColor: barColors,
+        borderColor: borderColors,
+        borderWidth: 1,
+        borderRadius: 2,
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: {
+        duration: 900,
+        easing: 'easeOutQuart',
+        delay: (ctx) => ctx.dataIndex * 100 + 300
+      },
+      scales: {
+        x: {
+          grid: { color: 'rgba(26,26,46,0.8)' },
+          ticks: {
+            color: (ctx) => {
+              const s = sessions[ctx.index];
+              return projectColor[s?.project] || '#545878';
+            },
+            font: { size: 10, weight: '600' }
+          }
+        },
+        y: {
+          grid: { color: 'rgba(26,26,46,0.8)' },
+          ticks: {
+            callback: v => v + ' min'
+          },
+          max: 35
+        }
+      },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: '#0d0d16',
+          borderColor: '#1e1e3a',
+          borderWidth: 1,
+          titleColor: '#ff3355',
+          bodyColor: '#c8ccd8',
+          callbacks: {
+            label: (item) => ` Max idle: ${item.raw} min ${item.raw > 5 ? '⚡ cache expired' : '✓ safe'}`
+          }
+        }
+      }
+    },
+    plugins: [thresholdPlugin]
+  });
+})();
+</script>
+</body>
+</html>

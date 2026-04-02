@@ -333,6 +333,42 @@ def _migrate_columns(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_branches_summary_version ON branches(summary_version)")
     conn.commit()
 
+    # token_snapshots table (new table, not a column add)
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='token_snapshots'")
+    if not cursor.fetchone():
+        cursor.executescript("""
+CREATE TABLE IF NOT EXISTS token_snapshots (
+  id INTEGER PRIMARY KEY,
+  session_uuid TEXT UNIQUE NOT NULL,
+  project_path TEXT,
+  start_time DATETIME,
+  duration_minutes INTEGER,
+  user_message_count INTEGER,
+  assistant_message_count INTEGER,
+  input_tokens INTEGER DEFAULT 0,
+  output_tokens INTEGER DEFAULT 0,
+  cache_read_tokens INTEGER DEFAULT 0,
+  cache_creation_tokens INTEGER DEFAULT 0,
+  tool_counts TEXT,
+  tool_errors INTEGER DEFAULT 0,
+  uses_task_agent INTEGER DEFAULT 0,
+  uses_web_search INTEGER DEFAULT 0,
+  uses_web_fetch INTEGER DEFAULT 0,
+  user_response_times TEXT,
+  lines_added INTEGER DEFAULT 0,
+  lines_removed INTEGER DEFAULT 0,
+  goal_categories TEXT,
+  outcome TEXT,
+  session_type TEXT,
+  friction_counts TEXT,
+  brief_summary TEXT,
+  imported_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_token_snapshots_session ON token_snapshots(session_uuid);
+CREATE INDEX IF NOT EXISTS idx_token_snapshots_start ON token_snapshots(start_time);
+""")
+        conn.commit()
+
     # --- DML migrations (version-gated via PRAGMA user_version, run once) ---
     version = conn.execute("PRAGMA user_version").fetchone()[0]
 

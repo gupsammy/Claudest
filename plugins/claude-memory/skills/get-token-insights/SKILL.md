@@ -7,41 +7,53 @@ description: >
   context-reduction advice or API cost questions.
 allowed-tools:
   - Bash(python3:*)
+  - Bash(open:*)
+  - AskUserQuestion
 ---
 
 # Get Token Insights
 
-Ingest Claude Code session data into the token_snapshots table and surface usage patterns.
+Parse JSONL conversation files from `~/.claude/projects/*/` into per-turn analytics tables, then analyze usage patterns and surface actionable cost-saving opportunities.
 
-## Process
-
-1. Run the ingest script:
+## Step 1: Ingest
 
 ```bash
 python3 $CLAUDE_PLUGIN_ROOT/scripts/ingest_token_data.py
 ```
 
-The script reads `~/.claude/usage-data/session-meta/` and `~/.claude/usage-data/facets/`,
-upserts all sessions into `~/.claude-memory/conversations.db` (token_snapshots table),
-and prints a JSON blob to stdout.
+First run processes all files (~100s for ~2500 files) — warn the user about the wait before running. Incremental runs complete in under 5s. The script populates analytics tables, deploys an interactive dashboard to `~/.claude-memory/dashboard.html` (built from `templates/dashboard.html`), and prints a JSON blob to stdout.
 
-2. Parse the JSON output and present a human-readable summary covering:
-   - **Totals**: input, output, cache_read, cache_creation tokens; cache_ratio
-   - **Top tools**: ranked by call count across all sessions
-   - **Idle gaps**: sessions where user_response_times > 300s (cache likely expired)
-   - **Outcomes**: distribution of session outcome types (mostly_achieved, etc.)
-   - **Per-session highlights**: flag sessions with 0 cache_read tokens or high tool_errors
+If the script exits non-zero, report the error and stop.
 
-3. Highlight actionable findings — e.g. sessions with no cache hits suggest cache expiry
-   between turns; high tool_error counts in a session suggest fragile bash sequences worth
-   reviewing.
+## Step 2: Analyze as a Cost-Optimization Consultant
 
-## Dashboard
+Capture the JSON stdout from Step 1 as the analysis input. Prioritize actionable savings over descriptive summaries — every insight should answer "what should I change and how much will it save?"
 
-A pre-built HTML dashboard is available at `$CLAUDE_PLUGIN_ROOT/templates/dashboard.html`.
-Copy it to any local path and open in a browser — it expects the JSON blob from step 1
-to be embedded or fetched. To open immediately:
+### Top-Line Summary
+State the total spend, session count, date range, and average cost per session in one paragraph.
+
+### Priority Insights (top 3 by dollar waste)
+For each insight from the `insights` array (sorted by waste_usd):
+1. State the finding and its dollar impact
+2. Explain the root cause so the user understands *why* this is happening
+3. Present the solution with concrete steps — if a CLAUDE.md rule is suggested, show the exact rule text
+4. State the estimated savings
+
+### Model Economics
+Compare cost across models. If one model dominates spend, call it out and estimate savings from switching routine tasks to a cheaper model.
+
+### Project Cost Ranking
+List top 3 projects by dollar spend. For the most expensive project, identify what drives the cost (model choice, session count, cache inefficiency, or antipatterns).
+
+### Remaining Insights
+Briefly cover any remaining insights not in the top 3.
+
+Present the full analysis as markdown with the sections above. Ask the user if they want to dive deeper into any specific project or insight.
+
+## Step 3: Open Dashboard
 
 ```bash
-open $CLAUDE_PLUGIN_ROOT/templates/dashboard.html
+open ~/.claude-memory/dashboard.html
 ```
+
+Note the dashboard is available for deeper exploration of the charts.

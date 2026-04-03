@@ -1,11 +1,7 @@
 ---
 name: get-token-insights
 description: >
-  This skill should be used when the user says "get token insights", "show my
-  token usage", "token analysis", "usage insights", "how am I using tokens",
-  "analyze my claude usage", "show cache efficiency", "which skills do I use",
-  "agent delegation patterns", "hook performance", or "workflow analytics".
-  Not for general context-reduction advice or API cost questions.
+  Ingest Claude Code usage data and surface token cost, cache, and workflow patterns.
 allowed-tools:
   - Bash(python3:*)
   - Bash(open:*)
@@ -20,7 +16,7 @@ Parse JSONL conversation files from `~/.claude/projects/*/` into per-turn analyt
 ## Step 1: Ingest
 
 ```bash
-python3 $CLAUDE_PLUGIN_ROOT/scripts/ingest_token_data.py
+python3 ${CLAUDE_PLUGIN_ROOT}/skills/get-token-insights/scripts/ingest_token_data.py
 ```
 
 First run processes all files (~100s for ~2500 files) — warn the user about the wait before running. Incremental runs complete in under 5s. The script populates analytics tables, deploys an interactive dashboard to `~/.claude-memory/dashboard.html` (built from `templates/dashboard.html`), and prints a slim JSON blob to stdout (full data goes to dashboard only).

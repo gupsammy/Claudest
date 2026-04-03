@@ -34,7 +34,7 @@ To enable auto-updates, run `/plugin`, go to the Marketplaces tab, and toggle au
 
 <a id="claude-memory"></a>
 
-### 🧠 claude-memory &nbsp; ![v0.8.36](https://img.shields.io/badge/v0.8.36-blue?style=flat-square)
+### 🧠 claude-memory &nbsp; ![v0.8.37](https://img.shields.io/badge/v0.8.37-blue?style=flat-square)
 
 Conversation memory for Claude Code. Stores every session in a SQLite database with full-text search (FTS5, BM25 ranking, zero external dependencies) and makes past conversations available to the agent automatically.
 

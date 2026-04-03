@@ -369,6 +369,13 @@ CREATE INDEX IF NOT EXISTS idx_token_snapshots_start ON token_snapshots(start_ti
 """)
         conn.commit()
 
+    # Ensure data_source column exists (added by get-token-insights ingest script)
+    try:
+        conn.execute("ALTER TABLE token_snapshots ADD COLUMN data_source TEXT")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass
+
     # --- DML migrations (version-gated via PRAGMA user_version, run once) ---
     version = conn.execute("PRAGMA user_version").fetchone()[0]
 

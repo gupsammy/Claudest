@@ -157,6 +157,14 @@ CREATE TABLE IF NOT EXISTS hook_executions (
 );
 CREATE INDEX IF NOT EXISTS idx_he_session ON hook_executions(session_id);
 CREATE INDEX IF NOT EXISTS idx_he_command ON hook_executions(hook_command);
+
+CREATE TABLE IF NOT EXISTS import_log (
+  id INTEGER PRIMARY KEY,
+  file_path TEXT UNIQUE NOT NULL,
+  file_hash TEXT,
+  imported_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  messages_imported INTEGER DEFAULT 0
+);
 """
 
 

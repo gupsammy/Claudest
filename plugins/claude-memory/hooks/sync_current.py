@@ -36,7 +36,7 @@ from memory_lib.parsing import (
     parse_jsonl_file, parse_all_with_uuids, extract_session_metadata,
     find_all_branches, compute_branch_metadata, aggregate_branch_content,
 )
-from memory_lib.formatting import parse_project_key
+from memory_lib.formatting import normalize_project_key, parse_project_key
 from memory_lib.summarizer import compute_context_summary
 
 
@@ -107,7 +107,7 @@ def sync_session(conn: sqlite3.Connection, filepath: Path, project_dir: Path) ->
     meta = extract_session_metadata(all_entries)
 
     # Get or create project
-    project_key = project_dir.name
+    project_key = normalize_project_key(project_dir.name)
     project_path = meta["cwd"] if meta.get("cwd") else parse_project_key(project_key)
     project_name = Path(project_path).name
 

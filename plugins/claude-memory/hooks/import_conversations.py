@@ -31,7 +31,7 @@ from memory_lib.parsing import (
     parse_jsonl_file, parse_all_with_uuids, extract_session_metadata,
     find_all_branches, compute_branch_metadata, aggregate_branch_content,
 )
-from memory_lib.formatting import parse_project_key, extract_project_name
+from memory_lib.formatting import normalize_project_key, parse_project_key, extract_project_name
 from memory_lib.summarizer import compute_context_summary
 
 
@@ -276,7 +276,7 @@ def import_project(
     """
     cursor = conn.cursor()
 
-    project_key = project_dir.name
+    project_key = normalize_project_key(project_dir.name)
     # Try to get real path from first session's metadata (avoids lossy hyphen reconstruction)
     project_path = None
     for f in sorted(project_dir.glob("*.jsonl"))[:1]:

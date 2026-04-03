@@ -26,6 +26,7 @@ DASHBOARD_OUT_PATH = DB_PATH.parent / "dashboard.html"
 BATCH_SIZE = 50
 PROGRESS_INTERVAL = 100
 COMMAND_TRUNCATE = 200
+SCHEMA_VERSION = 2
 
 # ── Pricing (USD per million tokens) ─────────────────────────────────
 # Source: https://docs.anthropic.com/en/docs/about-claude/pricing
@@ -104,12 +105,14 @@ CREATE TABLE IF NOT EXISTS turn_tool_calls (
   command     TEXT,
   is_error    INTEGER DEFAULT 0,
   error_text  TEXT,
-  agent_id    TEXT
+  agent_id       TEXT,
+  skill_name     TEXT,
+  subagent_type  TEXT,
+  agent_model    TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_ttc_turn ON turn_tool_calls(turn_id);
 CREATE INDEX IF NOT EXISTS idx_ttc_session ON turn_tool_calls(session_id);
 CREATE INDEX IF NOT EXISTS idx_ttc_tool ON turn_tool_calls(tool_name);
-
 CREATE TABLE IF NOT EXISTS session_metrics (
   session_id          TEXT PRIMARY KEY,
   project_path        TEXT,
@@ -144,6 +147,16 @@ CREATE TABLE IF NOT EXISTS session_metrics (
 CREATE INDEX IF NOT EXISTS idx_sm_project ON session_metrics(project_path);
 CREATE INDEX IF NOT EXISTS idx_sm_ts ON session_metrics(first_turn_ts);
 CREATE INDEX IF NOT EXISTS idx_sm_sidechain ON session_metrics(is_sidechain);
+
+CREATE TABLE IF NOT EXISTS hook_executions (
+  id           INTEGER PRIMARY KEY,
+  session_id   TEXT NOT NULL,
+  hook_command TEXT NOT NULL,
+  duration_ms  INTEGER DEFAULT 0,
+  is_error     INTEGER DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_he_session ON hook_executions(session_id);
+CREATE INDEX IF NOT EXISTS idx_he_command ON hook_executions(hook_command);
 """
 
 
@@ -191,6 +204,29 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE import_log ADD COLUMN mtime_ns INTEGER")
     except sqlite3.OperationalError:
         pass
+    # Add new workflow-analytics columns if missing (v2 schema)
+    for col, typedef in [("skill_name", "TEXT"), ("subagent_type", "TEXT"), ("agent_model", "TEXT")]:
+        try:
+            conn.execute(f"ALTER TABLE turn_tool_calls ADD COLUMN {col} {typedef}")
+        except sqlite3.OperationalError:
+            pass
+    # Create indexes for new columns (safe after ALTER TABLE)
+    for idx_sql in [
+        "CREATE INDEX IF NOT EXISTS idx_ttc_skill ON turn_tool_calls(skill_name)",
+        "CREATE INDEX IF NOT EXISTS idx_ttc_subagent ON turn_tool_calls(subagent_type)",
+    ]:
+        conn.execute(idx_sql)
+    # Schema version tracking + auto re-import on upgrade
+    conn.execute("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)")
+    row = conn.execute("SELECT version FROM schema_version LIMIT 1").fetchone()
+    current = row[0] if row else 0
+    if current < SCHEMA_VERSION:
+        print(f"Schema upgraded to v{SCHEMA_VERSION} — full re-import required", file=sys.stderr)
+        conn.execute("DELETE FROM import_log")
+        if current == 0:
+            conn.execute("INSERT INTO schema_version (version) VALUES (?)", (SCHEMA_VERSION,))
+        else:
+            conn.execute("UPDATE schema_version SET version = ?", (SCHEMA_VERSION,))
     conn.commit()
 
 
@@ -262,6 +298,9 @@ class ToolCall:
     is_error: int = 0
     error_text: str | None = None
     agent_id: str | None = None
+    skill_name: str | None = None
+    subagent_type: str | None = None
+    agent_model: str | None = None
 
 
 @dataclass
@@ -298,6 +337,7 @@ class ParsedSession:
     api_error_count: int = 0
     total_hook_ms: int = 0
     uses_agent: bool = False
+    hook_calls: list[dict] = field(default_factory=list)
 
 
 def _parse_timestamp(line: dict) -> str | None:
@@ -431,11 +471,22 @@ def parse_session(filepath: Path, jnl: JnlFile) -> ParsedSession | None:
                     tc.file_path = inp.get("file_path") or inp.get("path") or inp.get("file") or None
                     if "command" in inp:
                         tc.command = str(inp["command"])[:COMMAND_TRUNCATE]
+
+                    # Extract workflow-specific metadata
+                    if tc.tool_name == "Skill":
+                        tc.skill_name = inp.get("skill") or None
+                    elif tc.tool_name == "Agent":
+                        session.uses_agent = True
+                        tc.subagent_type = inp.get("subagent_type") or None
+                        tc.agent_model = inp.get("model") or None
+                        # Store agent description as command if no command set
+                        if not tc.command:
+                            desc = inp.get("description") or ""
+                            if desc:
+                                tc.command = str(desc)[:COMMAND_TRUNCATE]
+
                     current_turn.tool_calls.append(tc)
                     current_turn._pending_tools[tc.tool_use_id] = tc
-
-                    if tc.tool_name == "Agent":
-                        session.uses_agent = True
 
         # ── User events ──
         elif line_type == "user":
@@ -470,11 +521,19 @@ def parse_session(filepath: Path, jnl: JnlFile) -> ParsedSession | None:
                     current_turn.turn_duration_ms = duration_ms
                     if ts:
                         last_assistant_ts = ts
-            elif subtype == "stop_hook_summary":
+            elif subtype in ("stop_hook_summary", "hook_summary"):
                 hook_infos = line.get("hookInfos", []) or []
-                session.total_hook_ms += sum(
-                    h.get("durationMs", 0) or 0 for h in hook_infos
-                )
+                hook_errors = line.get("hookErrors", []) or []
+                error_commands = {e.get("command") for e in hook_errors if isinstance(e, dict)}
+                for h in hook_infos:
+                    dur = h.get("durationMs", 0) or 0
+                    session.total_hook_ms += dur
+                    cmd = h.get("command") or h.get("hook_command") or "unknown"
+                    session.hook_calls.append({
+                        "hook_command": str(cmd)[:COMMAND_TRUNCATE],
+                        "duration_ms": dur,
+                        "is_error": 1 if cmd in error_commands else 0,
+                    })
             elif subtype == "api_error":
                 session.api_error_count += 1
 
@@ -558,6 +617,7 @@ def import_session(conn: sqlite3.Connection, session: ParsedSession, jnl: JnlFil
     sid = session.session_id
 
     # Delete existing data for this session (idempotent re-import)
+    conn.execute("DELETE FROM hook_executions WHERE session_id = ?", (sid,))
     conn.execute("DELETE FROM turn_tool_calls WHERE session_id = ?", (sid,))
     conn.execute("DELETE FROM turns WHERE session_id = ?", (sid,))
     conn.execute("DELETE FROM session_metrics WHERE session_id = ?", (sid,))
@@ -584,10 +644,12 @@ def import_session(conn: sqlite3.Connection, session: ParsedSession, jnl: JnlFil
         for tc in turn.tool_calls:
             conn.execute(
                 """INSERT INTO turn_tool_calls (turn_id, session_id, tool_name, tool_use_id,
-                   file_path, command, is_error, error_text, agent_id)
-                   VALUES (?,?,?,?,?,?,?,?,?)""",
+                   file_path, command, is_error, error_text, agent_id,
+                   skill_name, subagent_type, agent_model)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (turn_id, sid, tc.tool_name, tc.tool_use_id,
-                 tc.file_path, tc.command, tc.is_error, tc.error_text, tc.agent_id)
+                 tc.file_path, tc.command, tc.is_error, tc.error_text, tc.agent_id,
+                 tc.skill_name, tc.subagent_type, tc.agent_model)
             )
 
     # Insert session_metrics
@@ -621,6 +683,14 @@ def import_session(conn: sqlite3.Connection, session: ParsedSession, jnl: JnlFil
          json.dumps(analytics["models_used"]),
          analytics["model_switch_count"])
     )
+
+    # Insert per-hook execution records
+    for hc in session.hook_calls:
+        conn.execute(
+            """INSERT INTO hook_executions (session_id, hook_command, duration_ms, is_error)
+               VALUES (?,?,?,?)""",
+            (sid, hc["hook_command"], hc["duration_ms"], hc["is_error"])
+        )
 
 
 # ── Backfill token_snapshots ─────────────────────────────────────────
@@ -1129,6 +1199,82 @@ def build_output(conn: sqlite3.Connection) -> dict:
                 tools[row[0]] = row[1]
             project_tool_profile.append({"project": proj_slug, "tools": tools})
 
+    # ── Chart 17: Skill usage ──
+    skill_usage = []
+    for row in cur.execute("""
+        SELECT tc.skill_name, COUNT(*) as cnt,
+               SUM(tc.is_error) as errs
+        FROM turn_tool_calls tc
+        JOIN session_metrics sm ON tc.session_id = sm.session_id AND sm.is_sidechain = 0
+        WHERE tc.skill_name IS NOT NULL
+        GROUP BY tc.skill_name
+        ORDER BY cnt DESC
+    """):
+        skill_usage.append({
+            "skill": row[0], "count": row[1], "errors": row[2],
+        })
+
+    # Skill usage by day (trend)
+    skill_usage_by_day = []
+    for row in cur.execute("""
+        SELECT DATE(t.timestamp) as day, tc.skill_name, COUNT(*) as cnt
+        FROM turn_tool_calls tc
+        JOIN turns t ON tc.turn_id = t.id
+        JOIN session_metrics sm ON tc.session_id = sm.session_id AND sm.is_sidechain = 0
+        WHERE tc.skill_name IS NOT NULL
+        GROUP BY day, tc.skill_name
+        ORDER BY day
+    """):
+        skill_usage_by_day.append({
+            "date": row[0], "skill": row[1], "count": row[2],
+        })
+
+    # ── Chart 18: Agent delegation ──
+    agent_delegation = []
+    for row in cur.execute("""
+        SELECT tc.subagent_type, COUNT(*) as cnt,
+               SUM(tc.is_error) as errs
+        FROM turn_tool_calls tc
+        JOIN session_metrics sm ON tc.session_id = sm.session_id AND sm.is_sidechain = 0
+        WHERE tc.subagent_type IS NOT NULL
+        GROUP BY tc.subagent_type
+        ORDER BY cnt DESC
+    """):
+        agent_delegation.append({
+            "subagent_type": row[0], "count": row[1], "errors": row[2],
+        })
+
+    # Agent model distribution
+    agent_model_dist = []
+    for row in cur.execute("""
+        SELECT tc.agent_model, COUNT(*) as cnt
+        FROM turn_tool_calls tc
+        JOIN session_metrics sm ON tc.session_id = sm.session_id AND sm.is_sidechain = 0
+        WHERE tc.agent_model IS NOT NULL
+        GROUP BY tc.agent_model
+        ORDER BY cnt DESC
+    """):
+        agent_model_dist.append({
+            "model": row[0], "count": row[1],
+        })
+
+    # ── Chart 19: Hook performance ──
+    hook_performance = []
+    for row in cur.execute("""
+        SELECT he.hook_command, COUNT(*) as runs,
+               SUM(he.duration_ms) as total_ms,
+               ROUND(AVG(he.duration_ms)) as avg_ms,
+               SUM(he.is_error) as errs
+        FROM hook_executions he
+        JOIN session_metrics sm ON he.session_id = sm.session_id AND sm.is_sidechain = 0
+        GROUP BY he.hook_command
+        ORDER BY total_ms DESC
+    """):
+        hook_performance.append({
+            "hook_command": row[0], "runs": row[1],
+            "total_ms": row[2], "avg_ms": row[3], "errors": row[4],
+        })
+
     # ── Root-cause detail queries (for insights engine) ──
 
     # Cache cliffs by project
@@ -1231,6 +1377,11 @@ def build_output(conn: sqlite3.Connection) -> dict:
         "hook_overhead": hook_overhead,
         "project_spend": project_spend,
         "project_tool_profile": project_tool_profile,
+        "skill_usage": skill_usage,
+        "skill_usage_by_day": skill_usage_by_day,
+        "agent_delegation": agent_delegation,
+        "agent_model_dist": agent_model_dist,
+        "hook_performance": hook_performance,
         "insights": insights,
         "findings": findings,
         "recommendations": recommendations,
@@ -1592,15 +1743,25 @@ def main() -> None:
     output = build_output(conn)
     conn.close()
 
-    json_str = json.dumps(output, default=str)
-    print(json_str)
+    # Full JSON for dashboard (all chart data)
+    full_json = json.dumps(output, default=str)
+    full_kb = len(full_json) / 1024
+    print(f"Full JSON: {full_kb:.0f}KB", file=sys.stderr)
 
-    # Check blob size
-    blob_kb = len(json_str) / 1024
-    print(f"JSON blob: {blob_kb:.0f}KB", file=sys.stderr)
-
-    deploy_dashboard(json_str)
+    deploy_dashboard(full_json)
     print(f"Dashboard deployed to {DASHBOARD_OUT_PATH}", file=sys.stderr)
+
+    # Slim JSON for stdout (only what Claude needs for analysis)
+    slim_keys = {
+        "generated_at", "total_sessions", "date_range", "kpis", "insights",
+        "cost_by_project", "model_split",
+        "skill_usage", "agent_delegation", "hook_performance",
+    }
+    slim = {k: v for k, v in output.items() if k in slim_keys}
+    slim_json = json.dumps(slim, default=str)
+    slim_kb = len(slim_json) / 1024
+    print(f"Slim stdout: {slim_kb:.0f}KB (full: {full_kb:.0f}KB)", file=sys.stderr)
+    print(slim_json)
 
 
 if __name__ == "__main__":

@@ -390,6 +390,32 @@
     </div>
   </div>
 
+  <!-- ═══════════ CLAUDE CODE ECOSYSTEM ═══════════ -->
+  <div class="section-header" onclick="toggleSection(this)">
+    Claude Code Ecosystem <span class="toggle">&#9660;</span>
+  </div>
+  <div class="section-body" id="sec-ecosystem">
+    <div class="chart-grid-2">
+      <div class="chart-panel">
+        <div class="chart-title">17 // Skill Usage</div>
+        <div class="chart-desc">invocations per skill (via Skill tool)</div>
+        <div class="chart-wrap" style="height:300px"><canvas id="chart17"></canvas></div>
+      </div>
+      <div class="chart-panel">
+        <div class="chart-title">18 // Agent Delegation</div>
+        <div class="chart-desc">subagent spawns by type</div>
+        <div class="chart-wrap" style="height:300px"><canvas id="chart18"></canvas></div>
+      </div>
+    </div>
+    <div class="chart-grid-1">
+      <div class="chart-panel">
+        <div class="chart-title">19 // Hook Performance</div>
+        <div class="chart-desc">total runtime (ms) per hook command</div>
+        <div class="chart-wrap" style="height:300px"><canvas id="chart19"></canvas></div>
+      </div>
+    </div>
+  </div>
+
   <!-- ═══════════ FINDINGS ═══════════ -->
   <div class="section-header" onclick="toggleSection(this)">
     Findings <span class="toggle">&#9660;</span>
@@ -476,6 +502,7 @@ function initDashboard(D) {
   initChart07(D); initChart08(D); initChart09(D); initChart10(D); initChart11(D);
   initChart12(D); initChart13(D); initChart14(D);
   initChart15(D); initChart15b(D); initChart16(D);
+  initChart17(D); initChart18(D); initChart19(D);
   buildFindings(D); buildRecommendations(D);
 }
 
@@ -862,6 +889,93 @@ function initChart16(D) {
     options: {
       ...chartDefaults,
       plugins: { legend: { display: true, position: 'bottom', labels: { color: '#545878', font: { family: 'JetBrains Mono', size: 9 } } } }
+    }
+  });
+}
+
+// ── Chart 17: Skill Usage ──────────────────────────────
+function initChart17(D) {
+  const data = D.skill_usage || [];
+  if (!data.length) { document.getElementById('chart17').parentElement.innerHTML = '<div class="no-data">no skill invocations recorded</div>'; return; }
+  new Chart(document.getElementById('chart17'), {
+    type: 'bar',
+    data: {
+      labels: data.map(d => d.skill),
+      datasets: [
+        { label: 'Invocations', data: data.map(d => d.count), backgroundColor: 'rgba(0,212,255,0.6)', borderColor: '#00d4ff', borderWidth: 1 },
+        { label: 'Errors', data: data.map(d => d.errors), backgroundColor: 'rgba(255,51,85,0.6)', borderColor: '#ff3355', borderWidth: 1 },
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false, indexAxis: 'y',
+      plugins: { legend: { display: true, labels: { color: '#545878', font: { family: 'JetBrains Mono', size: 10 } } } },
+      scales: {
+        x: { stacked: true, ticks: { color: '#545878', font: { family: 'JetBrains Mono', size: 10 } }, grid: { color: '#1a1a2e' } },
+        y: { stacked: true, ticks: { color: '#545878', font: { family: 'JetBrains Mono', size: 10 } }, grid: { color: '#1a1a2e' } },
+      }
+    }
+  });
+}
+
+// ── Chart 18: Agent Delegation ─────────────────────────
+function initChart18(D) {
+  const data = D.agent_delegation || [];
+  if (!data.length) { document.getElementById('chart18').parentElement.innerHTML = '<div class="no-data">no agent delegations recorded</div>'; return; }
+  new Chart(document.getElementById('chart18'), {
+    type: 'bar',
+    data: {
+      labels: data.map(d => d.subagent_type),
+      datasets: [
+        { label: 'Spawns', data: data.map(d => d.count), backgroundColor: 'rgba(191,95,255,0.6)', borderColor: '#bf5fff', borderWidth: 1 },
+        { label: 'Errors', data: data.map(d => d.errors), backgroundColor: 'rgba(255,51,85,0.6)', borderColor: '#ff3355', borderWidth: 1 },
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false, indexAxis: 'y',
+      plugins: { legend: { display: true, labels: { color: '#545878', font: { family: 'JetBrains Mono', size: 10 } } } },
+      scales: {
+        x: { stacked: true, ticks: { color: '#545878', font: { family: 'JetBrains Mono', size: 10 } }, grid: { color: '#1a1a2e' } },
+        y: { stacked: true, ticks: { color: '#545878', font: { family: 'JetBrains Mono', size: 10 } }, grid: { color: '#1a1a2e' } },
+      }
+    }
+  });
+}
+
+// ── Chart 19: Hook Performance ─────────────────────────
+function initChart19(D) {
+  const data = D.hook_performance || [];
+  if (!data.length) { document.getElementById('chart19').parentElement.innerHTML = '<div class="no-data">no hook execution data</div>'; return; }
+  const labels = data.map(d => {
+    const cmd = d.hook_command || '';
+    const parts = cmd.split('/');
+    return parts[parts.length - 1] || cmd.slice(0, 40);
+  });
+  new Chart(document.getElementById('chart19'), {
+    type: 'bar',
+    data: {
+      labels: labels,
+      datasets: [{
+        label: 'Total ms', data: data.map(d => d.total_ms),
+        backgroundColor: 'rgba(255,170,0,0.6)', borderColor: '#ffaa00', borderWidth: 1,
+      }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false, indexAxis: 'y',
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            afterLabel: function(ctx) {
+              const d = data[ctx.dataIndex];
+              return 'Runs: ' + d.runs + ' | Avg: ' + d.avg_ms + 'ms | Errors: ' + d.errors;
+            }
+          }
+        }
+      },
+      scales: {
+        x: { ticks: { color: '#545878', font: { family: 'JetBrains Mono', size: 10 } }, grid: { color: '#1a1a2e' } },
+        y: { ticks: { color: '#545878', font: { family: 'JetBrains Mono', size: 10 } }, grid: { color: '#1a1a2e' } },
+      }
     }
   });
 }

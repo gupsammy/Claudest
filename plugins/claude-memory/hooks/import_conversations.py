@@ -31,7 +31,7 @@ from memory_lib.parsing import (
     parse_jsonl_file, parse_all_with_uuids, extract_session_metadata,
     find_all_branches, compute_branch_metadata, aggregate_branch_content,
 )
-from memory_lib.formatting import parse_project_key, extract_project_name
+from memory_lib.formatting import normalize_cwd, normalize_project_key, parse_project_key, extract_project_name
 from memory_lib.summarizer import compute_context_summary
 
 
@@ -276,20 +276,21 @@ def import_project(
     """
     cursor = conn.cursor()
 
-    project_key = project_dir.name
+    project_key = normalize_project_key(project_dir.name)
     # Try to get real path from first session's metadata (avoids lossy hyphen reconstruction)
-    project_path = None
+    raw_path = None
     for f in sorted(project_dir.glob("*.jsonl"))[:1]:
         try:
             first_entries = list(parse_all_with_uuids(f))
             meta = extract_session_metadata(first_entries)
             if meta.get("cwd"):
-                project_path = meta["cwd"]
+                raw_path = meta["cwd"]
                 break
         except Exception:
             pass
-    if not project_path:
-        project_path = parse_project_key(project_key)
+    if not raw_path:
+        raw_path = parse_project_key(project_key)
+    project_path = normalize_cwd(raw_path)
     project_name = extract_project_name(project_path)
 
     if exclude_projects and project_name in exclude_projects:

@@ -30,9 +30,32 @@ def format_time_full(ts_str: Optional[str]) -> str:
     return format_time(ts_str, "%Y-%m-%d %H:%M")
 
 
+_WORKTREE_MARKER = "/.claude/worktrees/"
+_WORKTREE_KEY_MARKER = "--claude-worktrees-"
+
+
+def normalize_cwd(cwd: str) -> str:
+    """Strip .claude/worktrees/<name> suffix from a raw path, returning the base repo path."""
+    idx = cwd.rfind(_WORKTREE_MARKER)
+    return cwd[:idx] if idx != -1 else cwd
+
+
 def get_project_key(cwd: str) -> str:
-    """Convert working directory to project key format."""
-    return cwd.replace("/", "-").replace(".", "-")
+    """Convert working directory to project key format.
+
+    Resolves .claude/worktrees/<name> paths to the base repo path
+    so worktree sessions share project context with the main repo.
+    """
+    return normalize_cwd(cwd).replace("/", "-").replace(".", "-")
+
+
+def normalize_project_key(key: str) -> str:
+    """Strip worktree suffix from an already-encoded project key.
+
+    Encoded worktree keys contain '--claude-worktrees-' (from /.claude/worktrees/).
+    """
+    idx = key.rfind(_WORKTREE_KEY_MARKER)
+    return key[:idx] if idx != -1 else key
 
 
 def parse_project_key(key: str) -> str:

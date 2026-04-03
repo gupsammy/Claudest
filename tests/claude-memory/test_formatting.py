@@ -10,6 +10,8 @@ from memory_lib.formatting import (
     format_time,
     format_time_full,
     get_project_key,
+    normalize_cwd,
+    normalize_project_key,
     parse_project_key,
 )
 
@@ -68,6 +70,73 @@ class TestProjectKey:
         # Dashes in "my-project" become "/" — this is a known limitation
         assert reconstructed != original, "Paths with dashes should NOT roundtrip"
         assert reconstructed.startswith("/")
+
+    def test_get_project_key_worktree_resolves_to_base(self):
+        """Worktree paths should resolve to the same key as the base repo."""
+        base = "/Users/sam/repos/myproject"
+        worktree = "/Users/sam/repos/myproject/.claude/worktrees/feature-branch"
+        assert get_project_key(worktree) == get_project_key(base)
+
+    def test_get_project_key_worktree_with_dots_in_name(self):
+        """Worktree names with dots should still resolve correctly."""
+        base = "/Users/sam/repos/myproject"
+        worktree = "/Users/sam/repos/myproject/.claude/worktrees/fix.auth.bug"
+        assert get_project_key(worktree) == get_project_key(base)
+
+    def test_get_project_key_non_worktree_unchanged(self):
+        """Regular paths should be unaffected by worktree resolution."""
+        path = "/Users/sam/repos/myproject"
+        assert get_project_key(path) == "-Users-sam-repos-myproject"
+
+    def test_get_project_key_worktree_in_dotconfig(self):
+        """A .claude/worktrees/ path under .config should still resolve."""
+        base = "/home/user/.config/tool"
+        worktree = "/home/user/.config/tool/.claude/worktrees/test-wt"
+        assert get_project_key(worktree) == get_project_key(base)
+
+    def test_normalize_project_key_strips_worktree(self):
+        """Encoded worktree keys should normalize to base repo key."""
+        base_key = "-Users-sam-repos-myproject"
+        worktree_key = "-Users-sam-repos-myproject--claude-worktrees-feature-branch"
+        assert normalize_project_key(worktree_key) == base_key
+
+    def test_normalize_project_key_no_op_for_regular(self):
+        """Regular keys should pass through unchanged."""
+        key = "-Users-sam-repos-myproject"
+        assert normalize_project_key(key) == key
+
+    def test_normalize_matches_get_project_key(self):
+        """normalize_project_key on encoded worktree should match get_project_key on base path."""
+        base_path = "/Users/sam/repos/myproject"
+        worktree_dir_name = "-Users-sam-repos-myproject--claude-worktrees-feat"
+        assert normalize_project_key(worktree_dir_name) == get_project_key(base_path)
+
+    def test_get_project_key_rfind_uses_last_marker(self):
+        """If .claude/worktrees/ appears multiple times, rfind strips only the last one."""
+        path = "/tmp/.claude/worktrees/repo/.claude/worktrees/feat"
+        # rfind strips the last worktree suffix, leaving the first as part of the base path
+        assert get_project_key(path) == "-tmp--claude-worktrees-repo"
+
+    def test_normalize_project_key_rfind_uses_last_marker(self):
+        """Encoded key with multiple worktree markers uses last occurrence."""
+        key = "-tmp--claude-worktrees-repo--claude-worktrees-feat"
+        assert normalize_project_key(key) == "-tmp--claude-worktrees-repo"
+
+    def test_normalize_cwd_strips_worktree(self):
+        """normalize_cwd returns base repo path from a worktree path."""
+        wt = "/Users/sam/repos/myproject/.claude/worktrees/feat"
+        assert normalize_cwd(wt) == "/Users/sam/repos/myproject"
+
+    def test_normalize_cwd_noop_for_regular(self):
+        """normalize_cwd passes through non-worktree paths unchanged."""
+        path = "/Users/sam/repos/myproject"
+        assert normalize_cwd(path) == path
+
+    def test_normalize_cwd_project_name_is_base(self):
+        """After normalize_cwd, Path().name should be the base repo name, not the worktree name."""
+        from pathlib import Path
+        wt = "/Users/sam/repos/myproject/.claude/worktrees/feat"
+        assert Path(normalize_cwd(wt)).name == "myproject"
 
     def test_parse_project_key_adds_leading_slash(self):
         result = parse_project_key("-Users-sam-project")

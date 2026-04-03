@@ -23,6 +23,7 @@ FACETS_DIR = Path.home() / ".claude" / "usage-data" / "facets"
 
 
 def ensure_table(conn: sqlite3.Connection) -> None:
+    # Schema must stay in sync with token_snapshots in db.py:_migrate_columns
     conn.executescript("""
 CREATE TABLE IF NOT EXISTS token_snapshots (
   id INTEGER PRIMARY KEY,

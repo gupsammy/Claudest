@@ -10,6 +10,7 @@ from memory_lib.formatting import (
     format_time,
     format_time_full,
     get_project_key,
+    normalize_cwd,
     normalize_project_key,
     parse_project_key,
 )
@@ -109,6 +110,33 @@ class TestProjectKey:
         base_path = "/Users/sam/repos/myproject"
         worktree_dir_name = "-Users-sam-repos-myproject--claude-worktrees-feat"
         assert normalize_project_key(worktree_dir_name) == get_project_key(base_path)
+
+    def test_get_project_key_rfind_uses_last_marker(self):
+        """If .claude/worktrees/ appears multiple times, rfind strips only the last one."""
+        path = "/tmp/.claude/worktrees/repo/.claude/worktrees/feat"
+        # rfind strips the last worktree suffix, leaving the first as part of the base path
+        assert get_project_key(path) == "-tmp--claude-worktrees-repo"
+
+    def test_normalize_project_key_rfind_uses_last_marker(self):
+        """Encoded key with multiple worktree markers uses last occurrence."""
+        key = "-tmp--claude-worktrees-repo--claude-worktrees-feat"
+        assert normalize_project_key(key) == "-tmp--claude-worktrees-repo"
+
+    def test_normalize_cwd_strips_worktree(self):
+        """normalize_cwd returns base repo path from a worktree path."""
+        wt = "/Users/sam/repos/myproject/.claude/worktrees/feat"
+        assert normalize_cwd(wt) == "/Users/sam/repos/myproject"
+
+    def test_normalize_cwd_noop_for_regular(self):
+        """normalize_cwd passes through non-worktree paths unchanged."""
+        path = "/Users/sam/repos/myproject"
+        assert normalize_cwd(path) == path
+
+    def test_normalize_cwd_project_name_is_base(self):
+        """After normalize_cwd, Path().name should be the base repo name, not the worktree name."""
+        from pathlib import Path
+        wt = "/Users/sam/repos/myproject/.claude/worktrees/feat"
+        assert Path(normalize_cwd(wt)).name == "myproject"
 
     def test_parse_project_key_adds_leading_slash(self):
         result = parse_project_key("-Users-sam-project")

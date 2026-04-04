@@ -144,7 +144,7 @@ def select_sessions(conn: sqlite3.Connection, project_key: str, current_session_
         if current_row:
             current = _row_to_entry(current_row)
 
-            if current["exchange_count"] > 1:
+            if current["exchange_count"] >= 1:
                 # Force-use fallback context for current session on clear,
                 # since cached context_summary may be stale (computed before
                 # the most recent exchanges)
@@ -317,7 +317,7 @@ def _build_fallback_context(session: dict) -> str:
     return "\n".join(lines)
 
 
-def build_origin_block(source: str, sessions: list[dict]) -> str:
+def build_origin_block(source: str, sessions: list[dict], current_session_id: str = "") -> str:
     """Build a structured Session Origin block that tells the new session where it came from."""
     if not sessions:
         return ""
@@ -327,6 +327,7 @@ def build_origin_block(source: str, sessions: list[dict]) -> str:
     ended = format_time_full(primary.get("ended_at", ""))
     branch = primary.get("git_branch", "unknown")
     exchanges = primary.get("exchange_count", 0)
+    primary_uuid = primary.get("uuid", "unknown")
 
     if source == "clear":
         source_label = "clear (continuing same session)"
@@ -340,7 +341,11 @@ def build_origin_block(source: str, sessions: list[dict]) -> str:
         f"- Branch: {branch}",
         f"- Exchanges: {exchanges}",
         f"- Last active: {ended}",
+        f"- Session: {primary_uuid}",
     ]
+
+    if current_session_id:
+        lines.append(f"- New session: {current_session_id}")
 
     if len(sessions) > 1:
         lines.append(f"- +{len(sessions) - 1} supplementary session(s) included below")
@@ -383,6 +388,8 @@ def main():
     session_id = hook_input.get("session_id")
     source = hook_input.get("source", "startup")
 
+    logger.info(f"Hook input: source={source} session_id={session_id} cwd={cwd}")
+
     # Only inject on fresh sessions
     if source not in ("startup", "clear"):
         print(json.dumps({}))
@@ -423,7 +430,7 @@ def main():
         logger.info(f"Injecting context from {len(sessions)} session(s) for project {project_key}")
 
         # Wrap in origin block + section header
-        origin = build_origin_block(source, sessions)
+        origin = build_origin_block(source, sessions, current_session_id=session_id)
         full_context = f"{origin}\n\n{context}"
 
         output = {

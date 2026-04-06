@@ -82,13 +82,24 @@ Common minimal sets:
 
 ```yaml
 # Read-only analysis
-tools: "Read", "Grep", "Glob"
+tools:
+  - Read
+  - Grep
+  - Glob
 
 # Code generation
-tools: "Read", "Write", "Grep", "Glob"
+tools:
+  - Read
+  - Write
+  - Grep
+  - Glob
 
 # Testing / validation
-tools: "Read", "Bash", "Grep", "Glob"
+tools:
+  - Read
+  - Bash
+  - Grep
+  - Glob
 
 # Full access (use sparingly)
 # Omit the field entirely
@@ -110,7 +121,9 @@ need to block one destructive operation. If both are set, `disallowedTools` remo
 inherited pool first, then `tools` restricts to its allowlist. A tool in both is removed.
 
 ```yaml
-disallowedTools: Write, Edit
+disallowedTools:
+  - Write
+  - Edit
 ```
 
 ### `permissionMode`

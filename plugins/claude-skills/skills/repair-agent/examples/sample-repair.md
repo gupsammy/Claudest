@@ -53,7 +53,7 @@ MAJOR
        Fix: add explicit Output Format section.
   [D2] `tools` absent for a read-only analysis agent — grants full access by default.
        Least-privilege for autonomous agents requires an explicit allowlist.
-       Fix: add `tools: Read, Grep, Glob`
+       Fix: add tools block sequence (Read, Grep, Glob)
 
 MINOR
   [D2] `color` absent — no visual identity in UI.
@@ -79,7 +79,10 @@ description: >
   or monitoring — use a dedicated observability tool.
 model: inherit
 color: cyan
-tools: Read, Grep, Glob
+tools:
+  - Read
+  - Grep
+  - Glob
 ---
 
 You are a log analysis specialist focused on extracting signal from noise in

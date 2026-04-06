@@ -189,6 +189,14 @@ def validate_agent(agent_path, strict=False):
             "effort",
             f"Invalid effort '{effort}'. Must be one of: {', '.join(sorted(ALLOWED_EFFORT))}",
         ))
+    if str(effort) == "max" and model:
+        model_str = str(model)
+        if model_str not in ("opus",) and not model_str.startswith("claude-opus"):
+            errors.append(build_error(
+                "effort",
+                f"effort: max requires an Opus model, but model is '{model_str}'",
+                "minor",
+            ))
 
     # memory
     memory = frontmatter.get("memory")

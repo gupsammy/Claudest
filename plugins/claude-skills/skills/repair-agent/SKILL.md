@@ -265,7 +265,7 @@ MAJOR
        Fix: rewrite as "Analyze the input and identify..." throughout.
   [D2] `tools` omitted for a read-only analysis agent — omission grants full tool access;
        least-privilege for autonomous agents requires an explicit allowlist.
-       Fix: add `tools: Read, Grep, Glob`
+       Fix: add tools block sequence (Read, Grep, Glob)
 
 MINOR
   [D2] `color` not set — no visual identity in multi-agent UI.
@@ -307,8 +307,8 @@ After applying:
 - **What was changed and why** — reference the principle: "Rewrote body as second-person
   because the system prompt is an address to the agent; first-person breaks the instruction-
   following contract"
-- **What was added and why** — "Added `tools: Read, Grep, Glob` because this is a read-only
-  agent and least-privilege for autonomous execution requires an explicit allowlist"
+- **What was added and why** — "Added `tools` block sequence (Read, Grep, Glob) because this
+  is a read-only agent and least-privilege for autonomous execution requires an explicit allowlist"
 - **What was left unchanged and why** — "Left `maxTurns` unset — task horizon is open-ended"
 - **What remains for the user** — items requiring domain knowledge to fill
 

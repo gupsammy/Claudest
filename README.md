@@ -101,7 +101,7 @@ Coding workflow skills for Claude Code. Nine skills and two agents covering the 
 
 <a id="claude-skills"></a>
 
-### ✍️ claude-skills &nbsp; ![v0.5.17](https://img.shields.io/badge/v0.5.17-blue?style=flat-square)
+### ✍️ claude-skills &nbsp; ![v0.5.18](https://img.shields.io/badge/v0.5.18-blue?style=flat-square)
 
 Skill authoring tools for Claude Code. Six skills covering the full lifecycle from creation to repair.
 

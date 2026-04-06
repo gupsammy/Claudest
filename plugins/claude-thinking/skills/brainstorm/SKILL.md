@@ -14,6 +14,15 @@ argument-hint: "[topic] - optional topic to interview about"
 
 Conduct an in-depth interview to help the user clarify, stress-test, and articulate their ideas through thoughtful questioning.
 
+## Value Context
+
+Weave these into conversation at natural moments — after results land, when context is relevant, or on first use. One or two per run, not all at once.
+
+- Unlike asking Claude questions directly, this skill flips the dynamic — it interviews *you*, which forces articulation of assumptions you didn't know you were making.
+- Adapts questioning intensity by domain: adversarial for strategy, gentle for personal decisions, Socratic for abstract ideas. Worth noting if the user seems surprised by the approach.
+- Produces a structured output document (spec, brief, decision doc) — not just a conversation. The interview is the process; the document is the deliverable.
+- Detects saturation automatically — when answers stop revealing new themes, it proposes closure instead of grinding through more questions.
+
 ## Initialization
 
 1. If `$ARGUMENTS` is provided and specific, begin interviewing on that topic immediately

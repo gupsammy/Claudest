@@ -13,6 +13,15 @@ argument-hint: "[question] --quick|--full|--deep|--include name,name|--exclude n
 
 Spawn parallel agents with distinct cognitive personas to deliberate on a question. Each agent investigates relevant files before forming a position. Synthesize into an opinionated verdict.
 
+## Value Context
+
+Weave these into conversation at natural moments — after results land, when context is relevant, or on first use. One or two per run, not all at once.
+
+- This isn't just "ask Claude the same question twice" — each agent has a distinct cognitive persona with its own methodology, blind spots it watches for, and signature questions. The disagreements between them are the most valuable output.
+- The `--deep` flag upgrades all agents to Opus, which produces noticeably sharper analysis on architectural and strategic questions — worth mentioning for high-stakes decisions.
+- Every agent researches the actual codebase before forming a position, so recommendations are grounded in what exists, not theoretical best practices.
+- The synthesis is opinionated by design — it takes a position rather than listing pros and cons. Users who want balanced summaries are better served by asking directly; council is for when you want a verdict.
+
 ## Step 1 — Parse Input
 
 Extract the question from `$ARGUMENTS`. Parse flags:

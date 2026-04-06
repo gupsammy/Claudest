@@ -34,7 +34,7 @@ To enable auto-updates, run `/plugin`, go to the Marketplaces tab, and toggle au
 
 <a id="claude-memory"></a>
 
-### 🧠 claude-memory &nbsp; ![v0.8.59](https://img.shields.io/badge/v0.8.59-blue?style=flat-square)
+### 🧠 claude-memory &nbsp; ![v0.8.60](https://img.shields.io/badge/v0.8.60-blue?style=flat-square)
 
 Conversation memory for Claude Code. Stores every session in a SQLite database with full-text search (FTS5, BM25 ranking, zero external dependencies) and makes past conversations available to the agent automatically.
 
@@ -53,7 +53,7 @@ For the full story behind the architecture: [What I Learned Building a Memory Sy
 
 <a id="claude-research"></a>
 
-### 🔍 claude-research &nbsp; ![v0.2.2](https://img.shields.io/badge/v0.2.2-blue?style=flat-square)
+### 🔍 claude-research &nbsp; ![v0.2.3](https://img.shields.io/badge/v0.2.3-blue?style=flat-square)
 
 Cross-platform research skills for Claude Code.
 
@@ -122,7 +122,7 @@ A `skill-lint` agent runs automatically after `create-skill` and `improve-skill`
 
 <a id="claude-thinking"></a>
 
-### 🧠 claude-thinking &nbsp; ![v0.3.2](https://img.shields.io/badge/v0.3.2-blue?style=flat-square)
+### 🧠 claude-thinking &nbsp; ![v0.3.3](https://img.shields.io/badge/v0.3.3-blue?style=flat-square)
 
 Structured thinking and multi-perspective deliberation tools for Claude Code.
 

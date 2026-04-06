@@ -1,6 +1,6 @@
 {
   "name": "claude-research",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Cross-platform research skills: deep multi-source research across Reddit, X, YouTube, and the web, plus a standalone YouTube research toolkit",
   "author": {
     "name": "Samarth Gupta"

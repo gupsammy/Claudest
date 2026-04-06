@@ -71,13 +71,13 @@ Common minimal sets:
 
 ```yaml
 # Read-only analysis
-tools: ["Read", "Grep", "Glob"]
+tools: "Read", "Grep", "Glob"
 
 # Code generation
-tools: ["Read", "Write", "Grep", "Glob"]
+tools: "Read", "Write", "Grep", "Glob"
 
 # Testing / validation
-tools: ["Read", "Bash", "Grep", "Glob"]
+tools: "Read", "Bash", "Grep", "Glob"
 
 # Full access (use sparingly)
 # Omit the field entirely

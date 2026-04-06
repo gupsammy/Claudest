@@ -666,7 +666,6 @@ def compute_session_analytics(session: ParsedSession) -> dict:
 
     return {
         "cache_cliff_count": cache_cliff_count,
-        "cache_tier": cache_tier,
         "max_tokens_stops": max_tokens_stops,
         "model_switch_count": model_switch_count,
         "models_used": models_seen,

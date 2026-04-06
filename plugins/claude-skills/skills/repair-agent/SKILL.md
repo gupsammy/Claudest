@@ -105,6 +105,15 @@ and color semantics. Omitting a field is not an error when the default applies �
   *Major if system prompt exceeds 300 lines of embedded reference data.*
 - Is `isolation: worktree` absent for an agent that modifies files in the working tree?
   Without isolation, modifications are immediate and irreversible during the run. *Major.*
+- Is `memory` absent for an agent that would benefit from cross-session learning? Agents
+  that review code, audit patterns, or accumulate project knowledge should use persistent
+  memory (`project` recommended default). If `memory` is set, does the system prompt include
+  memory maintenance instructions? Without them, the agent won't proactively update its
+  knowledge base. *Major if the agent's domain involves pattern accumulation.*
+- Is `effort` absent for a cost-sensitive or complexity-varying agent? Fast classification
+  tasks benefit from `effort: low`; deep reasoning tasks from `effort: high`. *Minor.*
+- Is `initialPrompt` absent for a session-mode agent designed for `--agent` use? Without
+  it, the agent waits for user input instead of self-starting. *Minor if applicable.*
 
 ---
 
@@ -228,6 +237,9 @@ Refer to the Gap Analysis Checklist in `agent-anatomy.md` for each absent elemen
 - **No companion scripts for consistency-critical steps:** Process describes steps that
   must produce identical output for identical inputs. *Major.*
 - **`color` absent:** No visual identity in multi-agent UI contexts. *Minor.*
+- **No `memory` for pattern-accumulating agents:** Agent reviews code, audits quality, or
+  accumulates project knowledge but has no persistent memory configured. *Major if the
+  agent's value increases with accumulated context.*
 
 ---
 
@@ -253,7 +265,7 @@ MAJOR
        Fix: rewrite as "Analyze the input and identify..." throughout.
   [D2] `tools` omitted for a read-only analysis agent — omission grants full tool access;
        least-privilege for autonomous agents requires an explicit allowlist.
-       Fix: add tools: ["Read", "Grep", "Glob"]
+       Fix: add `tools: Read, Grep, Glob`
 
 MINOR
   [D2] `color` not set — no visual identity in multi-agent UI.
@@ -295,7 +307,7 @@ After applying:
 - **What was changed and why** — reference the principle: "Rewrote body as second-person
   because the system prompt is an address to the agent; first-person breaks the instruction-
   following contract"
-- **What was added and why** — "Added `tools: [Read, Grep, Glob]` because this is a read-only
+- **What was added and why** — "Added `tools: Read, Grep, Glob` because this is a read-only
   agent and least-privilege for autonomous execution requires an explicit allowlist"
 - **What was left unchanged and why** — "Left `maxTurns` unset — task horizon is open-ended"
 - **What remains for the user** — items requiring domain knowledge to fill

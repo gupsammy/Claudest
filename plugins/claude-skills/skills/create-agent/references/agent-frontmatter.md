@@ -42,12 +42,21 @@ Use `>` folded scalar. Target 50-70 tokens. No `<example>` blocks.
 
 Model the agent uses. Default: `inherit` (recommended for most cases).
 
+Accepts aliases or full model IDs (e.g., `claude-opus-4-6`, `claude-sonnet-4-6`).
+
 | Value | Use when |
 |-------|----------|
 | `inherit` | Agent should use same model as parent conversation |
 | `sonnet` | Complex multi-step reasoning, code analysis, generation tasks |
 | `haiku` | Fast, cheap tasks with simple structure (classification, extraction) |
 | `opus` | Highest-complexity reasoning; use sparingly — cost scales |
+| Full model ID | Pin to a specific model version (e.g., `claude-sonnet-4-6`) |
+
+Model resolution order (first match wins):
+1. `CLAUDE_CODE_SUBAGENT_MODEL` environment variable
+2. Per-invocation `model` parameter from the caller
+3. Agent definition's `model` frontmatter
+4. Main conversation's model
 
 ### `color`
 
@@ -60,7 +69,9 @@ Visual identifier in the Claude Code UI. Choose distinct colors for agents in th
 | `green` | Generation, creation | Code generation, content writing, scaffolding |
 | `yellow` | Validation, caution | Linting, testing, configuration validation |
 | `red` | Critical, destructive | Security scanning, dangerous operations |
-| `magenta` | Transformation, creative | Refactoring, reformatting, creative tasks |
+| `purple` | Transformation, creative | Refactoring, reformatting, creative tasks |
+| `orange` | Operations, infrastructure | Build, deploy, CI/CD, configuration |
+| `pink` | Communication, social | Notifications, messaging, collaboration |
 
 ### `tools`
 
@@ -86,13 +97,20 @@ tools: "Read", "Bash", "Grep", "Glob"
 **Scoping Bash:** Prefer scoped patterns like `Bash(git:*)`, `Bash(npm:*)`, `Bash(pytest:*)`.
 Unscoped `Bash` grants full shell access — the highest blast-radius tool.
 
+**Scoping Agent:** For agents running as main thread via `--agent`, restrict which subagents
+they can spawn using `Agent(worker, researcher)` syntax. Without parentheses (`Agent`),
+any subagent can be spawned. If `Agent` is omitted from `tools` entirely, the agent cannot
+spawn subagents. This restriction only applies to `--agent` mode — subagents cannot spawn
+other subagents regardless.
+
 ### `disallowedTools`
 
 Explicitly remove tools from the inherited/specified set. Useful when you want most tools but
-need to block one destructive operation.
+need to block one destructive operation. If both are set, `disallowedTools` removes from the
+inherited pool first, then `tools` restricts to its allowlist. A tool in both is removed.
 
 ```yaml
-disallowedTools: ["Bash", "Write"]
+disallowedTools: Write, Edit
 ```
 
 ### `permissionMode`
@@ -103,9 +121,14 @@ How the agent handles permission prompts. Default: `default`.
 |-------|----------|
 | `default` | Standard permission handling, inherits from parent |
 | `acceptEdits` | Auto-approve file edits without prompting |
-| `dontAsk` | Suppress confirmations for most actions |
+| `auto` | Background classifier reviews commands and protected-directory writes |
+| `dontAsk` | Auto-deny permission prompts (explicitly allowed tools still work) |
 | `bypassPermissions` | Skip all permission checks (dangerous — use only in controlled contexts) |
-| `plan` | Require plan approval before executing |
+| `plan` | Plan mode (read-only exploration) |
+
+If the parent uses `bypassPermissions`, it takes precedence and cannot be overridden. If the
+parent uses `auto`, the subagent inherits auto mode and any `permissionMode` in frontmatter
+is ignored.
 
 ### `maxTurns`
 
@@ -148,37 +171,97 @@ or when multiple parallel agents need independent working state.
 
 ### `memory`
 
-Persistent memory scope for cross-session agent learning.
+Persistent memory directory that survives across conversations. Enables cross-session learning —
+the agent accumulates codebase patterns, debugging insights, and architectural decisions over time.
 
-| Value | Scope |
-|-------|-------|
-| `user` | Persists to `~/.claude/` — shared across all projects |
-| `project` | Persists to `.claude/` — scoped to current project |
-| `local` | In-session only (equivalent to no `memory` field) |
+| Value | Directory | Use when |
+|-------|-----------|----------|
+| `user` | `~/.claude/agent-memory/<name>/` | Learnings apply across all projects |
+| `project` | `.claude/agent-memory/<name>/` | Knowledge is project-specific; shareable via VCS (recommended default) |
+| `local` | `.claude/agent-memory-local/<name>/` | Knowledge is project-specific but should not be checked into VCS |
+
+When memory is enabled, three things happen automatically:
+1. The system prompt includes instructions for reading/writing to the memory directory
+2. The first 200 lines or 25KB of `MEMORY.md` in the memory directory is injected into context
+3. Read, Write, and Edit tools are auto-enabled so the agent can manage its memory files
+
+When setting `memory`, add instructions in the system prompt body for the agent to maintain
+its knowledge base (e.g., "Update your agent memory as you discover codepaths, patterns,
+and key architectural decisions.").
+
+### `effort`
+
+Overrides the session effort level for this agent. Controls thinking depth.
+Default: inherits from session.
+
+| Value | Use when |
+|-------|----------|
+| `low` | Fast, cheap tasks — classification, extraction, simple lookups |
+| `medium` | Balanced reasoning — most agents |
+| `high` | Deep multi-step reasoning, complex code analysis |
+| `max` | Maximum thinking depth (Opus 4.6 only) |
+
+### `initialPrompt`
+
+Auto-submitted as the first user turn when this agent runs as the main session agent
+(via `--agent <name>` or the `agent` setting in `.claude/settings.json`). Commands and
+skills in the prompt are processed. Prepended to any user-provided prompt.
+
+Use for self-starting agents that should begin work immediately without waiting for
+user input. Only relevant for agents designed to run as session agents, not subagents.
+
+```yaml
+initialPrompt: "/review-pr"
+```
 
 ### `hooks`
 
-Lifecycle hooks scoped to this agent's execution. Same format as Claude Code session hooks.
+Lifecycle hooks scoped to this agent's execution. Only run while the agent is active;
+cleaned up when it finishes. Supported events: `PreToolUse`, `PostToolUse`, `Stop`
+(auto-converted to `SubagentStop` at runtime).
 
 ```yaml
 hooks:
   PreToolUse:
-    - command: "validate-before-write.sh"
+    - matcher: "Bash"
+      hooks:
+        - type: command
+          command: "./scripts/validate-command.sh"
   PostToolUse:
-    - command: "log-tool-use.sh"
+    - matcher: "Edit|Write"
+      hooks:
+        - type: command
+          command: "./scripts/run-linter.sh"
 ```
+
+Each entry has an optional `matcher` (regex against tool name) and a `hooks` array of
+`{type: command, command: "..."}` objects. Hook commands receive JSON via stdin with
+the tool input; exit code 2 blocks the operation.
 
 ### `mcpServers`
 
-MCP servers available to this agent. Can reference named servers or provide inline config.
+MCP servers available to this agent. Each entry is either a string reference (reuses a
+server already configured in the parent session) or an inline definition (scoped to this
+agent only — connected on start, disconnected on finish).
 
 ```yaml
 mcpServers:
-  - my-database-server
-  - name: inline-server
-    command: npx
-    args: ["-y", "@example/mcp-server"]
+  # Inline definition: scoped to this agent only
+  - playwright:
+      type: stdio
+      command: npx
+      args: ["-y", "@playwright/mcp@latest"]
+  # Reference by name: reuses an already-configured server
+  - github
 ```
+
+Inline definitions use the same schema as `.mcp.json` server entries (`stdio`, `http`,
+`sse`, `ws`), keyed by the server name. Define servers inline here rather than in
+`.mcp.json` to keep their tool descriptions out of the main conversation context.
+
+Plugin agents cannot use `hooks`, `mcpServers`, or `permissionMode` — these fields are
+ignored when loading agents from a plugin. Copy the agent to `.claude/agents/` or
+`~/.claude/agents/` if needed.
 
 ---
 
@@ -188,18 +271,20 @@ mcpServers:
 |-------|----------|---------|-------|
 | `name` | Yes | — | lowercase-hyphens, 3-50 chars |
 | `description` | Yes | — | "Use this agent when..." — concise `>` scalar, 50-70 tokens, no examples |
-| `model` | No | `inherit` | inherit/sonnet/haiku/opus |
-| `color` | No | — | blue/cyan/green/yellow/magenta/red |
-| `tools` | No | all tools | Least-privilege allowlist |
-| `disallowedTools` | No | none | Explicit denylist |
-| `permissionMode` | No | `default` | default/acceptEdits/dontAsk/bypassPermissions/plan |
+| `model` | No | `inherit` | inherit/sonnet/haiku/opus or full model ID (e.g., `claude-sonnet-4-6`) |
+| `color` | No | — | red/blue/green/yellow/purple/orange/pink/cyan |
+| `tools` | No | all tools | Least-privilege allowlist; supports `Agent(type)` scoping |
+| `disallowedTools` | No | none | Explicit denylist; removes from inherited pool before `tools` allowlist |
+| `permissionMode` | No | `default` | default/acceptEdits/auto/dontAsk/bypassPermissions/plan |
 | `maxTurns` | No | unlimited | Positive integer |
 | `skills` | No | none | Comma-separated skill names to preload |
-| `background` | No | false | Run as background task |
+| `background` | No | false | Run as background task (auto-denies unpre-approved permissions) |
 | `isolation` | No | none | Only value: `worktree` |
-| `memory` | No | none | user/project/local |
-| `hooks` | No | none | PreToolUse/PostToolUse/Stop lifecycle hooks |
-| `mcpServers` | No | none | Named or inline MCP server config |
+| `memory` | No | none | user/project/local — enables persistent cross-session learning |
+| `effort` | No | inherit | low/medium/high/max (max is Opus 4.6 only) |
+| `initialPrompt` | No | none | First user turn when running as session agent via `--agent` |
+| `hooks` | No | none | PreToolUse/PostToolUse/Stop with matcher/command structure |
+| `mcpServers` | No | none | String references or inline server definitions |
 
 ---
 

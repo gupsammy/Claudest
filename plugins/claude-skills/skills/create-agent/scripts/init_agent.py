@@ -29,6 +29,8 @@ description: >
   Not for [TODO: out-of-scope tasks] — use [TODO: correct agent].
 model: inherit
 color: blue
+# memory: project
+# effort: medium
 ---
 
 You are [TODO: expert role] specializing in [TODO: domain].

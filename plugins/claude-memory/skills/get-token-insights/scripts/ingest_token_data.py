@@ -602,6 +602,22 @@ def parse_session(filepath: Path, jnl: JnlFile) -> ParsedSession | None:
 
 # ── Session Analytics ─────────────────────────────────────────────────
 
+def _detect_cache_ttl_ms(session: "ParsedSession") -> tuple[int, str]:
+    """Detect the dominant cache tier from ephemeral token data.
+
+    Returns (ttl_ms, tier_label).  Falls back to 1h when no tier
+    breakdown is available (the common case for Claude Code JSONL).
+    """
+    total_5m = sum(t.ephem_5m_tokens for t in session.turns)
+    total_1h = sum(t.ephem_1h_tokens for t in session.turns)
+    if total_5m > 0 or total_1h > 0:
+        if total_5m > total_1h:
+            return 300_000, "5m"
+        return 3_600_000, "1h"
+    # No tier breakdown — default to 1h (empirically confirmed for Claude Code)
+    return 3_600_000, "1h"
+
+
 def compute_session_analytics(session: ParsedSession) -> dict:
     """Compute cache cliffs, max_tokens stops, model switches."""
     cache_cliff_count = 0
@@ -614,6 +630,8 @@ def compute_session_analytics(session: ParsedSession) -> dict:
     total_turn_ms = 0
     total_tool_errors = 0
 
+    cache_ttl_ms, cache_tier = _detect_cache_ttl_ms(session)
+
     for turn in session.turns:
         # Cache cliff detection
         denom = turn.cache_read_tokens + turn.cache_creation_tokens
@@ -622,7 +640,7 @@ def compute_session_analytics(session: ParsedSession) -> dict:
 
         if ratio is not None and prev_cache_ratio is not None:
             drop = prev_cache_ratio - ratio
-            if drop > 0.5 and turn.user_gap_ms and turn.user_gap_ms > 300_000:
+            if drop > 0.5 and turn.user_gap_ms and turn.user_gap_ms > cache_ttl_ms:
                 cache_cliff_count += 1
         if ratio is not None:
             prev_cache_ratio = ratio
@@ -648,6 +666,7 @@ def compute_session_analytics(session: ParsedSession) -> dict:
 
     return {
         "cache_cliff_count": cache_cliff_count,
+        "cache_tier": cache_tier,
         "max_tokens_stops": max_tokens_stops,
         "model_switch_count": model_switch_count,
         "models_used": models_seen,
@@ -854,7 +873,8 @@ def build_output(conn: sqlite3.Connection) -> dict:
                SUM(total_cache_read), SUM(total_cache_creation),
                SUM(cache_cliff_count), SUM(max_tokens_stops),
                SUM(tool_error_count), SUM(total_input_tokens),
-               SUM(total_thinking)
+               SUM(total_thinking),
+               SUM(total_ephem_5m), SUM(total_ephem_1h)
         FROM session_metrics WHERE is_sidechain = 0
     """).fetchone()
     total_sessions = kpis[0] or 0
@@ -867,6 +887,14 @@ def build_output(conn: sqlite3.Connection) -> dict:
     total_tool_errors = kpis[7] or 0
     total_input = kpis[8] or 0
     total_thinking = kpis[9] or 0
+    total_ephem_5m = kpis[10] or 0
+    total_ephem_1h = kpis[11] or 0
+
+    # Detect dominant cache tier across all sessions
+    if total_ephem_5m > 0 or total_ephem_1h > 0:
+        dominant_cache_tier = "5m" if total_ephem_5m > total_ephem_1h else "1h"
+    else:
+        dominant_cache_tier = "1h"  # default — empirically confirmed for Claude Code
 
     cache_denom = total_cache_read + total_cache_creation
     global_cache_ratio = round(total_cache_read / cache_denom, 4) if cache_denom > 0 else 0.0
@@ -1279,7 +1307,7 @@ def build_output(conn: sqlite3.Connection) -> dict:
     }
 
     # ── Chart 13: User response time distribution ──
-    response_time_dist = {"under_30s": 0, "30s_2m": 0, "2m_5m": 0, "5m_15m": 0, "over_15m": 0}
+    response_time_dist = {"under_30s": 0, "30s_2m": 0, "2m_5m": 0, "5m_15m": 0, "15m_1h": 0, "over_1h": 0}
     for row in cur.execute("""
         SELECT user_gap_ms FROM turns t
         JOIN session_metrics sm ON t.session_id = sm.session_id AND sm.is_sidechain = 0
@@ -1294,8 +1322,10 @@ def build_output(conn: sqlite3.Connection) -> dict:
             response_time_dist["2m_5m"] += 1
         elif gap_s < 900:
             response_time_dist["5m_15m"] += 1
+        elif gap_s < 3600:
+            response_time_dist["15m_1h"] += 1
         else:
-            response_time_dist["over_15m"] += 1
+            response_time_dist["over_1h"] += 1
 
     # ── Chart 14: Hook overhead top 10 ──
     hook_overhead = []
@@ -1490,6 +1520,7 @@ def build_output(conn: sqlite3.Connection) -> dict:
         avg_input_cost_per_mtok=avg_input_cpm,
         avg_output_cost_per_mtok=avg_output_cpm,
         context_seg_summary=context_seg_summary,
+        dominant_cache_tier=dominant_cache_tier,
     )
 
     # Dashboard backward compat: split insights into findings + recommendations
@@ -1794,6 +1825,8 @@ def _build_insights(**kw) -> list[dict]:
         return "INFO"
 
     # ── Cache Cliffs ──
+    tier = kw.get("dominant_cache_tier", "1h")
+    ttl_label = "5 minutes" if tier == "5m" else "1 hour"
     if kw["cache_cliffs"] > 0:
         waste_tok = kw["cache_cliffs"] * 15000
         waste_dollars = _waste_usd(waste_tok)
@@ -1808,9 +1841,9 @@ def _build_insights(**kw) -> list[dict]:
             "title": "Cache Cliffs",
             "severity": _severity(kw["cache_cliffs"], 0.1, 0.4),
             "finding": f"{kw['cache_cliffs']} cache cliffs detected — cache_read_ratio dropped >50% "
-                       f"after 5min+ idle gaps.",
-            "root_cause": f"When you're idle >5min, Anthropic's prompt cache expires. The next turn "
-                          f"re-creates the entire cache from scratch. {root_cause}.",
+                       f"after {ttl_label}+ idle gaps.",
+            "root_cause": f"When you're idle >{ttl_label}, Anthropic's prompt cache expires ({tier} tier). "
+                          f"The next turn re-creates the entire cache from scratch. {root_cause}.",
             "waste_tokens": waste_tok,
             "waste_usd": waste_dollars,
             "solution": {
@@ -1976,26 +2009,31 @@ def _build_insights(**kw) -> list[dict]:
         })
 
     # ── Idle Gap Impact ──
-    idle_over_5m = kw["response_time_dist"].get("5m_15m", 0) + kw["response_time_dist"].get("over_15m", 0)
-    if idle_over_5m > 0:
-        total_gaps = sum(kw["response_time_dist"].values())
-        pct = round(idle_over_5m / total_gaps * 100, 1) if total_gaps else 0
-        waste_tok = idle_over_5m * 2000
+    # Use the detected cache tier to set the idle threshold
+    rtd = kw["response_time_dist"]
+    if tier == "5m":
+        idle_over_ttl = rtd.get("5m_15m", 0) + rtd.get("15m_1h", 0) + rtd.get("over_1h", 0)
+    else:
+        idle_over_ttl = rtd.get("over_1h", 0)
+    if idle_over_ttl > 0:
+        total_gaps = sum(rtd.values())
+        pct = round(idle_over_ttl / total_gaps * 100, 1) if total_gaps else 0
+        waste_tok = idle_over_ttl * 2000
         waste_dollars = _waste_usd(waste_tok)
         insights.append({
             "title": "Idle Gap Impact",
-            "severity": _severity(idle_over_5m, 0.3, 1.0),
-            "finding": f"{pct}% of turns follow 5min+ idle gaps ({idle_over_5m} of {total_gaps}).",
-            "root_cause": "Anthropic's prompt cache has a 5-minute TTL. After 5 minutes of inactivity, "
-                          "the entire cached context expires and must be re-created from scratch on the "
-                          "next turn. This is the biggest hidden cost driver in interactive sessions.",
+            "severity": _severity(idle_over_ttl, 0.3, 1.0),
+            "finding": f"{pct}% of turns follow {ttl_label}+ idle gaps ({idle_over_ttl} of {total_gaps}).",
+            "root_cause": f"Anthropic's prompt cache has a {ttl_label} TTL ({tier} tier). After "
+                          f"{ttl_label} of inactivity, the cached context expires and must be "
+                          f"re-created from scratch on the next turn.",
             "waste_tokens": waste_tok,
             "waste_usd": waste_dollars,
             "solution": {
-                "action": "Batch your prompts — compose your full request before sending rather than sending partial messages",
-                "detail": "If you routinely step away for 5+ minutes between prompts, consider: (1) using /compact "
-                          "before breaks to reduce re-creation cost, (2) ending sessions before long breaks and "
-                          "starting fresh, (3) using the 1-hour cache tier for system prompts if your API setup supports it.",
+                "action": "Run /compact before stepping away from a session",
+                "detail": f"Compacting reduces context size so cache re-creation is cheaper when you return "
+                          f"after {ttl_label}+ of inactivity. For planned breaks, also consider ending the "
+                          f"session and starting fresh.",
                 "claudemd_rule": None,
                 "estimated_savings_usd": round(waste_dollars * 0.4, 2),
             },

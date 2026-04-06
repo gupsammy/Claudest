@@ -1123,9 +1123,9 @@ function initChart12(D) {
 // ── Chart 13: User Response Times ───────────────────────
 function initChart13(D) {
   const rt = D.response_time_dist || {};
-  const labels = ['<30s', '30s-2m', '2-5m', '5-15m', '15m+'];
-  const keys = ['under_30s', '30s_2m', '2m_5m', '5m_15m', 'over_15m'];
-  const colors = ['#39ff85', '#00e5ff', '#ffab2e', '#ff6b35', '#ff4d6a'];
+  const labels = ['<30s', '30s-2m', '2-5m', '5-15m', '15m-1h', '1h+'];
+  const keys = ['under_30s', '30s_2m', '2m_5m', '5m_15m', '15m_1h', 'over_1h'];
+  const colors = ['#39ff85', '#00e5ff', '#ffab2e', '#ff6b35', '#ff4d6a', '#d63384'];
   new Chart(document.getElementById('chart13'), {
     type: 'bar',
     data: {

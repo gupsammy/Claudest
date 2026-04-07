@@ -5,8 +5,11 @@ Database connection, schema management, settings, and logging.
 
 from __future__ import annotations
 
+import json
 import logging
+import shutil
 import sqlite3
+import time
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Optional
@@ -15,6 +18,7 @@ from typing import Optional
 DEFAULT_DB_PATH = Path.home() / ".claude-memory" / "conversations.db"
 DEFAULT_PROJECTS_DIR = Path.home() / ".claude" / "projects"
 DEFAULT_LOG_PATH = Path.home() / ".claude-memory" / "memory.log"
+CONFIG_PATH = Path.home() / ".claude-memory" / "config.json"
 
 # Default settings
 DEFAULT_SETTINGS = {
@@ -24,6 +28,18 @@ DEFAULT_SETTINGS = {
     "exclude_projects": [],
     "logging_enabled": False,
     "sync_on_stop": True,
+    "consolidation_reminder_enabled": True,
+    "consolidation_min_hours": 24,
+    "consolidation_min_sessions": 5,
+}
+
+# Keys in config.json that override DEFAULT_SETTINGS
+_CONFIG_KEYS = {
+    "auto_inject_context",
+    "consolidation_reminder_enabled",
+    "consolidation_min_hours",
+    "consolidation_min_sessions",
+    "max_context_sessions",
 }
 
 # Database schema — v3: messages stored once, branches as separate index
@@ -257,13 +273,28 @@ def migrate_db(conn: sqlite3.Connection) -> bool:
     return True
 
 
+CURRENT_ONBOARDING_VERSION = 1
+
+
+def load_config() -> dict:
+    """Read ~/.claude-memory/config.json. Returns empty dict on missing/error."""
+    try:
+        if CONFIG_PATH.exists():
+            result = json.loads(CONFIG_PATH.read_text())
+            return result if isinstance(result, dict) else {}
+    except Exception:
+        pass
+    return {}
+
+
 def load_settings() -> dict:
-    """
-    Return default settings.
-    Previously loaded from YAML frontmatter, but PyYAML is not stdlib
-    so settings were silently ignored for most users.
-    """
-    return DEFAULT_SETTINGS.copy()
+    """Return settings with config.json overrides merged on top of defaults."""
+    settings = DEFAULT_SETTINGS.copy()
+    config = load_config()
+    for key in _CONFIG_KEYS:
+        if key in config:
+            settings[key] = config[key]
+    return settings
 
 
 def get_db_path(settings: Optional[dict] = None) -> Path:
@@ -383,6 +414,9 @@ CREATE INDEX IF NOT EXISTS idx_token_snapshots_start ON token_snapshots(start_ti
     # --- DML migrations (version-gated via PRAGMA user_version, run once) ---
     version = conn.execute("PRAGMA user_version").fetchone()[0]
 
+    # Resolve db_path for backup operations (PRAGMA database_list returns (seq, name, file))
+    db_path = Path(conn.execute("PRAGMA database_list").fetchone()[2])
+
     if version < 1:
         # v0.5.0: Backfill task-notification messages
         cursor.execute("""
@@ -412,6 +446,29 @@ CREATE INDEX IF NOT EXISTS idx_token_snapshots_start ON token_snapshots(start_ti
         _backfill_origin(conn, cursor)
         conn.execute("PRAGMA user_version = 3")
         conn.commit()
+
+    if version < 4:
+        # v0.8.70: Clear stale task-notification values from origin column.
+        # parse_origin had a kind-fallback bug that leaked task-notification
+        # into origin (reserved for channel sources: telegram, discord, slack).
+        _backup_db_before_migration(db_path, "v4")
+        cursor.execute(
+            "UPDATE messages SET origin = NULL WHERE origin = 'task-notification'"
+        )
+        conn.execute("PRAGMA user_version = 4")
+        conn.commit()
+
+
+def _backup_db_before_migration(db_path: Path, label: str) -> None:
+    """Create a timestamped backup of the DB before a destructive migration."""
+    if not db_path.name or not db_path.exists():
+        return
+    ts = time.strftime("%Y%m%d-%H%M%S")
+    backup_path = db_path.with_suffix(f".pre-{label}-{ts}.db")
+    try:
+        shutil.copy2(db_path, backup_path)
+    except OSError:
+        pass  # Best-effort — don't block migration if backup fails
 
 
 def _backfill_origin(conn: sqlite3.Connection, cursor: sqlite3.Cursor) -> None:

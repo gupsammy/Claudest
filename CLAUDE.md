@@ -15,7 +15,10 @@ The `scripts/auto-version.py` pre-commit hook auto-bumps patch versions for plug
 ## Development Commands
 
 ```bash
-# Re-import all conversations (delete DB first to reimport from scratch — no --force flag)
+# Re-import all conversations from scratch:
+# 1. Back up first: cp ~/.claude-memory/conversations.db ~/.claude-memory/conversations.db.backup-$(date +%Y%m%d-%H%M%S)
+# 2. Delete: trash ~/.claude-memory/conversations.db
+# 3. Then reimport:
 python3 plugins/claude-memory/hooks/import_conversations.py
 
 # Import with stats
@@ -50,6 +53,8 @@ SQLite at `~/.claude-memory/conversations.db` with WAL mode and 5s busy_timeout.
 `plugins/claude-memory/skills/recall-conversations/scripts/memory_lib/` is the shared utility package used by all hooks and skill scripts (6 modules: `__init__.py`, `db.py`, `content.py`, `parsing.py`, `formatting.py`, `summarizer.py`).
 
 ## Conventions
+
+Never delete `~/.claude-memory/conversations.db` directly. Always use `trash` (reversible). If a full reimport is needed: back up the DB first, then trash it, then reimport. See Development Commands above.
 
 Commit messages: conventional commits scoped to plugin (`feat(memory):`, `fix(skills):`, `docs:`, `refactor(memory):`).
 

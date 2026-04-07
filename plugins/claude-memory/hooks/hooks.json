@@ -11,6 +11,15 @@
         ]
       },
       {
+        "matcher": "startup",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/run.sh\" onboarding.py"
+          }
+        ]
+      },
+      {
         "matcher": "startup|clear",
         "hooks": [
           {

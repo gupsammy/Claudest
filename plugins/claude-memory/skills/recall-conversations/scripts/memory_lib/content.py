@@ -69,9 +69,9 @@ def extract_text_content(content) -> tuple[str, bool, bool, str | None]:
 def parse_origin(entry: dict) -> str | None:
     """Extract clean platform name from origin.server (e.g. 'telegram' from 'plugin:telegram:telegram')."""
     origin = entry.get("origin")
-    if not origin:
+    if not origin or not isinstance(origin, dict):
         return None
-    server = origin.get("server", "")
+    server = origin.get("server") or ""
     # Pattern: "plugin:telegram:telegram" -> "telegram"
     parts = server.split(":")
     if len(parts) >= 2 and parts[1]:

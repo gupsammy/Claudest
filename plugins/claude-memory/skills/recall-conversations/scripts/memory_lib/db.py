@@ -425,6 +425,7 @@ def _backfill_origin(conn: sqlite3.Connection, cursor: sqlite3.Cursor) -> None:
     normal import re-processes just those sessions via the standard pipeline.
     """
     import json
+    from memory_lib.content import parse_origin
 
     # Guard: sessions table may not exist in minimal test DBs
     tables = {r[0] for r in cursor.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
@@ -474,9 +475,7 @@ def _backfill_origin(conn: sqlite3.Connection, cursor: sqlite3.Cursor) -> None:
                     # Phase 1: UPDATE origin for existing messages
                     uuid = obj.get("uuid")
                     if uuid and obj.get("type") in ("user", "assistant"):
-                        server = origin.get("server", "")
-                        parts = server.split(":")
-                        origin_value = parts[1] if len(parts) >= 2 else origin.get("kind")
+                        origin_value = parse_origin(obj)
                         if origin_value:
                             cursor.execute(
                                 "UPDATE messages SET origin = ? WHERE session_id = ? AND uuid = ?",

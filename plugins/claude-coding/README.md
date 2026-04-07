@@ -1,4 +1,4 @@
-# claude-coding ![v0.2.25](https://img.shields.io/badge/v0.2.25-blue?style=flat-square)
+# claude-coding ![v0.2.26](https://img.shields.io/badge/v0.2.26-blue?style=flat-square)
 
 Coding workflow skills for Claude Code. Eight skills and one command covering the commit loop, project maintenance, documentation, and CI setup: stage and commit with conventional format, push and open a PR with smart branch handling, safely prune merged or stale branches, keep your CLAUDE.md accurate and concise, generate professional READMEs through a structured interview, create or update a changelog from git history, refresh an existing README against current codebase state, and configure production-ready Claude Code GitHub Actions workflows.
 

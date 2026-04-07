@@ -24,12 +24,10 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR.parent / "skills" / "recall-conversations" / "scripts"))
 
-from memory_lib.db import DEFAULT_PROJECTS_DIR, get_db_path, load_settings, setup_logging
+from memory_lib.db import DEFAULT_PROJECTS_DIR, get_db_path, load_config, load_settings, setup_logging
 from memory_lib.formatting import get_project_key
 
-# Gating thresholds
-MIN_HOURS = 24
-MIN_SESSIONS = 5
+# Gating threshold for users who have never consolidated (not user-configurable)
 NEVER_CONSOLIDATED_MIN_SESSIONS = 10
 
 
@@ -99,6 +97,19 @@ def main():
         print(json.dumps({}))
         return
 
+    # Gate: require onboarding completed and reminders enabled
+    config = load_config()
+    if not config.get("onboarding_completed"):
+        print(json.dumps({}))
+        return
+    if not settings.get("consolidation_reminder_enabled", True):
+        print(json.dumps({}))
+        return
+
+    # Read configurable thresholds
+    min_hours = settings.get("consolidation_min_hours", 24)
+    min_sessions = settings.get("consolidation_min_sessions", 5)
+
     if not cwd:
         print(json.dumps({}))
         return
@@ -140,7 +151,7 @@ def main():
             days_str = "never"
     else:
         hours_elapsed = (now - last_ts).total_seconds() / 3600
-        if hours_elapsed >= MIN_HOURS and session_count >= MIN_SESSIONS:
+        if hours_elapsed >= min_hours and session_count >= min_sessions:
             should_nudge = True
             days = (now - last_ts).days
             days_str = f"{days} day{'s' if days != 1 else ''}" if days >= 1 else f"{int(hours_elapsed)} hours"

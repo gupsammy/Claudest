@@ -27,7 +27,7 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR.parent / "skills" / "recall-conversations" / "scripts"))
 
-from memory_lib.db import get_db_path, load_settings, setup_logging, get_db_connection
+from memory_lib.db import get_db_path, load_config, load_settings, setup_logging, get_db_connection
 from memory_lib.formatting import format_time, format_time_full, get_project_key
 from memory_lib.summarizer import build_exchange_pairs, truncate_mid
 
@@ -442,6 +442,12 @@ def main():
 
     # Only inject on fresh sessions
     if source not in ("startup", "clear"):
+        print(json.dumps({}))
+        return
+
+    # Gate: require onboarding to be completed before injecting context
+    config = load_config()
+    if not config.get("onboarding_completed"):
         print(json.dumps({}))
         return
 

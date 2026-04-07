@@ -5,6 +5,7 @@ Database connection, schema management, settings, and logging.
 
 from __future__ import annotations
 
+import json
 import logging
 import sqlite3
 from logging.handlers import RotatingFileHandler
@@ -15,6 +16,7 @@ from typing import Optional
 DEFAULT_DB_PATH = Path.home() / ".claude-memory" / "conversations.db"
 DEFAULT_PROJECTS_DIR = Path.home() / ".claude" / "projects"
 DEFAULT_LOG_PATH = Path.home() / ".claude-memory" / "memory.log"
+CONFIG_PATH = Path.home() / ".claude-memory" / "config.json"
 
 # Default settings
 DEFAULT_SETTINGS = {
@@ -24,6 +26,18 @@ DEFAULT_SETTINGS = {
     "exclude_projects": [],
     "logging_enabled": False,
     "sync_on_stop": True,
+    "consolidation_reminder_enabled": True,
+    "consolidation_min_hours": 24,
+    "consolidation_min_sessions": 5,
+}
+
+# Keys in config.json that override DEFAULT_SETTINGS
+_CONFIG_KEYS = {
+    "auto_inject_context",
+    "consolidation_reminder_enabled",
+    "consolidation_min_hours",
+    "consolidation_min_sessions",
+    "max_context_sessions",
 }
 
 # Database schema — v3: messages stored once, branches as separate index
@@ -257,13 +271,24 @@ def migrate_db(conn: sqlite3.Connection) -> bool:
     return True
 
 
+def load_config() -> dict:
+    """Read ~/.claude-memory/config.json. Returns empty dict on missing/error."""
+    try:
+        if CONFIG_PATH.exists():
+            return json.loads(CONFIG_PATH.read_text())
+    except Exception:
+        pass
+    return {}
+
+
 def load_settings() -> dict:
-    """
-    Return default settings.
-    Previously loaded from YAML frontmatter, but PyYAML is not stdlib
-    so settings were silently ignored for most users.
-    """
-    return DEFAULT_SETTINGS.copy()
+    """Return settings with config.json overrides merged on top of defaults."""
+    settings = DEFAULT_SETTINGS.copy()
+    config = load_config()
+    for key in _CONFIG_KEYS:
+        if key in config:
+            settings[key] = config[key]
+    return settings
 
 
 def get_db_path(settings: Optional[dict] = None) -> Path:

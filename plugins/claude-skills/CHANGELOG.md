@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- Align `create-agent` and `repair-agent` with current subagent spec: `tools`/`disallowedTools` use YAML block sequences, updated `effort`/`memory`/`model` semantics
+- `memory: local` now means project-specific but not checked into VCS (previously meant in-session only, equivalent to no `memory` field)
+- `validate_agent.py`: warn when `effort: max` is paired with a non-Opus model
+
 ## [0.3.2] - 2026-03-10
 
 ### Changed

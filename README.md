@@ -34,7 +34,7 @@ To enable auto-updates, run `/plugin`, go to the Marketplaces tab, and toggle au
 
 <a id="claude-memory"></a>
 
-### 🧠 claude-memory &nbsp; ![v0.8.67](https://img.shields.io/badge/v0.8.67-blue?style=flat-square)
+### 🧠 claude-memory &nbsp; ![v0.8.68](https://img.shields.io/badge/v0.8.68-blue?style=flat-square)
 
 Conversation memory for Claude Code. Stores every session in a SQLite database with full-text search (FTS5, BM25 ranking, zero external dependencies) and makes past conversations available to the agent automatically.
 
@@ -77,7 +77,7 @@ brew install bird            # X / Twitter
 
 <a id="claude-coding"></a>
 
-### 💻 claude-coding &nbsp; ![v0.2.18](https://img.shields.io/badge/v0.2.18-blue?style=flat-square)
+### 💻 claude-coding &nbsp; ![v0.2.21](https://img.shields.io/badge/v0.2.21-blue?style=flat-square)
 
 Coding workflow skills for Claude Code. Nine skills and two agents covering the commit loop, project maintenance, documentation, and code quality.
 
@@ -101,7 +101,7 @@ Coding workflow skills for Claude Code. Nine skills and two agents covering the 
 
 <a id="claude-skills"></a>
 
-### ✍️ claude-skills &nbsp; ![v0.5.16](https://img.shields.io/badge/v0.5.16-blue?style=flat-square)
+### ✍️ claude-skills &nbsp; ![v0.5.18](https://img.shields.io/badge/v0.5.18-blue?style=flat-square)
 
 Skill authoring tools for Claude Code. Six skills covering the full lifecycle from creation to repair.
 

@@ -15,19 +15,31 @@ complex multi-step work to autonomous subprocesses with isolated context windows
 
 **Agents vs Skills — know the difference before generating:**
 
-- **Agents** run in isolated context, have second-person system prompts ("You are..."), use concise `>` folded scalar descriptions (50-70 tokens, no `<example>` blocks), and are spawned via the Task tool
+- **Agents** run in isolated context, have second-person system prompts ("You are..."), use concise `>` folded scalar descriptions (50-70 tokens, no `<example>` blocks), and are spawned via the Agent tool
 - **Skills** inject inline into the current conversation, use imperative body instructions for Claude to follow, and route via description matching on trigger phrases
 
 ## Phase 0: Understand Requirements
 
 Parse `$ARGUMENTS` for hints. Gather:
 
+**Identity:**
 1. **Domain & purpose** — What problem does this agent solve?
 2. **Expert persona** — What specialist identity should it embody?
+
+**Triggering:**
 3. **Trigger conditions** — When should Claude delegate to this agent? What user messages activate it?
 4. **Proactive vs reactive** — Should it fire automatically after events (e.g., after code is written), or only on explicit request?
+
+**Capabilities:**
 5. **Tool access** — What tools are actually needed? Least-privilege: an analysis agent doesn't need Write.
-6. **Context isolation** — Does it generate heavy output? Should it run in a worktree (`isolation: worktree`)?
+6. **Memory** — Should this agent learn across sessions? (e.g., accumulate codebase patterns, recurring issues, architectural decisions.) If yes, choose scope: `project` (recommended default, shareable via VCS), `user` (global across projects), or `local` (project-specific, not in VCS).
+7. **MCP servers** — Does it need external tools (browser, database, API) not in the parent session?
+
+**Execution:**
+8. **Session mode** — Will this run as a subagent (delegated by Claude) or as the main session agent (`claude --agent <name>`)? Session agents need broader tool access, more self-contained prompts, and may use `initialPrompt` to self-start.
+9. **Background execution** — Should it run concurrently while the user continues? Background agents auto-deny unpre-approved permissions and cannot ask clarifying questions.
+10. **Context isolation** — Does it generate heavy output or modify files? Should it run in a worktree (`isolation: worktree`)?
+11. **Effort level** — Does it need deep reasoning (`high`/`max`) or is it a fast classification task (`low`)?
 
 If `$ARGUMENTS` is empty or insufficient, use AskUserQuestion to gather domain, trigger conditions, and proactive intent before proceeding. Proceed to Phase 1 once these are established.
 
@@ -58,6 +70,14 @@ field catalog, color semantics, model options, tool selection framework, and exe
 **Intensional rule for `tools`:** Restrict to the minimum needed because agents run autonomously —
 over-permission has no human in the loop to catch it. `["Read", "Grep", "Glob"]` for analysis.
 Add `Write` for generation. Add `Bash` only when shell execution is essential, never by default.
+For session-mode agents that orchestrate subagents, use `Agent(type1, type2)` to scope spawning.
+
+**Set if applicable from Phase 0:**
+- `memory` — if cross-session learning was identified; add memory maintenance instructions to body
+- `effort` — if the task warrants non-default thinking depth
+- `initialPrompt` — if this is a session agent that should self-start
+- `background: true` — if concurrent execution was identified
+- `mcpServers` — if external tools were identified
 
 ### Step 3 — Write description
 
@@ -106,6 +126,10 @@ You are [role] specializing in [domain].
 - Output format is non-negotiable — callers need predictable structure to consume results
 - Define edge cases in the system prompt; discovered-at-runtime errors cost retries
 
+**If `memory` is set:** Include a section instructing the agent to maintain its knowledge base:
+"Update your agent memory as you discover codepaths, patterns, and key architectural decisions.
+Consult your memory before starting work." This enables cross-session learning.
+
 Keep under 3,000 words. Detailed domain reference belongs in `references/` preloaded via the
 `skills:` frontmatter field, not embedded directly in the system prompt.
 
@@ -140,7 +164,7 @@ Glob: .claude/skills/*/SKILL.md, ~/.claude/skills/*/SKILL.md (project + global s
 
 **Always use fully qualified names:**
 
-- `Task: subagent_type=plugin-dev:agent-creator` (not just "agent-creator")
+- `Agent: subagent_type=plugin-dev:agent-creator` (not just "agent-creator")
 - `Skill: claude-skills:create-skill` (not just "create-skill")
 
 ### Step 7 — Validate
@@ -246,6 +270,11 @@ Phase 3 is complete when score ≥ 9.0 or one refinement pass has run. Deliver: 
 - [ ] `model: inherit` unless specific model needed
 - [ ] `color` set and semantically meaningful
 - [ ] `tools` restricted to minimum needed
+- [ ] `memory` set if cross-session learning identified, with maintenance instructions in body
+- [ ] `effort` set if non-default thinking depth needed
+- [ ] `initialPrompt` set if session-mode agent that self-starts
+- [ ] `background: true` set if concurrent execution identified
+- [ ] `isolation: worktree` set if agent modifies files that need review before merging
 - [ ] No TODO placeholders remaining
 
 ## Error Handling

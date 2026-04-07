@@ -22,14 +22,19 @@ from pathlib import Path
 import yaml
 
 MAX_AGENT_NAME_LENGTH = 50
-ALLOWED_MODELS = {"inherit", "haiku", "sonnet", "opus"}
-ALLOWED_COLORS = {"blue", "cyan", "green", "yellow", "magenta", "red"}
-ALLOWED_PERMISSION_MODES = {"default", "acceptEdits", "dontAsk", "bypassPermissions", "plan"}
+ALLOWED_MODEL_ALIASES = {"inherit", "haiku", "sonnet", "opus"}
+ALLOWED_COLORS = {"red", "blue", "green", "yellow", "purple", "orange", "pink", "cyan"}
+ALLOWED_PERMISSION_MODES = {
+    "default", "acceptEdits", "auto", "dontAsk", "bypassPermissions", "plan",
+}
 ALLOWED_ISOLATION = {"worktree"}
+ALLOWED_EFFORT = {"low", "medium", "high", "max"}
+ALLOWED_MEMORY = {"user", "project", "local"}
 ALLOWED_FRONTMATTER = {
     "name", "description", "model", "color", "tools", "disallowedTools",
     "permissionMode", "maxTurns", "skills", "mcpServers", "hooks",
-    "memory", "background", "isolation", "version", "license",
+    "memory", "background", "isolation", "effort", "initialPrompt",
+    "version", "license",
 }
 
 
@@ -129,13 +134,18 @@ def validate_agent(agent_path, strict=False):
                     "major",
                 ))
 
-    # model
+    # model — accepts aliases or full model IDs (e.g., claude-sonnet-4-6)
     model = frontmatter.get("model")
-    if model and str(model) not in ALLOWED_MODELS:
-        errors.append(build_error(
-            "model",
-            f"Invalid model '{model}'. Must be one of: {', '.join(sorted(ALLOWED_MODELS))}",
-        ))
+    if model:
+        model_str = str(model)
+        if model_str not in ALLOWED_MODEL_ALIASES and not re.match(
+            r"^claude-[a-z0-9-]+$", model_str
+        ):
+            errors.append(build_error(
+                "model",
+                f"Invalid model '{model}'. Must be an alias "
+                f"({', '.join(sorted(ALLOWED_MODEL_ALIASES))}) or a full model ID (claude-*)",
+            ))
 
     # color
     color = frontmatter.get("color")
@@ -171,6 +181,30 @@ def validate_agent(agent_path, strict=False):
                 errors.append(build_error("maxTurns", "maxTurns must be a positive integer"))
         except (ValueError, TypeError):
             errors.append(build_error("maxTurns", "maxTurns must be an integer"))
+
+    # effort
+    effort = frontmatter.get("effort")
+    if effort and str(effort) not in ALLOWED_EFFORT:
+        errors.append(build_error(
+            "effort",
+            f"Invalid effort '{effort}'. Must be one of: {', '.join(sorted(ALLOWED_EFFORT))}",
+        ))
+    if str(effort) == "max" and model:
+        model_str = str(model)
+        if model_str not in ("opus",) and not model_str.startswith("claude-opus"):
+            errors.append(build_error(
+                "effort",
+                f"effort: max requires an Opus model, but model is '{model_str}'",
+                "minor",
+            ))
+
+    # memory
+    memory = frontmatter.get("memory")
+    if memory and str(memory) not in ALLOWED_MEMORY:
+        errors.append(build_error(
+            "memory",
+            f"Invalid memory '{memory}'. Must be one of: {', '.join(sorted(ALLOWED_MEMORY))}",
+        ))
 
     # body
     body_text = body.strip() if body else ""

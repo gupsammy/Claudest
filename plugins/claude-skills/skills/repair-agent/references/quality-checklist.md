@@ -16,9 +16,9 @@ A fully improved agent satisfies all of the following:
 
 **Description:**
 - Starts with "Use this agent when..." (exact routing pattern)
-- 2–4 `<example>` blocks, each fully formed
-- Commentary explains routing reasoning, not just restates user intent
-- Proactive trigger examples present for proactive agents
+- Concise `>` folded scalar, 50-70 tokens, no `<example>` blocks
+- Includes scope boundary ("Not for X — use Y-agent") if adjacent agents exist
+- Proactive hint included if agent fires after events ("Recommended PROACTIVELY after...")
 
 **Tools and modifiers:**
 - `tools` restricted to minimum needed (least-privilege for autonomous execution)
@@ -37,16 +37,14 @@ A fully improved agent satisfies all of the following:
 
 **Description:**
 - [ ] Starts with "Use this agent when..."
-- [ ] Uses `|` literal scalar (not `>` — XML `<example>` blocks require literal newlines)
-- [ ] 2–4 `<example>` blocks present
-- [ ] Each example has: `Context:`, `user:`, `assistant:`, `<commentary>`
-- [ ] `<commentary>` explains routing reasoning (not just restates the user message)
-- [ ] Proactive two-turn assistant pattern included if agent fires after events
+- [ ] Uses `>` folded scalar, 50-70 tokens, no `<example>` blocks
+- [ ] Includes scope boundary if adjacent agents exist
+- [ ] Proactive hint included if agent fires after events
 
 **System Prompt:**
 - [ ] Written entirely in second person
 - [ ] No first-person language ("I will", "I'll", "I am")
-- [ ] No bare imperatives without "you" (risk of reading as skill instruction)
+- [ ] Bare imperatives in process steps are acceptable; only first-person breaks the contract
 - [ ] First sentence is a persona statement ("You are a [role] specializing in [domain]")
 - [ ] Process steps are numbered and each has a clear completion criterion
 - [ ] Output format section is present and explicit
@@ -59,6 +57,8 @@ A fully improved agent satisfies all of the following:
 - [ ] `tools` is restricted for analysis-only agents
 - [ ] No unscoped `Bash` unless required
 - [ ] `skills:` preloads listed are actually used in the process steps
+- [ ] `memory` set if agent accumulates knowledge; body includes memory maintenance instructions
+- [ ] `effort` set if non-default thinking depth is appropriate
 
 **Efficiency:**
 - [ ] System prompt is under 400 lines

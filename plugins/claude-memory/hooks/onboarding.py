@@ -21,81 +21,51 @@ from memory_lib.db import CONFIG_PATH, load_config
 CURRENT_ONBOARDING_VERSION = 1
 
 ONBOARDING_CONTEXT = """\
-## Claude Memory: First-Run Setup
+## Claude Memory: Onboarding Pending
 
-claude-memory has been installed but hasn't been configured yet. \
-Before responding to the user's first message, complete this onboarding flow.
+claude-memory is installed but unconfigured. Its features (session context \
+injection, consolidation reminders) are paused until setup completes.
 
-**Step 1 — Welcome the user and pitch the product:**
+Address the user's message first — complete their task normally. At the end \
+of your response, append a one-time notice in natural prose (not AskUserQuestion) \
+mentioning that claude-memory is installed and offering setup. Mention three \
+capabilities briefly: session context recall, /recall-conversations for searching \
+past work, and /extract-learnings reminders. Offer to run a quick setup or \
+enable recommended defaults. Note they can change settings later in \
+~/.claude-memory/config.json.
 
-Say something like: "Welcome to claude-memory! This plugin gives me three \
-powerful capabilities:
+## User Response Handling
 
-1. **Session Context** — When you start a new session, I automatically recall \
-what we worked on last time so you never have to re-explain context.
+Flat branches — handle the user's reply to the notice:
 
-2. **Recall Conversations** — The /recall-conversations skill lets me search \
-your entire conversation history. When you say things like 'remember when we...' \
-or 'what did we decide about...', I'll automatically search for relevant past \
-conversations.
-
-3. **Extract Learnings Reminder** — I'll periodically remind you to run \
-/extract-learnings, which consolidates discoveries, decisions, and patterns \
-from recent sessions into permanent memory files.
-
-Let me set these up for you."
-
-**Step 2 — Ask the user how they want to configure:**
-
-Use the AskUserQuestion tool to ask:
-"How would you like to set up claude-memory?"
-Options:
-- "Use recommended defaults" (description: "Enables all three features with \
-default settings — session context on, consolidation reminders every 24 hours \
-/ 5 sessions")
-- "Walk me through each setting" (description: "I'll ask about each feature \
-individually so you can customize")
-
-**If "Use recommended defaults":**
-Run this command via the Bash tool:
+**Affirmative or "defaults"** — user agrees or wants defaults without walkthrough. \
+Run via Bash:
 ```
-python3 "${CLAUDE_PLUGIN_ROOT}/hooks/write_config.py" --auto-inject-context true --consolidation-enabled true --consolidation-min-hours 24 --consolidation-min-sessions 5
+python3 "${CLAUDE_PLUGIN_ROOT}/hooks/write_config.py" --defaults
 ```
-Then confirm: "All set! claude-memory is configured with recommended defaults. \
-Your preferences are saved to ~/.claude-memory/config.json. \
-These settings will take effect from your next session."
+Confirm briefly: setup complete, features activate next session.
 
-**If "Walk me through each setting":**
+**"yes, walk me through it"** — user wants to customize. Use AskUserQuestion \
+for two settings:
 
-Use AskUserQuestion for each:
+1. Session context injection (auto-recall last session on startup): Yes / No
+2. Consolidation reminders (/extract-learnings nudges): Yes with defaults / \
+Yes with custom thresholds / No
 
-Question 1: "Enable session context injection? When you start a new session, \
-I'll automatically summarize what we last worked on in this project."
-Options: "Yes, enable (Recommended)", "No, disable"
+If custom thresholds, ask once: hours and sessions between reminders.
 
-Question 2: "Enable extract-learnings reminders? I'll periodically suggest \
-running /extract-learnings to consolidate discoveries into permanent memory."
-Options: "Yes, with defaults (24 hours, 5 sessions)", \
-"Yes, but let me customize thresholds", "No, disable reminders"
-
-If they chose to customize thresholds, ask:
-"What thresholds would you like for consolidation reminders?"
-Options: "12 hours, 3 sessions", "24 hours, 5 sessions (default)", \
-"48 hours, 10 sessions"
-
-Then run write_config.py via Bash with the chosen values. For example:
+Then run write_config.py with chosen values:
 ```
-python3 "${CLAUDE_PLUGIN_ROOT}/hooks/write_config.py" --auto-inject-context true --consolidation-enabled true --consolidation-min-hours 24 --consolidation-min-sessions 5
+python3 "${CLAUDE_PLUGIN_ROOT}/hooks/write_config.py" \
+  --auto-inject-context <true|false> \
+  --consolidation-enabled <true|false> \
+  --consolidation-min-hours <N> \
+  --consolidation-min-sessions <N>
 ```
+Confirm: preferences saved, features activate next session.
 
-Confirm: "All set! Your preferences are saved to ~/.claude-memory/config.json. \
-These settings will take effect from your next session."
-
-**Step 3 — Continue with the user's original request.**
-
-After onboarding is complete, address whatever the user originally asked. \
-Do not skip or delay the onboarding — it only takes a minute and ensures \
-the plugin works the way the user wants.
+**Decline ("no", "later", ignores it)** — do nothing. Config stays unwritten; \
+this notice reappears next session.
 """
 
 

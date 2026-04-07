@@ -27,6 +27,11 @@ DEFAULT_CONFIG = {
 def main():
     parser = argparse.ArgumentParser(description="Write claude-memory config")
     parser.add_argument(
+        "--defaults",
+        action="store_true",
+        help="Write recommended defaults without requiring explicit flags",
+    )
+    parser.add_argument(
         "--auto-inject-context",
         choices=["true", "false"],
         help="Enable session context injection on startup",
@@ -56,15 +61,16 @@ def main():
         except Exception:
             pass
 
-    # Apply CLI arguments
-    if args.auto_inject_context is not None:
-        config["auto_inject_context"] = args.auto_inject_context == "true"
-    if args.consolidation_enabled is not None:
-        config["consolidation_reminder_enabled"] = args.consolidation_enabled == "true"
-    if args.consolidation_min_hours is not None:
-        config["consolidation_min_hours"] = max(1, args.consolidation_min_hours)
-    if args.consolidation_min_sessions is not None:
-        config["consolidation_min_sessions"] = max(1, args.consolidation_min_sessions)
+    # Apply CLI arguments (skip if --defaults, which uses DEFAULT_CONFIG as-is)
+    if not args.defaults:
+        if args.auto_inject_context is not None:
+            config["auto_inject_context"] = args.auto_inject_context == "true"
+        if args.consolidation_enabled is not None:
+            config["consolidation_reminder_enabled"] = args.consolidation_enabled == "true"
+        if args.consolidation_min_hours is not None:
+            config["consolidation_min_hours"] = max(1, args.consolidation_min_hours)
+        if args.consolidation_min_sessions is not None:
+            config["consolidation_min_sessions"] = max(1, args.consolidation_min_sessions)
 
     # Mark onboarding complete
     config["onboarding_completed"] = True
@@ -76,7 +82,7 @@ def main():
     tmp.write_text(json.dumps(config, indent=2) + "\n")
     tmp.replace(CONFIG_PATH)
 
-    print(json.dumps(config, indent=2))
+    print(f"Config saved to {CONFIG_PATH}")
 
 
 if __name__ == "__main__":

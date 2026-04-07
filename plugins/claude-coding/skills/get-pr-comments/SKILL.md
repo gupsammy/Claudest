@@ -67,6 +67,18 @@ Otherwise, relay the script output directly. The output is structured as:
 actionable items (must-fix, optional) first, then human comments, then bot
 comments (truncated). Do not reformat or reparse — present as-is.
 
+If must-fix items are listed, fetch the latest issue-level comment to check
+whether a subsequent review already resolved them:
+
+```bash
+gh api repos/{owner}/{repo}/issues/<PR_NUMBER>/comments --jq '.[-1].body'
+```
+
+If the latest comment contains phrases like "ready to merge", "all issues
+fixed", "lgtm", "approved", or similar resolution language, surface that
+summary first with a note that the listed must-fix items may already be
+resolved. Then present the full script output.
+
 ### 4. Suggest next steps
 
 After presenting comments, offer context-appropriate actions:

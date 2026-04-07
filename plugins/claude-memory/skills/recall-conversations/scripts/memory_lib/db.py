@@ -408,6 +408,9 @@ CREATE INDEX IF NOT EXISTS idx_token_snapshots_start ON token_snapshots(start_ti
     # --- DML migrations (version-gated via PRAGMA user_version, run once) ---
     version = conn.execute("PRAGMA user_version").fetchone()[0]
 
+    # Resolve db_path for backup operations (PRAGMA database_list returns (seq, name, file))
+    db_path = Path(conn.execute("PRAGMA database_list").fetchone()[2])
+
     if version < 1:
         # v0.5.0: Backfill task-notification messages
         cursor.execute("""
@@ -437,6 +440,31 @@ CREATE INDEX IF NOT EXISTS idx_token_snapshots_start ON token_snapshots(start_ti
         _backfill_origin(conn, cursor)
         conn.execute("PRAGMA user_version = 3")
         conn.commit()
+
+    if version < 4:
+        # v0.8.70: Clear stale task-notification values from origin column.
+        # parse_origin had a kind-fallback bug that leaked task-notification
+        # into origin (reserved for channel sources: telegram, discord, slack).
+        _backup_db_before_migration(db_path, "v4")
+        cursor.execute(
+            "UPDATE messages SET origin = NULL WHERE origin = 'task-notification'"
+        )
+        conn.execute("PRAGMA user_version = 4")
+        conn.commit()
+
+
+def _backup_db_before_migration(db_path: Path, label: str) -> None:
+    """Create a timestamped backup of the DB before a destructive migration."""
+    import shutil
+    import time
+    if not db_path.exists():
+        return
+    ts = time.strftime("%Y%m%d-%H%M%S")
+    backup_path = db_path.with_suffix(f".pre-{label}-{ts}.db")
+    try:
+        shutil.copy2(db_path, backup_path)
+    except OSError:
+        pass  # Best-effort — don't block migration if backup fails
 
 
 def _backfill_origin(conn: sqlite3.Connection, cursor: sqlite3.Cursor) -> None:

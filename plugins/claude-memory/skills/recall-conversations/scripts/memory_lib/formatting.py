@@ -35,7 +35,12 @@ _WORKTREE_KEY_MARKER = "--claude-worktrees-"
 
 
 def normalize_cwd(cwd: str) -> str:
-    """Strip .claude/worktrees/<name> suffix from a raw path, returning the base repo path."""
+    """Strip .claude/worktrees/<name> suffix from a raw path, returning the base repo path.
+
+    Normalizes backslashes to forward slashes first so Windows paths
+    (C:\\Users\\...) match the forward-slash worktree marker.
+    """
+    cwd = cwd.replace("\\", "/")
     idx = cwd.rfind(_WORKTREE_MARKER)
     return cwd[:idx] if idx != -1 else cwd
 
@@ -46,7 +51,7 @@ def get_project_key(cwd: str) -> str:
     Resolves .claude/worktrees/<name> paths to the base repo path
     so worktree sessions share project context with the main repo.
     """
-    return normalize_cwd(cwd).replace("/", "-").replace(".", "-")
+    return normalize_cwd(cwd).replace("/", "-").replace("\\", "-").replace(".", "-")
 
 
 def normalize_project_key(key: str) -> str:
@@ -60,8 +65,16 @@ def normalize_project_key(key: str) -> str:
 
 def parse_project_key(key: str) -> str:
     """Convert directory key back to original path (lossy — hyphens in dir names are lost).
-    Prefer using session cwd metadata when available."""
-    return "/" + key.replace("-", "/").lstrip("/")
+    Prefer using session cwd metadata when available.
+
+    Detects Windows-style keys (starting with a drive letter like 'C-') and
+    reconstructs with the correct prefix. Unix keys start with '-' (from '/').
+    """
+    parts = key.lstrip("-").replace("-", "/")
+    # Detect Windows drive letter pattern: single letter followed by /
+    if len(parts) >= 2 and parts[0].isalpha() and parts[1] == "/":
+        return parts[0].upper() + ":/" + parts[2:].lstrip("/")
+    return "/" + parts.lstrip("/")
 
 
 def extract_project_name(path: str) -> str:

@@ -3,7 +3,6 @@ name: get-token-insights
 description: To analyze Claude token usage, see how you are spending on Claude, understand cache hit rates, review Claude Code workflow patterns, or get cost optimization recommendations.
 allowed-tools:
   - Bash(python3:*)
-  - Bash(open:*)
   - Agent
   - AskUserQuestion
 ---
@@ -98,7 +97,7 @@ Present the full analysis as markdown with the sections above. Ask the user if t
 ## Step 3: Open Dashboard
 
 ```bash
-open ~/.claude-memory/dashboard.html
+python3 -c "import webbrowser, pathlib; webbrowser.open((pathlib.Path.home() / '.claude-memory' / 'dashboard.html').as_uri())"
 ```
 
 Note the dashboard is available for deeper exploration — Section 6 (Claude Code Ecosystem) has the new skill, agent, and hook charts.

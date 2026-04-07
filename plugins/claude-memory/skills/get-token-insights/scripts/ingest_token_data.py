@@ -276,8 +276,15 @@ class JnlFile:
 
 
 def _decode_project_cwd(dirname: str) -> str:
-    """Convert '-Users-samarthgupta-repos-foo' to '/Users/samarthgupta/repos/foo'."""
-    return "/" + dirname.lstrip("-").replace("-", "/")
+    """Convert '-Users-samarthgupta-repos-foo' to '/Users/samarthgupta/repos/foo'.
+
+    Detects Windows drive letter pattern (e.g. 'C-Users-...' → 'C:/Users/...').
+    """
+    parts = dirname.lstrip("-").replace("-", "/")
+    # Windows drive letter: single letter followed by /
+    if len(parts) >= 2 and parts[0].isalpha() and parts[1] == "/":
+        return parts[0].upper() + ":/" + parts[2:].lstrip("/")
+    return "/" + parts.lstrip("/")
 
 
 def discover_jsonl_files() -> list[JnlFile]:

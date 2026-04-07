@@ -12,7 +12,6 @@ allowed-tools:
   - Grep
   - Bash(python3:*)
   - Bash(git:*)
-  - Bash(date:*)
   - AskUserQuestion
   - Agent
 ---
@@ -101,7 +100,7 @@ Apply approved edits. Output summary table:
 |----------|--------|--------|--------|
 ```
 
-Only if Phase 2 agents ran (not an early-exit capture): write consolidation marker `Bash(date -u +%Y-%m-%dT%H:%M:%SZ)` → Write `.last-consolidation` in same directory as MEMORY.md.
+Only if Phase 2 agents ran (not an early-exit capture): write consolidation marker `Bash(python3 -c "from datetime import datetime,timezone;print(datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'))")` → Write `.last-consolidation` in same directory as MEMORY.md.
 
 Phase 4 is complete when all approved edits are applied and the summary table is presented.
 

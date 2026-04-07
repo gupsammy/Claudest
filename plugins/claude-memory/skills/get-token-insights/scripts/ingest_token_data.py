@@ -614,8 +614,8 @@ def _detect_cache_ttl_ms(session: "ParsedSession") -> tuple[int, str]:
         if total_5m > total_1h:
             return 300_000, "5m"
         return 3_600_000, "1h"
-    # No tier breakdown — default to 1h (empirically confirmed for Claude Code)
-    return 3_600_000, "1h"
+    # No tier breakdown — default to 5m (Claude Code switched to ephemeral_5m ~Apr 3 2026)
+    return 300_000, "5m"
 
 
 def compute_session_analytics(session: ParsedSession) -> dict:
@@ -893,7 +893,7 @@ def build_output(conn: sqlite3.Connection) -> dict:
     if total_ephem_5m > 0 or total_ephem_1h > 0:
         dominant_cache_tier = "5m" if total_ephem_5m > total_ephem_1h else "1h"
     else:
-        dominant_cache_tier = "1h"  # default — empirically confirmed for Claude Code
+        dominant_cache_tier = "5m"  # default — Claude Code switched to ephemeral_5m ~Apr 3 2026
 
     cache_denom = total_cache_read + total_cache_creation
     global_cache_ratio = round(total_cache_read / cache_denom, 4) if cache_denom > 0 else 0.0

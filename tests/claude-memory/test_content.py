@@ -1,5 +1,7 @@
 """Tests for memory_lib.content — message content extraction and tool detection."""
 
+from __future__ import annotations
+
 from memory_lib.content import (
     extract_commits,
     extract_files_modified,

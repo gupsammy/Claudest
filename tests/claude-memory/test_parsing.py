@@ -1,5 +1,7 @@
 """Tests for memory_lib.parsing — branch detection, JSONL parsing, metadata."""
 
+from __future__ import annotations
+
 import json
 import uuid as uuid_mod
 from pathlib import Path

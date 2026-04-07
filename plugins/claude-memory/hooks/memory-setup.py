@@ -62,21 +62,6 @@ def _needs_backfill() -> bool:
         return False
 
 
-def _needs_reimport() -> bool:
-    """Check if import_log is empty (cleared by migration), signaling reimport needed."""
-    try:
-        import sqlite3
-        conn = sqlite3.connect(str(DEFAULT_DB_PATH))
-        conn.execute("PRAGMA busy_timeout = 2000")
-        count = conn.execute("SELECT COUNT(*) FROM import_log").fetchone()[0]
-        session_count = conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
-        conn.close()
-        # Empty import_log but sessions exist = migration cleared it
-        return count == 0 and session_count > 0
-    except Exception:
-        return False
-
-
 def main():
     try:
         # Create directory
@@ -87,9 +72,6 @@ def main():
             _spawn_background("import_conversations.py")
         else:
             _ensure_schema()
-            # Trigger reimport if import_log was cleared by a migration (e.g. v3)
-            if _needs_reimport():
-                _spawn_background("import_conversations.py")
 
         if _needs_backfill():
             _spawn_background("backfill_summaries.py")

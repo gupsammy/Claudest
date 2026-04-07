@@ -63,7 +63,7 @@ def main():
     config = DEFAULT_CONFIG.copy()
     if CONFIG_PATH.exists() and not args.defaults:
         try:
-            existing = json.loads(CONFIG_PATH.read_text())
+            existing = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
             if isinstance(existing, dict):
                 config.update(existing)
         except Exception:

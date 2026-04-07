@@ -9,10 +9,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import sys
+import tempfile
 from pathlib import Path
 
-CONFIG_PATH = Path.home() / ".claude-memory" / "config.json"
-CURRENT_ONBOARDING_VERSION = 1
+SCRIPT_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(SCRIPT_DIR.parent / "skills" / "recall-conversations" / "scripts"))
+
+from memory_lib.db import CONFIG_PATH, CURRENT_ONBOARDING_VERSION
 
 DEFAULT_CONFIG = {
     "onboarding_completed": False,
@@ -57,7 +62,9 @@ def main():
     config = DEFAULT_CONFIG.copy()
     if CONFIG_PATH.exists():
         try:
-            config.update(json.loads(CONFIG_PATH.read_text()))
+            existing = json.loads(CONFIG_PATH.read_text())
+            if isinstance(existing, dict):
+                config.update(existing)
         except Exception:
             pass
 
@@ -78,9 +85,14 @@ def main():
 
     # Atomic write
     CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    tmp = CONFIG_PATH.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(config, indent=2) + "\n")
-    tmp.replace(CONFIG_PATH)
+    fd, tmp_path = tempfile.mkstemp(dir=CONFIG_PATH.parent, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as fh:
+            fh.write(json.dumps(config, indent=2) + "\n")
+        Path(tmp_path).replace(CONFIG_PATH)
+    except Exception:
+        Path(tmp_path).unlink(missing_ok=True)
+        raise
 
     print(f"Config saved to {CONFIG_PATH}")
 

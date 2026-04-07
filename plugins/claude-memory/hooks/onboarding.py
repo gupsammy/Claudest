@@ -16,10 +16,9 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR.parent / "skills" / "recall-conversations" / "scripts"))
 
-from memory_lib.db import CONFIG_PATH, load_config
+from memory_lib.db import CONFIG_PATH, CURRENT_ONBOARDING_VERSION, load_config
 
-CURRENT_ONBOARDING_VERSION = 1
-
+PYTHON_EXE = sys.executable
 WRITE_CONFIG_PATH = str(SCRIPT_DIR / "write_config.py")
 
 
@@ -53,7 +52,7 @@ If custom thresholds, ask once: hours and sessions between reminders.
 
 Then run write_config.py with chosen values:
 ```
-python3 {WRITE_CONFIG_PATH} \\
+{PYTHON_EXE} "{WRITE_CONFIG_PATH}" \\
   --auto-inject-context <true|false> \\
   --consolidation-enabled <true|false> \\
   --consolidation-min-hours <N> \\
@@ -64,7 +63,7 @@ Confirm: preferences saved, features activate next session.
 **Explicit defaults** — only when the user specifically says "defaults", \
 "just use defaults", or "skip the walkthrough". Run via Bash:
 ```
-python3 {WRITE_CONFIG_PATH} --defaults
+{PYTHON_EXE} "{WRITE_CONFIG_PATH}" --defaults
 ```
 Confirm briefly: setup complete, features activate next session.
 

@@ -7,7 +7,9 @@ from __future__ import annotations
 
 import json
 import logging
+import shutil
 import sqlite3
+import time
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Optional
@@ -271,11 +273,15 @@ def migrate_db(conn: sqlite3.Connection) -> bool:
     return True
 
 
+CURRENT_ONBOARDING_VERSION = 1
+
+
 def load_config() -> dict:
     """Read ~/.claude-memory/config.json. Returns empty dict on missing/error."""
     try:
         if CONFIG_PATH.exists():
-            return json.loads(CONFIG_PATH.read_text())
+            result = json.loads(CONFIG_PATH.read_text())
+            return result if isinstance(result, dict) else {}
     except Exception:
         pass
     return {}
@@ -455,8 +461,6 @@ CREATE INDEX IF NOT EXISTS idx_token_snapshots_start ON token_snapshots(start_ti
 
 def _backup_db_before_migration(db_path: Path, label: str) -> None:
     """Create a timestamped backup of the DB before a destructive migration."""
-    import shutil
-    import time
     if not db_path.exists():
         return
     ts = time.strftime("%Y%m%d-%H%M%S")

@@ -22,7 +22,7 @@ def main():
         # Use os.fdopen on the fd directly to avoid TOCTOU race; mkstemp already sets 0o600
         fd, tmp_path = tempfile.mkstemp(prefix="claude-memory-sync-", suffix=".json")
         try:
-            with os.fdopen(fd, "w") as f:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
                 f.write(hook_input)
         except Exception:
             # fd is closed by os.fdopen even on error; clean up the file

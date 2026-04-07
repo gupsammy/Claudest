@@ -75,7 +75,7 @@ def package_skill(skill_path, output_dir=None):
         return None
 
 
-def main():
+def main() -> None:
     if len(sys.argv) < 2:
         print("Usage: package_skill.py <path/to/skill-folder> [output-directory]")
         print("\nExample:")

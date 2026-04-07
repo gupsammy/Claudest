@@ -293,7 +293,7 @@ def _to_srt(lines: list) -> str:
 # Subcommand: search
 # ---------------------------------------------------------------------------
 
-def cmd_search(args, g):
+def cmd_search(args, g) -> None:
     """Search YouTube for videos matching a query."""
     query = args.query
 
@@ -385,7 +385,7 @@ def cmd_search(args, g):
 # Subcommand: metadata
 # ---------------------------------------------------------------------------
 
-def cmd_metadata(args, g):
+def cmd_metadata(args, g) -> None:
     """Extract full metadata for a video or playlist."""
     url = args.url
 
@@ -468,7 +468,7 @@ def cmd_metadata(args, g):
 # Subcommand: transcript
 # ---------------------------------------------------------------------------
 
-def cmd_transcript(args, g):
+def cmd_transcript(args, g) -> None:
     """Download and clean transcript for a video."""
     url = args.url
     lang = args.lang
@@ -570,7 +570,7 @@ def cmd_transcript(args, g):
 # Subcommand: audio
 # ---------------------------------------------------------------------------
 
-def cmd_audio(args, g):
+def cmd_audio(args, g) -> None:
     """Download audio from a video."""
     url = args.url
     audio_fmt = args.audio_format
@@ -632,7 +632,7 @@ def cmd_audio(args, g):
 # Subcommand: channel
 # ---------------------------------------------------------------------------
 
-def cmd_channel(args, g):
+def cmd_channel(args, g) -> None:
     """Scan a channel's videos, shorts, streams, or playlists."""
     raw = args.url
     tab = args.tab
@@ -715,7 +715,7 @@ def cmd_channel(args, g):
 # Batch processing
 # ---------------------------------------------------------------------------
 
-def run_batch(handler, items: list, args, g):
+def run_batch(handler, items: list, args, g) -> None:
     """Run a handler for each item (URL or search query), collecting results."""
     results = []
     errors = []

@@ -38,7 +38,7 @@ ALLOWED_FRONTMATTER = {
 }
 
 
-def build_error(field, message, severity="critical"):
+def build_error(field, message, severity: str="critical"):
     return {"field": field, "message": message, "severity": severity}
 
 
@@ -52,7 +52,7 @@ def parse_frontmatter(content):
     return match.group(1), content[match.end():], None
 
 
-def validate_agent(agent_path, strict=False):
+def validate_agent(agent_path, strict: bool=False):
     """Validate an agent file. Returns list of error dicts."""
     errors = []
     path = Path(agent_path).expanduser().resolve()
@@ -226,7 +226,7 @@ def validate_agent(agent_path, strict=False):
     return errors
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(
         description="Validate a Claude Code agent .md file.",
         formatter_class=argparse.RawDescriptionHelpFormatter,

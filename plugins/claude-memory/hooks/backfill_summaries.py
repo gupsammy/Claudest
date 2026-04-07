@@ -21,7 +21,7 @@ from memory_lib.summarizer import compute_context_summary
 BATCH_SIZE = 50
 
 
-def main():
+def main() -> None:
     settings = load_settings()
     logger = setup_logging(settings)
 

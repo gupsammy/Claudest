@@ -147,7 +147,7 @@ def validate_skill(skill_path):
     return True, "Skill is valid"
 
 
-def main():
+def main() -> None:
     if len(sys.argv) != 2:
         print("Usage: validate_skill.py <skill_directory>")
         print("Example: validate_skill.py ~/.claude/skills/my-skill")

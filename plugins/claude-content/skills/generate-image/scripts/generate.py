@@ -189,7 +189,7 @@ def save_prompt_log(
     output_images: list[Path],
     source_images: list[str] | None = None,
     model: str | None = None,
-):
+) -> None:
     """Save the prompt used to generate images as a single .md file."""
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -502,7 +502,7 @@ async def async_main(args, input_images, input_paths, output_paths):
 
 # --- CLI ---
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(
         description="Generate and edit images using Gemini Image API",
         formatter_class=argparse.RawDescriptionHelpFormatter,

@@ -113,7 +113,7 @@ def parse_frontmatter(content):
     return frontmatter, None, body
 
 
-def validate_skill(skill_path, strict=False):
+def validate_skill(skill_path, strict: bool=False):
     """
     Validate an OpenClaw skill directory.
 
@@ -275,7 +275,7 @@ def format_text_output(result, skill_path):
     return "\n".join(lines)
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(
         description="Validate an OpenClaw skill directory",
         formatter_class=argparse.RawDescriptionHelpFormatter,

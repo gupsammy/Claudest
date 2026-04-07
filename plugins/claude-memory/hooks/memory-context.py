@@ -425,7 +425,7 @@ def build_context(sessions: list[dict]) -> str:
     return "\n\n---\n\n".join(parts)
 
 
-def main():
+def main() -> None:
     # Load settings
     settings = load_settings()
     logger = setup_logging(settings)

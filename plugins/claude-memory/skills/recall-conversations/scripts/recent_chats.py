@@ -125,7 +125,7 @@ def format_markdown(sessions: list[dict], verbose: bool = False) -> str:
     return "\n".join(lines)
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description="Get recent conversation sessions")
     parser.add_argument("--n", "-n", type=int, default=3, help="Number of sessions (1-20, default: 3)")
     parser.add_argument("--sort-order", choices=["desc", "asc"], default="desc", help="Sort order (default: desc)")

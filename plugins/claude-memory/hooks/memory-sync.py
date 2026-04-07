@@ -13,7 +13,7 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).resolve().parent
 
 
-def main():
+def main() -> None:
     try:
         # Read hook input from stdin
         hook_input = sys.stdin.read()

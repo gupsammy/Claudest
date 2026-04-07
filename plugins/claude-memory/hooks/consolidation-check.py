@@ -81,7 +81,7 @@ def count_sessions_since(conn: sqlite3.Connection, project_key: str, since_iso: 
     return row[0] if row else 0
 
 
-def main():
+def main() -> None:
     settings = load_settings()
     logger = setup_logging(settings)
 

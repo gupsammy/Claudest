@@ -361,7 +361,7 @@ def import_project(
     return sessions_imported, messages_imported, sessions_skipped
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(
         description="Import Claude Code conversations into SQLite"
     )

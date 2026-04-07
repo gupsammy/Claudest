@@ -154,7 +154,7 @@ def format_markdown(sessions: list[dict], query: str, verbose: bool = False) -> 
     return "\n".join(lines)
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description="Search conversation sessions")
     parser.add_argument("--query", "-q", type=str, required=True, help="Search keywords")
     parser.add_argument("--max-results", type=int, default=5, help="Max sessions (1-10, default: 5)")

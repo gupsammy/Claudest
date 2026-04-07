@@ -78,7 +78,7 @@ def _needs_backfill() -> bool:
         return False
 
 
-def main():
+def main() -> None:
     try:
         # Create directory
         DEFAULT_DB_PATH.parent.mkdir(parents=True, exist_ok=True)

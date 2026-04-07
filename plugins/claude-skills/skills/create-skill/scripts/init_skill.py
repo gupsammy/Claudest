@@ -131,7 +131,7 @@ def parse_resources(raw_resources):
     return list(dict.fromkeys(resources))  # dedupe preserving order
 
 
-def create_resource_dirs(skill_dir, skill_name, skill_title, resources, include_examples):
+def create_resource_dirs(skill_dir, skill_name, skill_title, resources, include_examples) -> None:
     for resource in resources:
         resource_dir = skill_dir / resource
         resource_dir.mkdir(exist_ok=True)
@@ -201,7 +201,7 @@ def init_skill(skill_name, path, resources, include_examples):
     return skill_dir
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description="Create a new skill directory with template SKILL.md")
     parser.add_argument("skill_name", help="Skill name (normalized to hyphen-case)")
     parser.add_argument("--path", required=True, help="Output directory (e.g., ~/.claude/skills)")

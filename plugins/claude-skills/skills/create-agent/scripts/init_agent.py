@@ -79,7 +79,7 @@ def validate_name(name):
     return True, None
 
 
-def init_agent(name, path, output_format):
+def init_agent(name, path, output_format) -> bool:
     agents_dir = Path(path).expanduser().resolve()
     agent_file = agents_dir / f"{name}.md"
     result = {"name": name, "path": str(agent_file), "success": False, "message": ""}
@@ -128,7 +128,7 @@ def init_agent(name, path, output_format):
     return True
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(
         description="Create a new agent file with template frontmatter and system prompt",
         formatter_class=argparse.RawDescriptionHelpFormatter,

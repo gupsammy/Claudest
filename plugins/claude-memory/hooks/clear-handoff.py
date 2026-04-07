@@ -14,7 +14,7 @@ sys.path.insert(0, str(SCRIPT_DIR.parent / "skills" / "recall-conversations" / "
 from memory_lib.db import get_db_path, load_settings
 
 
-def main():
+def main() -> None:
     raw = sys.stdin.read()
     try:
         hook_input = json.loads(raw)

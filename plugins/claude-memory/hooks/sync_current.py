@@ -329,7 +329,7 @@ def sync_session(conn: sqlite3.Connection, filepath: Path, project_dir: Path) ->
     return new_count
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description="Sync current session to memory database")
     parser.add_argument(
         "--input-file",

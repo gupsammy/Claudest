@@ -146,7 +146,7 @@ class TestProjectKey:
 
     def test_get_project_key_windows_backslash(self):
         """Windows paths with backslashes should produce the same key format."""
-        assert get_project_key("C:\\Users\\sam\\project") == "C:-Users-sam-project"
+        assert get_project_key("C:\\Users\\sam\\project") == "C--Users-sam-project"
 
     def test_get_project_key_windows_matches_posix_equivalent(self):
         """Windows forward-slash and backslash paths should produce identical keys."""
@@ -171,6 +171,12 @@ class TestProjectKey:
         """Keys from Windows paths should reconstruct with drive letter prefix."""
         result = parse_project_key("C--Users-sam-project")
         assert result == "C:/Users/sam/project"
+
+    def test_round_trip_windows(self):
+        """get_project_key → parse_project_key round-trip for Windows paths."""
+        key = get_project_key("C:\\Users\\sam\\project")
+        assert key == "C--Users-sam-project"
+        assert parse_project_key(key) == "C:/Users/sam/project"
 
     def test_parse_project_key_unix_unchanged(self):
         """Unix keys should still reconstruct with leading /."""

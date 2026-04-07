@@ -51,7 +51,7 @@ def get_project_key(cwd: str) -> str:
     Resolves .claude/worktrees/<name> paths to the base repo path
     so worktree sessions share project context with the main repo.
     """
-    return normalize_cwd(cwd).replace("/", "-").replace("\\", "-").replace(".", "-")
+    return normalize_cwd(cwd).replace("/", "-").replace(":", "-").replace(".", "-")
 
 
 def normalize_project_key(key: str) -> str:
@@ -70,10 +70,11 @@ def parse_project_key(key: str) -> str:
     Detects Windows-style keys (starting with a drive letter like 'C-') and
     reconstructs with the correct prefix. Unix keys start with '-' (from '/').
     """
+    # Detect Windows drive letter: key starts with "<letter>--" (colon+slash both → hyphen)
+    if len(key) >= 3 and key[0].isalpha() and key[1:3] == "--":
+        parts = key[3:].replace("-", "/")
+        return key[0].upper() + ":/" + parts.lstrip("/")
     parts = key.lstrip("-").replace("-", "/")
-    # Detect Windows drive letter pattern: single letter followed by /
-    if len(parts) >= 2 and parts[0].isalpha() and parts[1] == "/":
-        return parts[0].upper() + ":/" + parts[2:].lstrip("/")
     return "/" + parts.lstrip("/")
 
 

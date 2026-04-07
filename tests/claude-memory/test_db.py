@@ -74,6 +74,13 @@ def _pre_migration_db(include_tool_summary=False):
             branch_id INTEGER, message_id INTEGER, PRIMARY KEY (branch_id, message_id)
         )
     """)
+    conn.execute("""
+        CREATE TABLE import_log (
+            id INTEGER PRIMARY KEY, file_path TEXT UNIQUE NOT NULL,
+            file_hash TEXT, imported_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            messages_imported INTEGER DEFAULT 0
+        )
+    """)
     conn.commit()
     return conn
 
@@ -181,6 +188,13 @@ def _versioned_db(user_version=0, include_is_notification=True):
             branch_id INTEGER, message_id INTEGER, PRIMARY KEY (branch_id, message_id)
         )
     """)
+    conn.execute("""
+        CREATE TABLE import_log (
+            id INTEGER PRIMARY KEY, file_path TEXT UNIQUE NOT NULL,
+            file_hash TEXT, imported_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            messages_imported INTEGER DEFAULT 0
+        )
+    """)
     conn.execute(f"PRAGMA user_version = {user_version}")
     conn.commit()
     return conn
@@ -188,11 +202,11 @@ def _versioned_db(user_version=0, include_is_notification=True):
 
 class TestVersionedMigration:
     def test_fresh_db_gets_latest_version(self):
-        """A fresh DB (no columns, version 0) should end up at user_version = 2."""
+        """A fresh DB (no columns, version 0) should end up at user_version = 3."""
         conn = _pre_migration_db()
         _migrate_columns(conn)
         version = conn.execute("PRAGMA user_version").fetchone()[0]
-        assert version == 2
+        assert version == 3
         conn.close()
 
     def test_v0_to_v2_backfills_both(self):
@@ -211,7 +225,7 @@ class TestVersionedMigration:
         assert rows[0] == (1, 0)
         assert rows[1] == (2, 1)
         assert rows[2] == (3, 1)
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 3
         conn.close()
 
     def test_v1_to_v2_backfills_only_teammate(self):
@@ -231,22 +245,85 @@ class TestVersionedMigration:
         assert rows[0] == (1, 1)  # Already flagged, untouched
         assert rows[1] == (2, 1)  # Newly flagged by version 2
         assert rows[2] == (3, 0)  # Normal, untouched
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 3
         conn.close()
 
-    def test_v2_skips_all_migrations(self):
-        """From version 2, no migrations run."""
+    def test_v2_skips_data_backfills(self):
+        """From version 2, data backfills (v1, v2) do not re-run; v3 origin backfill runs."""
         conn = _versioned_db(user_version=2)
         conn.execute("INSERT INTO messages (id, session_id, role, content, is_notification) VALUES (1, 1, 'user', '<teammate-message>should stay 0</teammate-message>', 0)")
         conn.commit()
 
         _migrate_columns(conn)
 
-        # Should NOT have been flagged (migration already ran)
+        # Teammate message should NOT have been re-flagged (v2 backfill already ran)
         cursor = conn.cursor()
         cursor.execute("SELECT is_notification FROM messages WHERE id = 1")
         assert cursor.fetchone()[0] == 0
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
+        # v3 migration runs from v2, bumping version to 3
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 3
+        conn.close()
+
+    def test_v2_to_v3_preserves_import_log(self):
+        """v3 migration does selective backfill, not wholesale import_log clear."""
+        conn = _versioned_db(user_version=2)
+        conn.execute("INSERT INTO import_log (file_path, file_hash) VALUES ('/nonexistent/session.jsonl', 'abc123')")
+        conn.commit()
+
+        _migrate_columns(conn)
+
+        # import_log row preserved (file doesn't exist, so backfill skips it)
+        count = conn.execute("SELECT COUNT(*) FROM import_log").fetchone()[0]
+        assert count == 1
+        hash_val = conn.execute("SELECT file_hash FROM import_log").fetchone()[0]
+        assert hash_val == "abc123"
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 3
+        conn.close()
+
+    def test_v3_backfill_updates_origin(self, tmp_path):
+        """v3 migration backfills origin from JSONL for existing messages."""
+        conn = _versioned_db(user_version=2)
+        # Create a session and message
+        conn.execute("CREATE TABLE sessions (id INTEGER PRIMARY KEY, uuid TEXT UNIQUE, project_id INTEGER, parent_session_id INTEGER, git_branch TEXT, cwd TEXT)")
+        conn.execute("INSERT INTO sessions (id, uuid) VALUES (1, 'test-uuid')")
+        conn.execute("INSERT INTO messages (id, session_id, uuid, role, content, is_notification) VALUES (1, 1, 'msg-uuid-1', 'user', 'Hello from Telegram', 0)")
+
+        # Create a JSONL file with origin data
+        jsonl_file = tmp_path / "test-uuid.jsonl"
+        import json
+        jsonl_file.write_text(
+            json.dumps({"type": "user", "uuid": "msg-uuid-1", "origin": {"kind": "channel", "server": "plugin:telegram:telegram"}}) + "\n"
+        )
+        conn.execute("INSERT INTO import_log (file_path, file_hash) VALUES (?, 'abc')", (str(jsonl_file),))
+        conn.commit()
+
+        _migrate_columns(conn)
+
+        origin = conn.execute("SELECT origin FROM messages WHERE id = 1").fetchone()[0]
+        assert origin == "telegram"
+        conn.close()
+
+    def test_v3_backfill_nullifies_hash_for_channel_sessions(self, tmp_path):
+        """v3 migration nullifies file_hash for sessions with isMeta+origin channel messages."""
+        conn = _versioned_db(user_version=2)
+        conn.execute("CREATE TABLE sessions (id INTEGER PRIMARY KEY, uuid TEXT UNIQUE, project_id INTEGER, parent_session_id INTEGER, git_branch TEXT, cwd TEXT)")
+        conn.execute("INSERT INTO sessions (id, uuid) VALUES (1, 'chan-uuid')")
+
+        # Create JSONL with an isMeta+origin entry (channel message previously filtered)
+        jsonl_file = tmp_path / "chan-uuid.jsonl"
+        import json
+        lines = [
+            json.dumps({"type": "user", "uuid": "u1", "message": {"content": "hi"}}),
+            json.dumps({"isMeta": True, "type": "user", "uuid": "u2", "origin": {"kind": "channel", "server": "plugin:telegram:telegram"}, "message": {"content": "channel msg"}}),
+        ]
+        jsonl_file.write_text("\n".join(lines) + "\n")
+        conn.execute("INSERT INTO import_log (file_path, file_hash) VALUES (?, 'original')", (str(jsonl_file),))
+        conn.commit()
+
+        _migrate_columns(conn)
+
+        hash_val = conn.execute("SELECT file_hash FROM import_log").fetchone()[0]
+        assert hash_val is None  # Nullified to trigger reimport of this session
         conn.close()
 
 

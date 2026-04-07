@@ -43,6 +43,7 @@ def extract_text_content(content) -> tuple[str, bool, bool, str | None]:
         text = re.sub(r'<command-message>.*?</command-message>', '', text, flags=re.DOTALL)
         text = re.sub(r'<command-args>.*?</command-args>', '', text, flags=re.DOTALL)
         text = re.sub(r'<local-command-stdout>.*?</local-command-stdout>', '', text, flags=re.DOTALL)
+        text = re.sub(r'<channel\b[^>]*>\n?([\s\S]*?)\n?</channel>', r'\1', text, flags=re.DOTALL)
         return text.strip(), False, False, None
 
     if isinstance(content, list):
@@ -63,6 +64,19 @@ def extract_text_content(content) -> tuple[str, bool, bool, str | None]:
         return "\n".join(texts).strip(), has_tool_use, has_thinking, tool_summary
 
     return "", False, False, None
+
+
+def parse_origin(entry: dict) -> str | None:
+    """Extract clean platform name from origin.server (e.g. 'telegram' from 'plugin:telegram:telegram')."""
+    origin = entry.get("origin")
+    if not origin or not isinstance(origin, dict):
+        return None
+    server = origin.get("server") or ""
+    # Pattern: "plugin:telegram:telegram" -> "telegram"
+    parts = server.split(":")
+    if len(parts) >= 2 and parts[1]:
+        return parts[1]
+    return origin.get("kind")
 
 
 def is_task_notification(content) -> bool:

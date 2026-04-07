@@ -38,6 +38,22 @@ def _ensure_schema() -> None:
         pass
 
 
+def _needs_reimport() -> bool:
+    """Check if any import_log entries have NULL file_hash (set by v3 migration for channel sessions)."""
+    try:
+        import sqlite3
+        conn = sqlite3.connect(str(DEFAULT_DB_PATH))
+        conn.execute("PRAGMA journal_mode = WAL")
+        conn.execute("PRAGMA busy_timeout = 2000")
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM import_log WHERE file_hash IS NULL")
+        count = cursor.fetchone()[0]
+        conn.close()
+        return count > 0
+    except Exception:
+        return False
+
+
 def _needs_backfill() -> bool:
     """Check if any branches need summary backfill. Returns False on any error."""
     try:
@@ -72,6 +88,10 @@ def main():
             _spawn_background("import_conversations.py")
         else:
             _ensure_schema()
+            # v3 migration nullifies file_hash for sessions with channel messages;
+            # trigger reimport to re-process those sessions with the new parser
+            if _needs_reimport():
+                _spawn_background("import_conversations.py")
 
         if _needs_backfill():
             _spawn_background("backfill_summaries.py")

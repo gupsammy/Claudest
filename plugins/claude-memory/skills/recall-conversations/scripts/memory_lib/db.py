@@ -87,6 +87,7 @@ CREATE TABLE IF NOT EXISTS messages (
   has_tool_use INTEGER DEFAULT 0,
   has_thinking INTEGER DEFAULT 0,
   is_notification INTEGER DEFAULT 0,
+  origin TEXT,
   UNIQUE(session_id, uuid)
 );
 CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id);
@@ -317,6 +318,9 @@ def _migrate_columns(conn: sqlite3.Connection) -> None:
     if "is_notification" not in existing:
         cursor.execute("ALTER TABLE messages ADD COLUMN is_notification INTEGER DEFAULT 0")
         conn.commit()
+    if "origin" not in existing:
+        cursor.execute("ALTER TABLE messages ADD COLUMN origin TEXT")
+        conn.commit()
 
     # branches DDL migration
     cursor.execute("PRAGMA table_info(branches)")
@@ -398,6 +402,96 @@ CREATE INDEX IF NOT EXISTS idx_token_snapshots_start ON token_snapshots(start_ti
         _reaggregate_notification_branches(cursor)
         conn.execute("PRAGMA user_version = 2")
         conn.commit()
+
+    if version < 3:
+        # v0.8.0: Selective backfill of origin column from JSONL files.
+        # Phase 1: UPDATE existing messages with origin data.
+        # Phase 2: Nullify file_hash for sessions with channel messages
+        #          (isMeta+origin entries previously filtered) so the next
+        #          normal import re-processes just those sessions.
+        _backfill_origin(conn, cursor)
+        conn.execute("PRAGMA user_version = 3")
+        conn.commit()
+
+
+def _backfill_origin(conn: sqlite3.Connection, cursor: sqlite3.Cursor) -> None:
+    """Selectively backfill origin column from JSONL files without full reimport.
+
+    Phase 1: For each file in import_log, scan for entries with origin fields
+    and UPDATE existing message rows by session_id + uuid.
+
+    Phase 2: For files containing isMeta+origin entries (channel messages that
+    were previously filtered by the parser), nullify file_hash so the next
+    normal import re-processes just those sessions via the standard pipeline.
+    """
+    import json
+    from memory_lib.content import parse_origin
+
+    # Guard: sessions table may not exist in minimal test DBs
+    tables = {r[0] for r in cursor.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+    if "sessions" not in tables or "import_log" not in tables:
+        return
+
+    # Build file_path -> session mapping from import_log + sessions
+    # The file stem (minus .jsonl and optional agent- prefix) is the session uuid
+    file_session_map = {}
+    all_import_rows = cursor.execute("SELECT file_path FROM import_log").fetchall()
+    for (file_path,) in all_import_rows:
+        p = Path(file_path)
+        stem = p.stem
+        if stem.startswith("agent-"):
+            stem = stem[6:]
+        row = cursor.execute(
+            "SELECT id FROM sessions WHERE uuid = ?", (stem,)
+        ).fetchone()
+        if row:
+            file_session_map[file_path] = row[0]
+
+    for file_path, session_id in file_session_map.items():
+        p = Path(file_path)
+        if not p.exists():
+            continue
+
+        has_channel_messages = False
+        try:
+            with open(p, "r", encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        obj = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+
+                    origin = obj.get("origin")
+                    if not origin:
+                        continue
+
+                    # Phase 2 detection: isMeta entries with origin were previously skipped
+                    if obj.get("isMeta"):
+                        has_channel_messages = True
+
+                    # Phase 1: UPDATE origin for existing messages
+                    uuid = obj.get("uuid")
+                    if uuid and obj.get("type") in ("user", "assistant"):
+                        origin_value = parse_origin(obj)
+                        if origin_value:
+                            cursor.execute(
+                                "UPDATE messages SET origin = ? WHERE session_id = ? AND uuid = ?",
+                                (origin_value, session_id, uuid)
+                            )
+        except OSError:
+            continue
+
+        # Phase 2: Nullify hash so next import re-processes this session
+        if has_channel_messages:
+            cursor.execute(
+                "UPDATE import_log SET file_hash = NULL WHERE file_path = ?",
+                (file_path,)
+            )
+
+    conn.commit()
 
 
 def _migrate_project_paths(conn: sqlite3.Connection) -> None:

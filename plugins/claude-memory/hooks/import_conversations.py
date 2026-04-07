@@ -26,7 +26,7 @@ from memory_lib.db import (
     DEFAULT_DB_PATH, DEFAULT_PROJECTS_DIR, get_db_path,
     get_db_connection, load_settings, setup_logging, detect_fts_support,
 )
-from memory_lib.content import extract_text_content, is_task_notification, is_teammate_message, is_tool_result, sanitize_fts_term
+from memory_lib.content import extract_text_content, is_task_notification, is_teammate_message, is_tool_result, sanitize_fts_term, parse_origin
 from memory_lib.parsing import (
     parse_jsonl_file, parse_all_with_uuids, extract_session_metadata,
     find_all_branches, compute_branch_metadata, aggregate_branch_content,
@@ -130,9 +130,11 @@ def import_session(
         if not text:
             continue
 
+        origin = parse_origin(entry)
+
         cursor.execute("""
-            INSERT INTO messages (session_id, uuid, parent_uuid, timestamp, role, content, tool_summary, has_tool_use, has_thinking, is_notification)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO messages (session_id, uuid, parent_uuid, timestamp, role, content, tool_summary, has_tool_use, has_thinking, is_notification, origin)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(session_id, uuid) DO NOTHING
         """, (
             session_id,
@@ -145,6 +147,7 @@ def import_session(
             has_tool_use,
             has_thinking,
             notification,
+            origin,
         ))
         if cursor.rowcount > 0:
             total_messages += 1

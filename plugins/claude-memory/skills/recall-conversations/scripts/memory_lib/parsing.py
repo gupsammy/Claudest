@@ -28,7 +28,7 @@ def parse_jsonl_file(filepath: Path) -> Generator[dict, None, None]:
                 continue
             try:
                 obj = json.loads(line)
-                if obj.get("isMeta"):
+                if obj.get("isMeta") and not obj.get("origin"):
                     continue
                 if obj.get("type") in ("user", "assistant"):
                     yield obj

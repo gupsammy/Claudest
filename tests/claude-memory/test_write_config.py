@@ -100,6 +100,24 @@ class TestWriteConfigDefaults:
                     "consolidation_min_hours", "consolidation_min_sessions"):
             assert key in result, f"Expected key '{key}' in config output"
 
+    def test_defaults_resets_auto_inject_context_when_existing_config_has_it_false(
+        self, tmp_path, monkeypatch
+    ):
+        """--defaults must ignore existing config and restore auto_inject_context to True.
+
+        Without the fix, a user who previously set auto_inject_context=false then
+        re-ran onboarding with --defaults would keep false — defeating the intent
+        of --defaults being a clean reset to recommended values.
+        """
+        cfg = tmp_path / "config.json"
+        cfg.write_text(json.dumps({"auto_inject_context": False, "onboarding_completed": True}))
+        _patch_config_path(monkeypatch, cfg)
+
+        _run_main(["--defaults"])
+
+        result = json.loads(cfg.read_text())
+        assert result["auto_inject_context"] is True
+
 
 class TestWriteConfigNonDictExistingConfig:
     def test_non_dict_existing_config_is_discarded(self, tmp_path, monkeypatch):

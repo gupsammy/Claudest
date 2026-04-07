@@ -58,9 +58,10 @@ def main():
     )
     args = parser.parse_args()
 
-    # Load existing config or start from defaults
+    # Load existing config or start from defaults.
+    # Skip merge when --defaults is set so it always writes DEFAULT_CONFIG as-is.
     config = DEFAULT_CONFIG.copy()
-    if CONFIG_PATH.exists():
+    if CONFIG_PATH.exists() and not args.defaults:
         try:
             existing = json.loads(CONFIG_PATH.read_text())
             if isinstance(existing, dict):
@@ -68,7 +69,7 @@ def main():
         except Exception:
             pass
 
-    # Apply CLI arguments (skip if --defaults, which uses DEFAULT_CONFIG as-is)
+    # Apply CLI arguments (only reached when --defaults is not set)
     if not args.defaults:
         if args.auto_inject_context is not None:
             config["auto_inject_context"] = args.auto_inject_context == "true"

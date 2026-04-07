@@ -112,6 +112,7 @@ def fetch_inline_comments(pr_number: int, repo: str | None) -> list[dict]:
             "created_at": c["created_at"],
             "url": c.get("html_url", ""),
             "in_reply_to_id": c.get("in_reply_to_id"),
+            "commit_id": c.get("commit_id", ""),
         }
         for c in items
         if c.get("position") is not None
@@ -265,6 +266,10 @@ def build_result(pr_number: int, repo: str | None) -> dict:
     reviews = fetch_reviews(pr_number, repo)
     inline_comments = fetch_inline_comments(pr_number, repo)
 
+    prefix = _api_prefix(repo)
+    pr_meta = run_gh(["api", f"{prefix}/pulls/{pr_number}", "--jq", ".head.sha"])
+    head_sha = pr_meta.strip() if pr_meta else ""
+
     all_comments = issue_comments + reviews + inline_comments
 
     human_comments = [c for c in all_comments if not c["is_bot"]]
@@ -318,12 +323,14 @@ def build_result(pr_number: int, repo: str | None) -> dict:
         severity = classify_inline_comment(c["body"])
         if severity:
             location = f"`{c['path']}:{c.get('line', '?')}`"
+            stale = bool(head_sha and c.get("commit_id") and c["commit_id"] != head_sha)
             actionable[severity].append({
                 "source_user": c["user"],
                 "content": f"{location} — {c['body']}",
                 "source_type": "inline_comment",
                 "path": c["path"],
                 "line": c.get("line"),
+                "stale": stale,
             })
 
     # Deduplicate across review rounds
@@ -383,13 +390,15 @@ def format_text(result: dict) -> str:
     if must_fix:
         lines.append("\n== MUST FIX ==")
         for item in must_fix:
-            lines.append(f"\n@{item['source_user']}:")
+            stale_tag = " [against older commit]" if item.get("stale") else ""
+            lines.append(f"\n@{item['source_user']}:{stale_tag}")
             lines.append(item["content"])
 
     if optional:
         lines.append("\n== OPTIONAL ==")
         for item in optional:
-            lines.append(f"\n@{item['source_user']}:")
+            stale_tag = " [against older commit]" if item.get("stale") else ""
+            lines.append(f"\n@{item['source_user']}:{stale_tag}")
             lines.append(item["content"])
 
     # Human comments — full bodies, compact headers

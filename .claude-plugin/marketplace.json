@@ -32,7 +32,7 @@
     {
       "name": "claude-coding",
       "description": "Coding workflow skills: intelligent commits, push & PR, branch cleanup, CLAUDE.md maintenance, README generation, changelog creation, README updating, and GitHub Actions setup",
-      "version": "0.2.24",
+      "version": "0.2.25",
       "source": "./plugins/claude-coding"
     },
     {

@@ -32,11 +32,11 @@ Run the candidate detection script, passing the optional pattern filter:
 ```bash
 bash ${CLAUDE_PLUGIN_ROOT}/skills/clean-branches/scripts/find-candidates.sh "$PATTERN"
 ```
-The script outputs two labeled sections (`=== MERGED ===` and `=== STALE ===`), one branch per line. Parse each section into its own list.
+The script outputs two labeled sections (`=== MERGED ===` and `=== STALE ===`), one branch per line. Merged branches checked out in a worktree are annotated: `branch-name [worktree:/path/to/wt]`. Parse each section into its own list, preserving the worktree annotation for use in Step 5.
 
 **3. Present results**
 
-Display branches in three groups: merged (safe to delete), stale (no recent commits), and protected (never touch). If both candidate lists are empty, report "No branches to clean" and stop — do not proceed to Step 4.
+Display branches in three groups: merged (safe to delete), stale (no recent commits), and protected (never touch). If a merged branch carries a worktree annotation, note it with "(active worktree — will be removed first)" so the user understands what will happen. If both candidate lists are empty, report "No branches to clean" and stop — do not proceed to Step 4.
 
 **4. Confirm before deletion**
 
@@ -50,17 +50,25 @@ Never proceed to deletion without explicit user confirmation through AskUserQues
 
 **5. Execute deletion**
 
-Delete only what the user confirmed:
-```bash
-git branch -d <branch-name>
-```
-Use `-d` (not `-D`) because `-d` refuses to delete branches with unmerged commits — git itself enforces the safety check.
+Delete only what the user confirmed. For each branch:
 
-If the user explicitly requests remote cleanup:
-```bash
-git push origin --delete <branch-name>
-```
-Remote deletion requires explicit user request — never delete remotes unless the user says so directly.
+1. If the branch has a `[worktree:/path]` annotation, remove the worktree first:
+   ```bash
+   git worktree remove /path/to/wt
+   ```
+   If the worktree has uncommitted changes, `git worktree remove` will refuse — report the error and skip that branch rather than force-removing.
+
+2. Then delete the branch:
+   ```bash
+   git branch -d <branch-name>
+   ```
+   Use `-d` (not `-D`) — git refuses to delete branches with unmerged commits.
+
+3. If the user explicitly requests remote cleanup:
+   ```bash
+   git push origin --delete <branch-name>
+   ```
+   Remote deletion requires explicit user request — never delete remotes unless the user says so directly.
 
 ## Safety Rules
 

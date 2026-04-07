@@ -461,7 +461,7 @@ CREATE INDEX IF NOT EXISTS idx_token_snapshots_start ON token_snapshots(start_ti
 
 def _backup_db_before_migration(db_path: Path, label: str) -> None:
     """Create a timestamped backup of the DB before a destructive migration."""
-    if not db_path.exists():
+    if not db_path.name or not db_path.exists():
         return
     ts = time.strftime("%Y%m%d-%H%M%S")
     backup_path = db_path.with_suffix(f".pre-{label}-{ts}.db")

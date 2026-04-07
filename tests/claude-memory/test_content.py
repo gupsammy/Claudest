@@ -343,10 +343,12 @@ class TestParseOrigin:
         entry = {"origin": {}}
         assert parse_origin(entry) is None
 
-    def test_fallback_to_kind(self):
+    def test_no_fallback_to_kind_bare_server(self):
+        # server without plugin: prefix has no extractable platform name
         entry = {"origin": {"kind": "channel", "server": "custom"}}
-        assert parse_origin(entry) == "channel"
+        assert parse_origin(entry) is None
 
     def test_origin_no_server(self):
+        # kind fallback was removed (it leaked task-notification into origin)
         entry = {"origin": {"kind": "webhook"}}
-        assert parse_origin(entry) == "webhook"
+        assert parse_origin(entry) is None

@@ -2,15 +2,20 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import tempfile
 from pathlib import Path
 
+import pytest
+
 from memory_lib.db import (
+    CURRENT_ONBOARDING_VERSION,
     DEFAULT_SETTINGS,
     SCHEMA,
     _migrate_columns,
     _migrate_project_paths,
+    load_config,
     load_settings,
     migrate_db,
 )
@@ -202,11 +207,11 @@ def _versioned_db(user_version=0, include_is_notification=True):
 
 class TestVersionedMigration:
     def test_fresh_db_gets_latest_version(self):
-        """A fresh DB (no columns, version 0) should end up at user_version = 3."""
+        """A fresh DB (no columns, version 0) should end up at the latest user_version."""
         conn = _pre_migration_db()
         _migrate_columns(conn)
         version = conn.execute("PRAGMA user_version").fetchone()[0]
-        assert version == 3
+        assert version == 4
         conn.close()
 
     def test_v0_to_v2_backfills_both(self):
@@ -225,7 +230,7 @@ class TestVersionedMigration:
         assert rows[0] == (1, 0)
         assert rows[1] == (2, 1)
         assert rows[2] == (3, 1)
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 3
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 4
         conn.close()
 
     def test_v1_to_v2_backfills_only_teammate(self):
@@ -245,7 +250,7 @@ class TestVersionedMigration:
         assert rows[0] == (1, 1)  # Already flagged, untouched
         assert rows[1] == (2, 1)  # Newly flagged by version 2
         assert rows[2] == (3, 0)  # Normal, untouched
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 3
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 4
         conn.close()
 
     def test_v2_skips_data_backfills(self):
@@ -261,7 +266,7 @@ class TestVersionedMigration:
         cursor.execute("SELECT is_notification FROM messages WHERE id = 1")
         assert cursor.fetchone()[0] == 0
         # v3 migration runs from v2, bumping version to 3
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 3
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 4
         conn.close()
 
     def test_v2_to_v3_preserves_import_log(self):
@@ -277,7 +282,7 @@ class TestVersionedMigration:
         assert count == 1
         hash_val = conn.execute("SELECT file_hash FROM import_log").fetchone()[0]
         assert hash_val == "abc123"
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 3
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 4
         conn.close()
 
     def test_v3_backfill_updates_origin(self, tmp_path):
@@ -328,8 +333,10 @@ class TestVersionedMigration:
 
 
 class TestLoadSettings:
-    def test_always_returns_defaults(self):
-        """load_settings always returns hardcoded defaults (YAML was removed)."""
+    def test_always_returns_defaults(self, tmp_path, monkeypatch):
+        """load_settings returns hardcoded defaults when no config file exists."""
+        import memory_lib.db as db_module
+        monkeypatch.setattr(db_module, "CONFIG_PATH", tmp_path / "no_config.json")
         settings = load_settings()
         assert settings == DEFAULT_SETTINGS
 
@@ -589,3 +596,191 @@ class TestMigrateProjectPaths:
         cursor.execute("SELECT path FROM projects WHERE id = ?", (proj_id,))
         assert cursor.fetchone()[0] == "/Users/foo/repos/meta/ads/cli"
         conn.close()
+
+
+def _v3_db_with_messages():
+    """Create an in-memory DB at user_version=3 with sample messages for v4 migration tests."""
+    conn = sqlite3.connect(":memory:")
+    conn.execute("""
+        CREATE TABLE messages (
+            id INTEGER PRIMARY KEY, session_id INTEGER, uuid TEXT,
+            parent_uuid TEXT, timestamp DATETIME, role TEXT,
+            content TEXT NOT NULL, tool_summary TEXT,
+            has_tool_use INTEGER DEFAULT 0, has_thinking INTEGER DEFAULT 0,
+            is_notification INTEGER DEFAULT 0, origin TEXT,
+            UNIQUE(session_id, uuid)
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE branches (
+            id INTEGER PRIMARY KEY, session_id INTEGER, leaf_uuid TEXT,
+            fork_point_uuid TEXT, is_active INTEGER DEFAULT 1,
+            started_at DATETIME, ended_at DATETIME, exchange_count INTEGER DEFAULT 0,
+            files_modified TEXT, commits TEXT, aggregated_content TEXT,
+            tool_counts TEXT, context_summary TEXT, context_summary_json TEXT,
+            summary_version INTEGER DEFAULT 0
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE branch_messages (
+            branch_id INTEGER, message_id INTEGER, PRIMARY KEY (branch_id, message_id)
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE import_log (
+            id INTEGER PRIMARY KEY, file_path TEXT UNIQUE NOT NULL,
+            file_hash TEXT, imported_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            messages_imported INTEGER DEFAULT 0
+        )
+    """)
+    conn.execute("PRAGMA user_version = 3")
+    conn.commit()
+    return conn
+
+
+class TestV4Migration:
+    """user_version=3 -> 4: clear stale task-notification values from origin column."""
+
+    def test_v4_bumps_user_version(self):
+        """After migration from v3, user_version should be 4."""
+        conn = _v3_db_with_messages()
+        _migrate_columns(conn)
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 4
+        conn.close()
+
+    def test_v4_clears_task_notification_origin(self):
+        """Rows with origin='task-notification' are set to NULL — parse_origin kind-fallback bug fix."""
+        conn = _v3_db_with_messages()
+        conn.execute("INSERT INTO messages (id, session_id, role, content, origin) VALUES (1, 1, 'user', 'hello', 'task-notification')")
+        conn.execute("INSERT INTO messages (id, session_id, role, content, origin) VALUES (2, 1, 'user', 'telegram msg', 'telegram')")
+        conn.execute("INSERT INTO messages (id, session_id, role, content, origin) VALUES (3, 1, 'user', 'no origin', NULL)")
+        conn.commit()
+
+        _migrate_columns(conn)
+
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, origin FROM messages ORDER BY id")
+        rows = {row[0]: row[1] for row in cursor.fetchall()}
+        assert rows[1] is None, "task-notification origin should be cleared to NULL"
+        assert rows[2] == "telegram", "non-task-notification origin must be preserved"
+        assert rows[3] is None, "already-NULL origin must remain NULL"
+        conn.close()
+
+    def test_v4_idempotent(self):
+        """Re-running _migrate_columns on a v4 DB is a safe no-op."""
+        conn = _v3_db_with_messages()
+        conn.execute("INSERT INTO messages (id, session_id, role, content, origin) VALUES (1, 1, 'user', 'hello', 'telegram')")
+        conn.commit()
+
+        _migrate_columns(conn)  # v3->v4
+        _migrate_columns(conn)  # no-op
+
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 4
+        origin = conn.execute("SELECT origin FROM messages WHERE id = 1").fetchone()[0]
+        assert origin == "telegram", "idempotent re-run must not corrupt already-correct data"
+        conn.close()
+
+    def test_v4_skips_when_already_v4(self):
+        """If user_version is already 4, the UPDATE must not run again."""
+        conn = _v3_db_with_messages()
+        # Pre-set to v4 with a 'task-notification' origin to confirm the DML is skipped
+        conn.execute("INSERT INTO messages (id, session_id, role, content, origin) VALUES (1, 1, 'user', 'hello', 'task-notification')")
+        conn.execute("PRAGMA user_version = 4")
+        conn.commit()
+
+        _migrate_columns(conn)
+
+        # Because we're already at v4 the DML block is skipped — the value stays
+        origin = conn.execute("SELECT origin FROM messages WHERE id = 1").fetchone()[0]
+        assert origin == "task-notification", "DML should not re-run on a v4 DB"
+        conn.close()
+
+
+class TestLoadConfig:
+    """load_config() must guard against malformed JSON written to CONFIG_PATH."""
+
+    def test_returns_dict_for_valid_config(self, tmp_path, monkeypatch):
+        """A well-formed JSON object is returned as-is."""
+        cfg = tmp_path / "config.json"
+        cfg.write_text(json.dumps({"auto_inject_context": False, "onboarding_completed": True}))
+        monkeypatch.setattr("memory_lib.db.CONFIG_PATH", cfg)
+
+        result = load_config()
+        assert result == {"auto_inject_context": False, "onboarding_completed": True}
+
+    def test_returns_empty_dict_for_json_array(self, tmp_path, monkeypatch):
+        """A JSON array (not a dict) must return {} — prevents callers from crashing on .get()."""
+        cfg = tmp_path / "config.json"
+        cfg.write_text(json.dumps([1, 2, 3]))
+        monkeypatch.setattr("memory_lib.db.CONFIG_PATH", cfg)
+
+        assert load_config() == {}
+
+    def test_returns_empty_dict_for_json_string(self, tmp_path, monkeypatch):
+        """A JSON string must return {} — not a dict, should not propagate."""
+        cfg = tmp_path / "config.json"
+        cfg.write_text(json.dumps("hello"))
+        monkeypatch.setattr("memory_lib.db.CONFIG_PATH", cfg)
+
+        assert load_config() == {}
+
+    def test_returns_empty_dict_for_json_null(self, tmp_path, monkeypatch):
+        """JSON null must return {} — null is not a valid settings container."""
+        cfg = tmp_path / "config.json"
+        cfg.write_text("null")
+        monkeypatch.setattr("memory_lib.db.CONFIG_PATH", cfg)
+
+        assert load_config() == {}
+
+    def test_returns_empty_dict_for_missing_file(self, tmp_path, monkeypatch):
+        """Missing config file returns {} without raising."""
+        monkeypatch.setattr("memory_lib.db.CONFIG_PATH", tmp_path / "nonexistent.json")
+
+        assert load_config() == {}
+
+    def test_returns_empty_dict_for_invalid_json(self, tmp_path, monkeypatch):
+        """Corrupt JSON returns {} without raising."""
+        cfg = tmp_path / "config.json"
+        cfg.write_text("{bad json}")
+        monkeypatch.setattr("memory_lib.db.CONFIG_PATH", cfg)
+
+        assert load_config() == {}
+
+
+class TestLoadSettingsWithConfig:
+    """load_settings() must stay safe when config.json contains non-dict JSON."""
+
+    def test_non_dict_config_returns_defaults(self, tmp_path, monkeypatch):
+        """load_settings() returns DEFAULT_SETTINGS when config.json is a JSON array."""
+        cfg = tmp_path / "config.json"
+        cfg.write_text(json.dumps([]))
+        monkeypatch.setattr("memory_lib.db.CONFIG_PATH", cfg)
+
+        result = load_settings()
+        assert result == DEFAULT_SETTINGS
+
+    def test_config_overrides_applied(self, tmp_path, monkeypatch):
+        """Valid config keys are merged into defaults."""
+        cfg = tmp_path / "config.json"
+        cfg.write_text(json.dumps({"auto_inject_context": False, "max_context_sessions": 5}))
+        monkeypatch.setattr("memory_lib.db.CONFIG_PATH", cfg)
+
+        result = load_settings()
+        assert result["auto_inject_context"] is False
+        assert result["max_context_sessions"] == 5
+        assert result["logging_enabled"] is False  # unchanged default
+
+    def test_missing_config_returns_defaults(self, tmp_path, monkeypatch):
+        """load_settings() returns DEFAULT_SETTINGS when config.json does not exist."""
+        monkeypatch.setattr("memory_lib.db.CONFIG_PATH", tmp_path / "nonexistent.json")
+
+        result = load_settings()
+        assert result == DEFAULT_SETTINGS
+
+
+class TestCurrentOnboardingVersion:
+    """Import contract: CURRENT_ONBOARDING_VERSION must exist and equal 1."""
+
+    def test_value_is_one(self):
+        """Both write_config and onboarding.py depend on this being 1."""
+        assert CURRENT_ONBOARDING_VERSION == 1

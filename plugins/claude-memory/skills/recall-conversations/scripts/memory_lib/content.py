@@ -74,7 +74,7 @@ def parse_origin(entry: dict) -> str | None:
     server = origin.get("server", "")
     # Pattern: "plugin:telegram:telegram" -> "telegram"
     parts = server.split(":")
-    if len(parts) >= 2:
+    if len(parts) >= 2 and parts[1]:
         return parts[1]
     return origin.get("kind")
 

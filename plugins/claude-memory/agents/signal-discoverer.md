@@ -13,6 +13,7 @@ tools:
   - Glob
   - Bash(python3:*)
   - Bash(git:*)
+  - Bash(find:*)
 maxTurns: 35
 ---
 

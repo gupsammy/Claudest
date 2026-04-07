@@ -12,6 +12,7 @@ allowed-tools:
   - Grep
   - Bash(python3:*)
   - Bash(git:*)
+  - Bash(find:*)
   - Bash(date:*)
   - AskUserQuestion
   - Agent
@@ -51,7 +52,8 @@ If the user said "remember X" with explicit content already in context — and t
 
 1. Resolve memory path using Bash (Glob does not expand `~`):
    `Bash: find $HOME/.claude/projects -name MEMORY.md -path "*<repo-dir-name>*" 2>/dev/null | head -1`
-   Use the result as the memory directory. If no result, construct the path as `$HOME/.claude/projects/-Users-<username>-<repo-path>/memory/MEMORY.md` based on the current working directory.
+   The result is the full path to MEMORY.md (a file). The memory directory is its parent: `$(dirname <find-result>)`.
+   If no result, construct the project key by replacing `/` with `-` in the current working directory path (e.g., `/home/user/myrepo` → `-home-user-myrepo`), then use `$HOME/.claude/projects/<project-key>/memory/MEMORY.md`.
    - If MEMORY.md does not exist, create it with `# Project Memory` header. Note that the Memory Auditor has nothing to audit — in Phase 2, spawn only the Signal Discoverer.
 
 Steps 2-4 are required and run as parallel tool calls.

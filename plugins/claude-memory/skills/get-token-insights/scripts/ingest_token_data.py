@@ -401,7 +401,7 @@ def parse_session(filepath: Path, jnl: JnlFile) -> ParsedSession | None:
     metadata_captured = False
 
     try:
-        lines = filepath.read_text().splitlines()
+        lines = filepath.read_text(encoding="utf-8").splitlines()
     except Exception:
         return None
 
@@ -2129,13 +2129,13 @@ def _insights_to_recommendations(insights: list[dict]) -> list[dict]:
 
 def deploy_dashboard(json_str: str) -> None:
     try:
-        html = DASHBOARD_TEMPLATE_PATH.read_text()
+        html = DASHBOARD_TEMPLATE_PATH.read_text(encoding="utf-8")
         html = html.replace(
             "/* __INLINE_DATA_PLACEHOLDER__ */",
             f"const _INLINE_DATA = {json_str};",
             1,
         )
-        DASHBOARD_OUT_PATH.write_text(html)
+        DASHBOARD_OUT_PATH.write_text(html, encoding="utf-8")
     except Exception as e:
         print(f"Warning: could not deploy dashboard: {e}", file=sys.stderr)
 

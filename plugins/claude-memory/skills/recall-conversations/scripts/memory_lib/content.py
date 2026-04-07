@@ -72,11 +72,13 @@ def parse_origin(entry: dict) -> str | None:
     if not origin or not isinstance(origin, dict):
         return None
     server = origin.get("server") or ""
+    if not server:
+        return None
     # Pattern: "plugin:telegram:telegram" -> "telegram"
     parts = server.split(":")
     if len(parts) >= 2 and parts[1]:
         return parts[1]
-    return origin.get("kind")
+    return None
 
 
 def is_task_notification(content) -> bool:

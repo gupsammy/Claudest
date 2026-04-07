@@ -1,6 +1,6 @@
 {
   "name": "claude-coding",
-  "version": "0.2.23",
+  "version": "0.2.24",
   "description": "Coding workflow skills: intelligent commits, push & PR, branch cleanup, CLAUDE.md maintenance, README generation, changelog creation, README updating, and GitHub Actions setup",
   "author": {
     "name": "Samarth Gupta"

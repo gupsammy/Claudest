@@ -67,17 +67,24 @@ Otherwise, relay the script output directly. The output is structured as:
 actionable items (must-fix, optional) first, then human comments, then bot
 comments (truncated). Do not reformat or reparse — present as-is.
 
-If must-fix items are listed, fetch the latest issue-level comment to check
-whether a subsequent review already resolved them:
+If must-fix items are listed, check whether a subsequent review already
+resolved them by querying both issue comments and formal PR reviews:
 
 ```bash
-gh api repos/{owner}/{repo}/issues/<PR_NUMBER>/comments --jq '.[-1].body'
+# Latest issue-level comment (paginated — PRs may exceed 30 comments):
+gh api repos/{owner}/{repo}/issues/<PR_NUMBER>/comments --paginate --slurp \
+  --jq '.[-1][-1].body'
+
+# Latest formal PR review body (approvals and review-body sign-offs land here,
+# not in issue comments):
+gh api repos/{owner}/{repo}/pulls/<PR_NUMBER>/reviews --paginate --slurp \
+  --jq '[.[-1][] | select(.body != "")] | last | .body // ""'
 ```
 
-If the latest comment contains phrases like "ready to merge", "all issues
-fixed", "lgtm", "approved", or similar resolution language, surface that
-summary first with a note that the listed must-fix items may already be
-resolved. Then present the full script output.
+If either output contains phrases like "ready to merge", "all issues fixed",
+"lgtm", "approved", or similar resolution language, surface that summary first
+with a note that the listed must-fix items may already be resolved. Then
+present the full script output.
 
 ### 4. Suggest next steps
 

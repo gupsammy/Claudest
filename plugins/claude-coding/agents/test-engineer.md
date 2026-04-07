@@ -7,6 +7,8 @@ description: >
   Not for code quality review (use code-auditor) or performance benchmarking (use
   performance-auditor).
 model: inherit
+effort: medium
+maxTurns: 25
 color: green
 memory: project
 tools:

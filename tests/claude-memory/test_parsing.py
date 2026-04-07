@@ -23,6 +23,7 @@ EXPECTED = {
     "multi_rewind": {"branches": 4, "active_exchanges": 7},
     "with_notifications": {"branches": 1, "active_exchanges": 2},
     "with_teammate_messages": {"branches": 1, "active_exchanges": 2},
+    "channel_telegram": {"branches": 1, "active_exchanges": 2},
 }
 
 
@@ -169,14 +170,29 @@ class TestParseJsonlFile:
             assert entry["type"] in ("user", "assistant")
 
     def test_filters_meta_entries(self, jsonl_fixture):
-        """No isMeta entries should pass through."""
+        """isMeta entries without origin are still filtered; those with origin pass through."""
         for entry in parse_jsonl_file(jsonl_fixture):
-            assert not entry.get("isMeta")
+            if entry.get("isMeta"):
+                assert entry.get("origin") is not None
 
     def test_yields_entries(self, jsonl_fixture):
         """Should yield at least one entry for each fixture."""
         entries = list(parse_jsonl_file(jsonl_fixture))
         assert len(entries) > 0
+
+    def test_channel_messages_pass_through(self):
+        """Channel messages with isMeta=true + origin should pass through."""
+        fixture = Path(__file__).parent / "fixtures" / "channel_telegram.jsonl"
+        entries = list(parse_jsonl_file(fixture))
+        has_channel = any(e.get("origin") for e in entries)
+        assert has_channel
+
+    def test_meta_without_origin_still_filtered(self):
+        """isMeta entries without origin should still be filtered."""
+        fixture = Path(__file__).parent / "fixtures" / "channel_telegram.jsonl"
+        for entry in parse_jsonl_file(fixture):
+            if entry.get("isMeta"):
+                assert entry.get("origin") is not None
 
 
 class TestExtractSessionMetadata:

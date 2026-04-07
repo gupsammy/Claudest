@@ -87,6 +87,7 @@ CREATE TABLE IF NOT EXISTS messages (
   has_tool_use INTEGER DEFAULT 0,
   has_thinking INTEGER DEFAULT 0,
   is_notification INTEGER DEFAULT 0,
+  origin TEXT,
   UNIQUE(session_id, uuid)
 );
 CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id);
@@ -317,6 +318,9 @@ def _migrate_columns(conn: sqlite3.Connection) -> None:
     if "is_notification" not in existing:
         cursor.execute("ALTER TABLE messages ADD COLUMN is_notification INTEGER DEFAULT 0")
         conn.commit()
+    if "origin" not in existing:
+        cursor.execute("ALTER TABLE messages ADD COLUMN origin TEXT")
+        conn.commit()
 
     # branches DDL migration
     cursor.execute("PRAGMA table_info(branches)")
@@ -397,6 +401,12 @@ CREATE INDEX IF NOT EXISTS idx_token_snapshots_start ON token_snapshots(start_ti
         """)
         _reaggregate_notification_branches(cursor)
         conn.execute("PRAGMA user_version = 2")
+        conn.commit()
+
+    if version < 3:
+        # v0.8.0: Clear import_log to force reimport with origin extraction
+        cursor.execute("DELETE FROM import_log")
+        conn.execute("PRAGMA user_version = 3")
         conn.commit()
 
 

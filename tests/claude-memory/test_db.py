@@ -74,6 +74,13 @@ def _pre_migration_db(include_tool_summary=False):
             branch_id INTEGER, message_id INTEGER, PRIMARY KEY (branch_id, message_id)
         )
     """)
+    conn.execute("""
+        CREATE TABLE import_log (
+            id INTEGER PRIMARY KEY, file_path TEXT UNIQUE NOT NULL,
+            file_hash TEXT, imported_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            messages_imported INTEGER DEFAULT 0
+        )
+    """)
     conn.commit()
     return conn
 
@@ -181,6 +188,13 @@ def _versioned_db(user_version=0, include_is_notification=True):
             branch_id INTEGER, message_id INTEGER, PRIMARY KEY (branch_id, message_id)
         )
     """)
+    conn.execute("""
+        CREATE TABLE import_log (
+            id INTEGER PRIMARY KEY, file_path TEXT UNIQUE NOT NULL,
+            file_hash TEXT, imported_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            messages_imported INTEGER DEFAULT 0
+        )
+    """)
     conn.execute(f"PRAGMA user_version = {user_version}")
     conn.commit()
     return conn
@@ -188,11 +202,11 @@ def _versioned_db(user_version=0, include_is_notification=True):
 
 class TestVersionedMigration:
     def test_fresh_db_gets_latest_version(self):
-        """A fresh DB (no columns, version 0) should end up at user_version = 2."""
+        """A fresh DB (no columns, version 0) should end up at user_version = 3."""
         conn = _pre_migration_db()
         _migrate_columns(conn)
         version = conn.execute("PRAGMA user_version").fetchone()[0]
-        assert version == 2
+        assert version == 3
         conn.close()
 
     def test_v0_to_v2_backfills_both(self):
@@ -211,7 +225,7 @@ class TestVersionedMigration:
         assert rows[0] == (1, 0)
         assert rows[1] == (2, 1)
         assert rows[2] == (3, 1)
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 3
         conn.close()
 
     def test_v1_to_v2_backfills_only_teammate(self):
@@ -231,22 +245,37 @@ class TestVersionedMigration:
         assert rows[0] == (1, 1)  # Already flagged, untouched
         assert rows[1] == (2, 1)  # Newly flagged by version 2
         assert rows[2] == (3, 0)  # Normal, untouched
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 3
         conn.close()
 
-    def test_v2_skips_all_migrations(self):
-        """From version 2, no migrations run."""
+    def test_v2_skips_data_backfills(self):
+        """From version 2, data backfills (v1, v2) do not re-run; only v3 import_log clear runs."""
         conn = _versioned_db(user_version=2)
         conn.execute("INSERT INTO messages (id, session_id, role, content, is_notification) VALUES (1, 1, 'user', '<teammate-message>should stay 0</teammate-message>', 0)")
         conn.commit()
 
         _migrate_columns(conn)
 
-        # Should NOT have been flagged (migration already ran)
+        # Teammate message should NOT have been re-flagged (v2 backfill already ran)
         cursor = conn.cursor()
         cursor.execute("SELECT is_notification FROM messages WHERE id = 1")
         assert cursor.fetchone()[0] == 0
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
+        # v3 migration runs from v2, bumping version to 3
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 3
+        conn.close()
+
+    def test_v2_to_v3_clears_import_log(self):
+        """v3 migration clears import_log to force reimport with origin extraction."""
+        conn = _versioned_db(user_version=2)
+        conn.execute("INSERT INTO import_log (file_path, file_hash) VALUES ('/test/session.jsonl', 'abc123')")
+        conn.commit()
+
+        _migrate_columns(conn)
+
+        count = conn.execute("SELECT COUNT(*) FROM import_log").fetchone()[0]
+        assert count == 0
+        version = conn.execute("PRAGMA user_version").fetchone()[0]
+        assert version == 3
         conn.close()
 
 

@@ -7,6 +7,7 @@ from memory_lib.content import (
     is_task_notification,
     is_teammate_message,
     is_tool_result,
+    parse_origin,
 )
 
 
@@ -291,3 +292,59 @@ class TestExtractCommits:
 
     def test_string_content(self):
         assert extract_commits("hello") == []
+
+
+# --- channel XML stripping ---
+
+
+class TestChannelStripping:
+    def test_strips_channel_xml(self):
+        raw = '<channel source="plugin:telegram:telegram" chat_id="12345" user_name="alice">\nHello from Telegram!\n</channel>'
+        text, _, _, _ = extract_text_content(raw)
+        assert text == "Hello from Telegram!"
+        assert "<channel" not in text
+
+    def test_strips_channel_with_nested_content(self):
+        raw = '<channel source="plugin:discord:discord" chat_id="99" user_name="bob">\nCan you help me with this code?\n```python\nprint("hi")\n```\n</channel>'
+        text, _, _, _ = extract_text_content(raw)
+        assert "Can you help me with this code?" in text
+        assert 'print("hi")' in text
+        assert "<channel" not in text
+
+    def test_no_channel_tag_unchanged(self):
+        raw = "Just a normal message"
+        text, _, _, _ = extract_text_content(raw)
+        assert text == "Just a normal message"
+
+
+# --- parse_origin ---
+
+
+class TestParseOrigin:
+    def test_telegram_origin(self):
+        entry = {"origin": {"kind": "channel", "server": "plugin:telegram:telegram"}}
+        assert parse_origin(entry) == "telegram"
+
+    def test_discord_origin(self):
+        entry = {"origin": {"kind": "channel", "server": "plugin:discord:discord-bot"}}
+        assert parse_origin(entry) == "discord"
+
+    def test_slack_origin(self):
+        entry = {"origin": {"kind": "channel", "server": "plugin:slack:slack-connector"}}
+        assert parse_origin(entry) == "slack"
+
+    def test_no_origin(self):
+        entry = {"type": "user"}
+        assert parse_origin(entry) is None
+
+    def test_empty_origin(self):
+        entry = {"origin": {}}
+        assert parse_origin(entry) is None
+
+    def test_fallback_to_kind(self):
+        entry = {"origin": {"kind": "channel", "server": "custom"}}
+        assert parse_origin(entry) == "channel"
+
+    def test_origin_no_server(self):
+        entry = {"origin": {"kind": "webhook"}}
+        assert parse_origin(entry) == "webhook"

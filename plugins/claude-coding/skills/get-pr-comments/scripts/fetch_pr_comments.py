@@ -114,6 +114,7 @@ def fetch_inline_comments(pr_number: int, repo: str | None) -> list[dict]:
             "in_reply_to_id": c.get("in_reply_to_id"),
         }
         for c in items
+        if c.get("position") is not None
     ]
 
 
@@ -269,9 +270,19 @@ def build_result(pr_number: int, repo: str | None) -> dict:
     human_comments = [c for c in all_comments if not c["is_bot"]]
     bot_comments = [c for c in all_comments if c["is_bot"]]
 
-    # Extract actionable items from review bodies and issue comments
-    actionable = {"must_fix": [], "optional": []}
+    # Extract actionable items from review bodies and issue comments.
+    # Only use the LATEST review per reviewer — a re-review with no must-fix
+    # section means the reviewer is satisfied; earlier must-fix items are stale.
+    latest_per_user: dict[str, dict] = {}
     for c in reviews + issue_comments:
+        ts = c.get("submitted_at") or c.get("created_at", "")
+        prev = latest_per_user.get(c["user"])
+        prev_ts = prev.get("submitted_at") or prev.get("created_at", "") if prev else ""
+        if prev is None or ts > prev_ts:
+            latest_per_user[c["user"]] = c
+
+    actionable = {"must_fix": [], "optional": []}
+    for c in latest_per_user.values():
         sections = extract_sections(c["body"])
         for item in sections["must_fix"]:
             actionable["must_fix"].append({
@@ -286,8 +297,24 @@ def build_result(pr_number: int, repo: str | None) -> dict:
                 "source_type": c["type"],
             })
 
-    # Extract actionable items from inline comments
+    # Determine which reviewers have explicitly signed off in their latest review.
+    # If a reviewer's latest non-inline comment contains resolution language,
+    # suppress their inline must-fix items (they were resolved in a later push).
+    RESOLUTION_PATTERNS = re.compile(
+        r"\ball (?:open )?issues? (?:resolved|fixed)\b"
+        r"|\bready to merge\b|\blgtm\b|\bapproved\b"
+        r"|\bno (?:remaining|open) issues\b",
+        re.IGNORECASE,
+    )
+    signed_off_users = {
+        user for user, c in latest_per_user.items()
+        if RESOLUTION_PATTERNS.search(c["body"])
+    }
+
+    # Extract actionable items from inline comments, skipping signed-off reviewers.
     for c in inline_comments:
+        if c["user"] in signed_off_users:
+            continue
         severity = classify_inline_comment(c["body"])
         if severity:
             location = f"`{c['path']}:{c.get('line', '?')}`"

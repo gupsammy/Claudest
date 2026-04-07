@@ -55,9 +55,7 @@ done <<< "$MERGED"
 # Unix timestamps used for accurate threshold — git relative dates miss edge cases
 echo "=== STALE ==="
 CUTOFF=$(python3 -c "import time; print(int(time.time()) - 30*86400)")
-git for-each-ref --sort=-committerdate \
-  --format='%(refname:short) %(committerdate:unix) %(committerdate:relative)' \
-  refs/heads/ | while read -r branch ts reldate; do
+while read -r branch ts reldate; do
   # Skip protected branches
   case "$branch" in main|master|develop|release/*) continue ;; esac
   # Apply pattern filter if provided
@@ -71,4 +69,6 @@ git for-each-ref --sort=-committerdate \
       echo "$branch ($reldate)"
     fi
   fi
-done
+done < <(git for-each-ref --sort=-committerdate \
+  --format='%(refname:short) %(committerdate:unix) %(committerdate:relative)' \
+  refs/heads/)

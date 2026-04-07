@@ -25,16 +25,23 @@ fi
 #   worktree /path
 #   HEAD <sha>
 #   branch refs/heads/<name>   (or "detached" for detached HEAD)
-declare -A WORKTREE_MAP
+# Uses a temp file (key=value lines) for bash 3.2 compat (no declare -A)
+WORKTREE_MAP_FILE=$(mktemp)
+trap 'rm -f "$WORKTREE_MAP_FILE"' EXIT
 current_wt=""
 while IFS= read -r line; do
   if [[ "$line" == worktree\ * ]]; then
     current_wt="${line#worktree }"
   elif [[ "$line" == branch\ refs/heads/* ]]; then
     branch_name="${line#branch refs/heads/}"
-    WORKTREE_MAP["$branch_name"]="$current_wt"
+    printf '%s=%s\n' "$branch_name" "$current_wt" >> "$WORKTREE_MAP_FILE"
   fi
 done < <(git worktree list --porcelain)
+
+# Helper: look up branch in worktree map
+worktree_for() {
+  grep -m1 "^${1}=" "$WORKTREE_MAP_FILE" | cut -d= -f2- || true
+}
 
 # --- Merged branches ---
 echo "=== MERGED ==="
@@ -44,8 +51,9 @@ if [ -n "$PATTERN" ]; then
 fi
 while IFS= read -r branch; do
   [ -z "$branch" ] && continue
-  if [[ -n "${WORKTREE_MAP[$branch]+_}" ]]; then
-    echo "$branch [worktree:${WORKTREE_MAP[$branch]}]"
+  wt=$(worktree_for "$branch")
+  if [[ -n "$wt" ]]; then
+    echo "$branch [worktree:$wt]"
   else
     echo "$branch"
   fi
@@ -63,8 +71,9 @@ while read -r branch ts reldate; do
     continue
   fi
   if (( ts < CUTOFF )); then
-    if [[ -n "${WORKTREE_MAP[$branch]+_}" ]]; then
-      echo "$branch ($reldate) [worktree:${WORKTREE_MAP[$branch]}]"
+    wt=$(worktree_for "$branch")
+    if [[ -n "$wt" ]]; then
+      echo "$branch ($reldate) [worktree:$wt]"
     else
       echo "$branch ($reldate)"
     fi

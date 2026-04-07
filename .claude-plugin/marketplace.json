@@ -8,7 +8,7 @@
     {
       "name": "claude-memory",
       "description": "Searchable conversation memory with full-text search",
-      "version": "0.8.62",
+      "version": "0.8.63",
       "source": "./plugins/claude-memory"
     },
     {
@@ -26,13 +26,13 @@
     {
       "name": "claude-skills",
       "description": "Skill and agent authoring tools: generate, audit, and improve Claude Code skills, commands, and agents",
-      "version": "0.5.16",
+      "version": "0.5.18",
       "source": "./plugins/claude-skills"
     },
     {
       "name": "claude-coding",
       "description": "Coding workflow skills: intelligent commits, push & PR, branch cleanup, CLAUDE.md maintenance, README generation, changelog creation, README updating, and GitHub Actions setup",
-      "version": "0.2.18",
+      "version": "0.2.21",
       "source": "./plugins/claude-coding"
     },
     {

@@ -1,9 +1,13 @@
 ---
 name: signal-discoverer
-description: Mine recent conversation sessions for uncaptured knowledge — user corrections, architectural decisions, recurring patterns, and behavioral preferences worth persisting to memory.
-
+description: >
+  Use this agent when the user wants to mine recent conversation sessions for uncaptured
+  knowledge — corrections, architectural decisions, recurring patterns, and behavioral
+  preferences. Not for persisting memories — use extract-learnings for that.
 model: inherit
 color: cyan
+memory: project
+effort: medium
 tools:
   - Read
   - Glob
@@ -89,3 +93,18 @@ patterns already captured in existing memories").
   Only surface project-specific or user-specific knowledge.
 - When in doubt about whether something is NOISE or FILL_GAP, ask: "Would knowing this
   change how Claude behaves in a future session?" If no, it's noise.
+
+## Edge Cases
+
+- Recall script not found (glob returns no matches): report "recall script not found —
+  verify claude-memory plugin is installed" and stop.
+- Project name cannot be inferred from cwd (no git root, no recognizable project name):
+  ask the caller to supply the project name before running the recall script.
+
+## Agent Memory
+
+Your agent memory tracks signal-discovery coverage: which sessions have been analyzed,
+which candidates were surfaced, and which were accepted or rejected by the caller. After
+each run, update your MEMORY.md with: session range scanned, candidate count by category,
+and any candidates the caller explicitly accepted or declined. Use this on subsequent runs
+to avoid re-surfacing already-reviewed candidates.

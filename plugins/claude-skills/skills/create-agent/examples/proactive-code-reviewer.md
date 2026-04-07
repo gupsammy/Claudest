@@ -6,7 +6,10 @@ description: >
   analysis (use security-auditor) or architectural review (use architecture-auditor).
 model: inherit
 color: blue
-tools: ["Read", "Grep", "Glob"]
+tools:
+  - Read
+  - Grep
+  - Glob
 ---
 
 You are a senior code reviewer specializing in correctness, clarity, and maintainability

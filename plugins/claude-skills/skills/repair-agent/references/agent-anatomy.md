@@ -12,7 +12,7 @@ any audit dimension — it is the rubric for Dimensions 3, 5, 6, and 7.
 | File location | `agents/<name>.md` | `skills/<name>/SKILL.md` |
 | Body voice | Second-person ("You are...") | Imperative ("Analyze...") |
 | Description format | "Use this agent when..." — concise `>` scalar, no `<example>` blocks | "This skill should be used when..." + trigger phrases |
-| Triggering | Spawned via Task tool; description triggers delegation | Auto-triggered by description routing |
+| Triggering | Spawned via Agent tool; description triggers delegation | Auto-triggered by description routing |
 | Context | Isolated context window | Injects into current conversation |
 | Domain preloading | `skills:` frontmatter field | `references/` directory loaded on demand |
 
@@ -161,6 +161,19 @@ skills: agent-conventions, code-style-guide
 - [ ] Does the agent write files to the working tree during its process?
 - [ ] Would in-progress modifications be confusing or disruptive if visible during the
       agent run?
+
+**Would `memory` help?**
+- [ ] Does the agent review code, audit quality, or accumulate project knowledge?
+- [ ] Would its effectiveness increase over time with accumulated context?
+- [ ] Does the system prompt include memory maintenance instructions if `memory` is set?
+
+**Would `effort` help?**
+- [ ] Is this a fast classification/extraction task that could use `effort: low`?
+- [ ] Does this require deep multi-step reasoning that warrants `effort: high` or `max`?
+
+**Would `initialPrompt` help?**
+- [ ] Is this agent designed to run as a session agent via `--agent`?
+- [ ] Should it self-start with a command or prompt rather than waiting for user input?
 
 **Would `maxTurns` help?**
 - [ ] Does the task have a predictable number of steps?

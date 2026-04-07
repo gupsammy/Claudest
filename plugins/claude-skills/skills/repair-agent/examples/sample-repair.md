@@ -37,7 +37,7 @@ VIOLATIONS
 CRITICAL
   [D1] Description does not start with "Use this agent when..." — routing model cannot
        match the expected pattern. Current: "This agent should be used when you need..."
-       Fix: rewrite as "Use this agent when [conditions]. Examples: <example>...</example>"
+       Fix: rewrite opening as "Use this agent when [conditions]."
 
   [D3] Body uses first-person throughout ("I will analyze", "I'll read", "I will identify",
        "I'll produce") — the instruction-following contract breaks. First-person reads as
@@ -45,17 +45,15 @@ CRITICAL
        Fix: rewrite all first-person as bare imperatives or second-person.
 
 MAJOR
-  [D1] Description has 0 <example> blocks — routing model has no trigger patterns to match.
-       Fix: add 2–4 examples with Context, user, assistant, <commentary>.
-  [D1] Uses | scalar correctly, but description body is a single prose sentence with no
-       example blocks — routing model relies on example structure for delegation decisions.
+  [D1] Description uses `|` scalar instead of `>` folded scalar — folded scalar is the
+       convention for concise descriptions. Fix: rewrite as `>` scalar, 50-70 tokens.
   [D3] No persona statement — first sentence does not establish role and domain.
        Fix: begin with "You are a [role] specializing in [domain]."
   [D3] No output format section — callers cannot predict structure of returned summary.
        Fix: add explicit Output Format section.
   [D2] `tools` absent for a read-only analysis agent — grants full access by default.
        Least-privilege for autonomous agents requires an explicit allowlist.
-       Fix: add tools: ["Read", "Grep", "Glob"]
+       Fix: add tools block sequence (Read, Grep, Glob)
 
 MINOR
   [D2] `color` absent — no visual identity in UI.
@@ -75,29 +73,16 @@ GAPS
 ```markdown
 ---
 name: log-summarizer
-description: |
+description: >
   Use this agent when the user wants a log file summarized, analyzed for errors, or
-  has a log file they need to understand quickly. Examples:
-
-  <example>
-  Context: User provides a log file path and wants it summarized.
-  user: "Summarize this log file: /var/log/app.log"
-  assistant: "I'll use the log-summarizer agent to analyze and summarize it."
-  <commentary>
-  Explicit summarization request with a file path — direct delegation to log-summarizer.
-  </commentary>
-  </example>
-
-  <example>
-  Context: User wants to know what went wrong from a log.
-  user: "What errors are in my deployment log?"
-  assistant: "I'll use the log-summarizer agent to scan for errors and warnings."
-  <commentary>
-  Error extraction from a log file is exactly log-summarizer's domain.
-  </commentary>
-  </example>
+  needs to understand what happened in a log quickly. Not for real-time log streaming
+  or monitoring — use a dedicated observability tool.
+model: inherit
 color: cyan
-tools: ["Read", "Grep", "Glob"]
+tools:
+  - Read
+  - Grep
+  - Glob
 ---
 
 You are a log analysis specialist focused on extracting signal from noise in
@@ -137,11 +122,11 @@ SUMMARY: <1–2 sentences on overall health and most critical issue>
 ## Changes Applied
 
 - **[D1] Description rewritten** — changed "This agent should be used when you need..."
-  to "Use this agent when..." and added 2 `<example>` blocks with routing commentary
+  to "Use this agent when..." using `>` folded scalar with scope boundary
 - **[D3] First-person eliminated** — "I will analyze", "I'll read" → bare imperatives
   throughout; persona statement added as first sentence
 - **[D3] Output format added** — explicit structured template so callers know what to expect
-- **[D2] tools restricted** — added `["Read", "Grep", "Glob"]`; read-only agent doesn't
+- **[D2] tools restricted** — added `Read, Grep, Glob`; read-only agent doesn't
   need Write, Edit, or Bash
 - **[D2] color added** — cyan for information-gathering / extraction semantic
 - **[D3] Edge cases added** — 3 concrete cases with defined handling

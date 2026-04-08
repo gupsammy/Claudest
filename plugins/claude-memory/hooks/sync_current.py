@@ -351,7 +351,7 @@ def main():
     # Read hook input from file or stdin
     if args.input_file:
         try:
-            hook_input = json.loads(args.input_file.read_text())
+            hook_input = json.loads(args.input_file.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             hook_input = {}
         finally:

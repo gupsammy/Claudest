@@ -276,8 +276,15 @@ class JnlFile:
 
 
 def _decode_project_cwd(dirname: str) -> str:
-    """Convert '-Users-samarthgupta-repos-foo' to '/Users/samarthgupta/repos/foo'."""
-    return "/" + dirname.lstrip("-").replace("-", "/")
+    """Convert '-Users-samarthgupta-repos-foo' to '/Users/samarthgupta/repos/foo'.
+
+    Detects Windows drive letter pattern (e.g. 'C-Users-...' → 'C:/Users/...').
+    """
+    parts = dirname.lstrip("-").replace("-", "/")
+    # Windows drive letter: single letter followed by /
+    if len(parts) >= 2 and parts[0].isalpha() and parts[1] == "/":
+        return parts[0].upper() + ":/" + parts[2:].lstrip("/")
+    return "/" + parts.lstrip("/")
 
 
 def discover_jsonl_files() -> list[JnlFile]:
@@ -401,7 +408,7 @@ def parse_session(filepath: Path, jnl: JnlFile) -> ParsedSession | None:
     metadata_captured = False
 
     try:
-        lines = filepath.read_text().splitlines()
+        lines = filepath.read_text(encoding="utf-8").splitlines()
     except Exception:
         return None
 
@@ -2129,13 +2136,13 @@ def _insights_to_recommendations(insights: list[dict]) -> list[dict]:
 
 def deploy_dashboard(json_str: str) -> None:
     try:
-        html = DASHBOARD_TEMPLATE_PATH.read_text()
+        html = DASHBOARD_TEMPLATE_PATH.read_text(encoding="utf-8")
         html = html.replace(
             "/* __INLINE_DATA_PLACEHOLDER__ */",
             f"const _INLINE_DATA = {json_str};",
             1,
         )
-        DASHBOARD_OUT_PATH.write_text(html)
+        DASHBOARD_OUT_PATH.write_text(html, encoding="utf-8")
     except Exception as e:
         print(f"Warning: could not deploy dashboard: {e}", file=sys.stderr)
 

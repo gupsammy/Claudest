@@ -41,7 +41,7 @@ def read_last_consolidation(marker: Path) -> datetime | None:
     if not marker.exists():
         return None
     try:
-        text = marker.read_text().strip()
+        text = marker.read_text(encoding="utf-8").strip()
         # Unix timestamp written by `date +%s`
         if text.isdigit():
             return datetime.fromtimestamp(int(text), tz=timezone.utc)

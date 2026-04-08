@@ -280,7 +280,7 @@ def load_config() -> dict:
     """Read ~/.claude-memory/config.json. Returns empty dict on missing/error."""
     try:
         if CONFIG_PATH.exists():
-            result = json.loads(CONFIG_PATH.read_text())
+            result = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
             return result if isinstance(result, dict) else {}
     except Exception:
         pass

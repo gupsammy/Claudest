@@ -142,6 +142,47 @@ class TestProjectKey:
         result = parse_project_key("-Users-sam-project")
         assert result.startswith("/")
 
+    # ── Windows path support ──
+
+    def test_get_project_key_windows_backslash(self):
+        """Windows paths with backslashes should produce the same key format."""
+        assert get_project_key("C:\\Users\\sam\\project") == "C--Users-sam-project"
+
+    def test_get_project_key_windows_matches_posix_equivalent(self):
+        """Windows forward-slash and backslash paths should produce identical keys."""
+        assert get_project_key("C:/Users/sam/project") == get_project_key("C:\\Users\\sam\\project")
+
+    def test_normalize_cwd_windows_worktree(self):
+        """Windows worktree paths should resolve to base repo path."""
+        wt = "C:\\Users\\sam\\repos\\myproject\\.claude\\worktrees\\feat"
+        assert normalize_cwd(wt) == "C:/Users/sam/repos/myproject"
+
+    def test_normalize_cwd_windows_non_worktree(self):
+        """Windows non-worktree paths normalize backslashes to forward slashes."""
+        assert normalize_cwd("C:\\Users\\sam\\repos\\proj") == "C:/Users/sam/repos/proj"
+
+    def test_get_project_key_windows_worktree_resolves_to_base(self):
+        """Windows worktree path should produce same key as base."""
+        base = "C:\\Users\\sam\\repos\\myproject"
+        worktree = "C:\\Users\\sam\\repos\\myproject\\.claude\\worktrees\\feat"
+        assert get_project_key(worktree) == get_project_key(base)
+
+    def test_parse_project_key_windows_drive_letter(self):
+        """Keys from Windows paths should reconstruct with drive letter prefix."""
+        result = parse_project_key("C--Users-sam-project")
+        assert result == "C:/Users/sam/project"
+
+    def test_round_trip_windows(self):
+        """get_project_key → parse_project_key round-trip for Windows paths."""
+        key = get_project_key("C:\\Users\\sam\\project")
+        assert key == "C--Users-sam-project"
+        assert parse_project_key(key) == "C:/Users/sam/project"
+
+    def test_parse_project_key_unix_unchanged(self):
+        """Unix keys should still reconstruct with leading /."""
+        result = parse_project_key("-Users-sam-project")
+        assert result == "/Users/sam/project"
+
     def test_extract_project_name(self):
         assert extract_project_name("/Users/sam/my-project") == "my-project"
 

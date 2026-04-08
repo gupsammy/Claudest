@@ -421,9 +421,10 @@ def render_context_summary(summary_json: dict) -> str:
                 lines.append(truncate_mid(ex["assistant"]))
                 lines.append("")
     else:
-        # First Exchanges (up to 2)
-        lines.append("### First Exchanges\n")
-        for ex in first_exs:
+        # Where We Left Off first — most recent context at top, where attention is
+        # highest and where inline-preview truncation (if any) clips from below.
+        lines.append("### Where We Left Off\n")
+        for ex in last_exs:
             t = format_time(ex.get("timestamp"))
             lines.append(f"**[{t}] User:**")
             lines.append(ex["user"])
@@ -438,13 +439,14 @@ def render_context_summary(summary_json: dict) -> str:
         if gap > 0:
             gap_detail = _build_gap_summary(summary_json, len(first_exs), exchange_count - len(last_exs))
             if gap_detail:
-                lines.append(f"[... {gap} exchanges covering: {gap_detail} ...]\n")
+                lines.append(f"[... {gap} earlier exchanges covering: {gap_detail} ...]\n")
             else:
-                lines.append(f"[... {gap} exchanges ...]\n")
+                lines.append(f"[... {gap} earlier exchanges ...]\n")
 
-        # Where We Left Off
-        lines.append("### Where We Left Off\n")
-        for ex in last_exs:
+        # Earlier in This Session — first 2 exchanges kept for origin context,
+        # placed last so they're the first thing clipped under truncation.
+        lines.append("### Earlier in This Session\n")
+        for ex in first_exs:
             t = format_time(ex.get("timestamp"))
             lines.append(f"**[{t}] User:**")
             lines.append(ex["user"])

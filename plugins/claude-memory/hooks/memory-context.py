@@ -320,9 +320,10 @@ def _build_fallback_context(session: dict) -> str:
                 lines.append(truncate_mid(ex["assistant"]))
                 lines.append("")
     else:
-        # First 2 exchanges
-        lines.append("### First Exchanges\n")
-        for ex in exchanges[:2]:
+        # Last 6 exchanges first — most recent context at top, where attention is highest
+        # and where truncation (if any) will clip from below rather than above.
+        lines.append("### Where We Left Off\n")
+        for ex in exchanges[-6:]:
             t = format_time(ex.get("timestamp"))
             lines.append(f"**[{t}] User:**")
             lines.append(ex["user"])
@@ -337,13 +338,14 @@ def _build_fallback_context(session: dict) -> str:
         if gap > 0:
             gap_files = [f.rsplit("/", 1)[-1] for f in files[:3]] if files else []
             if gap_files:
-                lines.append(f"[... {gap} exchanges covering: {', '.join(gap_files)} ...]\n")
+                lines.append(f"[... {gap} earlier exchanges covering: {', '.join(gap_files)} ...]\n")
             else:
-                lines.append(f"[... {gap} exchanges ...]\n")
+                lines.append(f"[... {gap} earlier exchanges ...]\n")
 
-        # Last 6 exchanges
-        lines.append("### Where We Left Off\n")
-        for ex in exchanges[-6:]:
+        # First 2 exchanges — kept for origin context, placed last so it's the
+        # first thing clipped under inline-preview truncation.
+        lines.append("### Earlier in This Session\n")
+        for ex in exchanges[:2]:
             t = format_time(ex.get("timestamp"))
             lines.append(f"**[{t}] User:**")
             lines.append(ex["user"])
@@ -485,9 +487,25 @@ def main():
 
         logger.info(f"Injecting context from {len(sessions)} session(s) for project {project_key}")
 
-        # Wrap in origin block + section header
+        # Top-of-context directive: placed first because the hook's inline
+        # preview may be truncated by the harness, and because earlier tokens
+        # receive more attention. Tells Claude how to read the rest of this
+        # injection and when to reach for the persisted file or recall skill.
+        directive = (
+            "## How To Use This Context\n"
+            "- Sessions below are ordered most-recent first, and within each session "
+            "the most recent exchanges come first. Read top-down to get the freshest "
+            "context before older context.\n"
+            "- If this hook's output was truncated inline and a persisted file path "
+            "is referenced, Read that file before answering any message that references "
+            "prior work — the last exchanges of the previous session may live only there.\n"
+            "- For anything beyond the sessions shown here, use the "
+            "`recall-conversations` skill rather than guessing."
+        )
+
+        # Wrap in directive + origin block + session content
         origin = build_origin_block(source, sessions)
-        full_context = f"{origin}\n\n{context}"
+        full_context = f"{directive}\n\n{origin}\n\n{context}"
 
         output = {
             "hookSpecificOutput": {

@@ -12,6 +12,7 @@ allowed-tools:
   - Grep
   - Bash(python3:*)
   - Bash(git:*)
+  - Bash(find:*)
   - Bash(date:*)
   - AskUserQuestion
   - Agent
@@ -49,13 +50,16 @@ If the user said "remember X" with explicit content already in context — and t
 
 ### Phase 1: Orient (main session)
 
-1. Resolve memory path: `Glob ~/.claude/projects/*<repo-dir-name>*/memory/MEMORY.md`
+1. Resolve memory path using Bash (Glob does not expand `~`):
+   `Bash: find $HOME/.claude/projects -name MEMORY.md -path "*<repo-dir-name>*" 2>/dev/null | head -1`
+   The result is the full path to MEMORY.md (a file). The memory directory is its parent: `$(dirname <find-result>)`.
+   If no result, construct the project key by replacing `/` with `-` in the current working directory path (e.g., `/home/user/myrepo` → `-home-user-myrepo`), then use `$HOME/.claude/projects/<project-key>/memory/MEMORY.md`.
    - If MEMORY.md does not exist, create it with `# Project Memory` header. Note that the Memory Auditor has nothing to audit — in Phase 2, spawn only the Signal Discoverer.
 
-Steps 2-4 can run as parallel tool calls.
+Steps 2-4 are required and run as parallel tool calls.
 
 2. Read MEMORY.md + list topic files (`Glob memory/*.md` from resolved path)
-3. Read both CLAUDE.md files (`~/.claude/CLAUDE.md` + `<repo>/CLAUDE.md`)
+3. Read both CLAUDE.md files (`~/.claude/CLAUDE.md` + `<repo>/CLAUDE.md`) — required for dedup quality; skipping means proposals may duplicate L0/L1 content
 4. `git log --oneline -20`
 5. Build context snapshot: summarize existing knowledge + list verification targets (file paths, functions, patterns named in memories)
 
@@ -69,7 +73,9 @@ Launch both agent calls in a single message so they run in parallel. Use the Age
 
 If Phase 1 noted MEMORY.md was just created (no existing memories), skip the Memory Auditor and spawn only the Signal Discoverer.
 
-Phase 2 is complete when both agents return reports. If either returns empty, proceed with the other's results only.
+Both agents require `maxTurns ≥ 30` — verify agent frontmatter at `plugins/claude-memory/agents/`. Agents with low maxTurns exit early and return truncated output that appears non-empty but contains no findings.
+
+Phase 2 is complete when both agents return reports. If either returns empty or clearly truncated (one line, no structured findings), proceed with the other's results — but if the Signal Discoverer fails, also perform a manual fallback: query the 5 most recent session summaries directly from `~/.claude-memory/conversations.db` using `Bash(python3 -c "import sqlite3; ...")` and apply the signal criteria from the Content Quality Rules section below.
 
 ### Phase 3: Synthesize & Propose (main session)
 
@@ -101,7 +107,8 @@ Apply approved edits. Output summary table:
 |----------|--------|--------|--------|
 ```
 
-Only if Phase 2 agents ran (not an early-exit capture): write consolidation marker `Bash(date -u +%Y-%m-%dT%H:%M:%SZ)` → Write `.last-consolidation` in same directory as MEMORY.md.
+Only if Phase 2 agents ran (not an early-exit capture): write consolidation marker using Bash (Write tool requires prior Read and cannot create new files):
+`Bash: date -u +%Y-%m-%dT%H:%M:%SZ > <memory-dir>/.last-consolidation`
 
 Phase 4 is complete when all approved edits are applied and the summary table is presented.
 

@@ -7,6 +7,7 @@ claude-code-analytics.html
 token-analysis-dashboard.html
 context-simulator.html
 .claude/worktrees/
+.claude/agent-memory/
 plugins/*/docs/
 docs/
 .obsidian/

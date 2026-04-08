@@ -25,7 +25,9 @@ fi
 #   worktree /path
 #   HEAD <sha>
 #   branch refs/heads/<name>   (or "detached" for detached HEAD)
-# Uses a temp file (key=value lines) for bash 3.2 compat (no declare -A)
+# Uses a temp file (tab-separated key/value lines) for bash 3.2 compat
+# (no declare -A). Tab is safe as an in-band delimiter because
+# git-check-ref-format forbids control characters in refnames.
 WORKTREE_MAP_FILE=$(mktemp)
 trap 'rm -f "$WORKTREE_MAP_FILE"' EXIT
 current_wt=""
@@ -34,13 +36,16 @@ while IFS= read -r line; do
     current_wt="${line#worktree }"
   elif [[ "$line" == branch\ refs/heads/* ]]; then
     branch_name="${line#branch refs/heads/}"
-    printf '%s=%s\n' "$branch_name" "$current_wt" >> "$WORKTREE_MAP_FILE"
+    printf '%s\t%s\n' "$branch_name" "$current_wt" >> "$WORKTREE_MAP_FILE"
   fi
 done < <(git worktree list --porcelain)
 
-# Helper: look up branch in worktree map
+# Helper: look up branch in worktree map.
+# Uses awk with exact-string comparison on field 1 to avoid regex
+# metacharacter pitfalls (e.g. a `.` in a branch name matching any char)
+# and `=` pitfalls (branch names legally permit `=`).
 worktree_for() {
-  grep -m1 "^${1}=" "$WORKTREE_MAP_FILE" | cut -d= -f2- || true
+  awk -F'\t' -v b="$1" '$1 == b { print $2; exit }' "$WORKTREE_MAP_FILE"
 }
 
 # --- Merged branches ---

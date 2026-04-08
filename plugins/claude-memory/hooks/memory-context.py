@@ -493,12 +493,13 @@ def main():
         # injection and when to reach for the persisted file or recall skill.
         directive = (
             "## How To Use This Context\n"
-            "- The sections below are ordered by recency: **Where We Left Off** first, "
-            "then gap summary, then **Earlier in This Session**. Read top-down.\n"
+            "- Sessions below are ordered most-recent first, and within each session "
+            "the most recent exchanges come first. Read top-down to get the freshest "
+            "context before older context.\n"
             "- If this hook's output was truncated inline and a persisted file path "
             "is referenced, Read that file before answering any message that references "
             "prior work — the last exchanges of the previous session may live only there.\n"
-            "- For anything beyond the two sessions shown here, use the "
+            "- For anything beyond the sessions shown here, use the "
             "`recall-conversations` skill rather than guessing."
         )
 

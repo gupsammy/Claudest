@@ -517,7 +517,7 @@ class TestBuildFallbackContext:
             "messages": messages,
         }
         result = _build_fallback_context(session)
-        assert "### First Exchanges" in result
+        assert "### Earlier in This Session" in result
         assert "### Where We Left Off" in result
         assert "Q0" in result   # First exchange
         assert "Q1" in result   # Second exchange

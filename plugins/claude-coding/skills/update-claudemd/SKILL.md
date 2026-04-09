@@ -2,11 +2,9 @@
 name: update-claudemd
 description: >
   This skill should be used when the user says "update CLAUDE.md", "refresh
-  the docs", "sync CLAUDE.md with the codebase", "optimize project
-  instructions", "clean up CLAUDE.md", "improve CLAUDE.md", "fix CLAUDE.md",
-  "reorganize CLAUDE.md", "CLAUDE.md is too long", "extract topics from
-  CLAUDE.md", "CLAUDE.md progressive disclosure", or when CLAUDE.md is stale,
-  verbose, or out of sync.
+  CLAUDE.md", "sync CLAUDE.md with the codebase", "reorganize CLAUDE.md",
+  "optimize project instructions", "CLAUDE.md progressive disclosure", or when
+  CLAUDE.md is stale, verbose, or out of sync.
 allowed-tools:
   - Read
   - Glob
@@ -15,7 +13,6 @@ allowed-tools:
   - Write
   - Bash(wc:*)
   - Bash(git:*)
-  - Bash(ls:*)
   - Bash(mkdir:*)
   - Bash(cp:*)
   - Task

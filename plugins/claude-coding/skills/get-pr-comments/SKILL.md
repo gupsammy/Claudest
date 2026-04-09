@@ -68,17 +68,20 @@ actionable items (must-fix, optional) first, then human comments, then bot
 comments (truncated). Do not reformat or reparse — present as-is.
 
 If must-fix items are listed, check whether a subsequent review already
-resolved them by querying both issue comments and formal PR reviews:
+resolved them by querying both issue comments and formal PR reviews. Pipe
+to external `jq` — `gh api` rejects `--slurp` combined with `--jq` in
+current versions, and `--paginate --slurp` yields an array-of-pages that
+must be flattened with `[.[][]]`:
 
 ```bash
 # Latest issue-level comment (paginated — PRs may exceed 30 comments):
 gh api repos/{owner}/{repo}/issues/<PR_NUMBER>/comments --paginate --slurp \
-  --jq '.[-1][-1].body'
+  | jq -r '[.[][]] | last | .body // ""'
 
 # Latest formal PR review body (approvals and review-body sign-offs land here,
 # not in issue comments):
 gh api repos/{owner}/{repo}/pulls/<PR_NUMBER>/reviews --paginate --slurp \
-  --jq '[.[-1][] | select(.body != "")] | last | .body // ""'
+  | jq -r '[.[][] | select(.body != "")] | last | .body // ""'
 ```
 
 If either output contains phrases like "ready to merge", "all issues fixed",

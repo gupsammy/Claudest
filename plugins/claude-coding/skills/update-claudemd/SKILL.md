@@ -1,10 +1,6 @@
 ---
 name: update-claudemd
-description: >
-  This skill should be used when the user says "update CLAUDE.md", "refresh
-  CLAUDE.md", "sync CLAUDE.md with the codebase", "reorganize CLAUDE.md",
-  "optimize project instructions", "CLAUDE.md progressive disclosure", or when
-  CLAUDE.md is stale, verbose, or out of sync.
+description: This skill should be used when the user says "update CLAUDE.md", "refresh CLAUDE.md", "sync CLAUDE.md with the codebase", "reorganize CLAUDE.md", "optimize project instructions", or when CLAUDE.md is stale, verbose, or out of sync.
 allowed-tools:
   - Read
   - Glob

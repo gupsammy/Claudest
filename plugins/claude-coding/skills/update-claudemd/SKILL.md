@@ -17,13 +17,9 @@ allowed-tools:
   - Bash(git:*)
   - Bash(ls:*)
   - Bash(mkdir:*)
+  - Bash(cp:*)
   - Task
   - AskUserQuestion
-hooks:
-  PreToolUse:
-    - matcher: "Write"
-      command: "cp CLAUDE.md CLAUDE.md.bak 2>/dev/null || true"
-      once: true
 ---
 
 # Update and Optimize CLAUDE.md
@@ -133,11 +129,12 @@ Exit condition: user has explicitly approved an action set.
 
 ## Phase 6 — Write
 
-The PreToolUse hook handles `CLAUDE.md.bak` automatically. Execute in this order so topic-file pointers resolve:
+Execute in this order so topic-file pointers resolve:
 
-1. Create `.claude/claudemd-topics/` with `mkdir -p` if missing
-2. Write or edit topic files
-3. Write CLAUDE.md with a regenerated `## Topic Files` section at the end
+1. Run `cp CLAUDE.md CLAUDE.md.bak` via Bash to create a backup before any writes
+2. Create `.claude/claudemd-topics/` with `mkdir -p` if missing
+3. Write or edit topic files
+4. Write CLAUDE.md with a regenerated `## Topic Files` section at the end
 
 The `## Topic Files` section is regenerated from actual disk state after step 2, not maintained manually. Each entry is a load trigger, not a descriptive link:
 
@@ -166,6 +163,6 @@ Output a diff summary:
 - Deletions: list with rationale
 - Additions: list with source
 - Invariants preserved: top 3-5 quoted verbatim so the user can verify they survived
-- Backup: `CLAUDE.md.bak` exists for diffing; remove after review
+- Backup: `CLAUDE.md.bak` was created in Phase 6 step 1 — diff with `diff CLAUDE.md.bak CLAUDE.md` then remove
 
-Exit condition: report delivered, `CLAUDE.md.bak` cleanup advised.
+Exit condition: report delivered, advise user to remove `CLAUDE.md.bak` after review.

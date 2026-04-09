@@ -14,7 +14,7 @@ The `scripts/auto-version.py` pre-commit hook auto-bumps patch versions for plug
 
 ## Conventions
 
-Never delete `~/.claude-memory/conversations.db` directly — always use `trash` (reversible). Full reimport: back up, then trash, then reimport. See `claude-memory-architecture.md` for commands.
+Never delete `~/.claude-memory/conversations.db` directly — always use `trash` (reversible). Full reimport: back up, then trash, then reimport. See the claude-memory-architecture topic file below for commands.
 
 Commit messages: conventional commits scoped to plugin (`feat(memory):`, `fix(skills):`, `docs:`, `refactor(memory):`).
 

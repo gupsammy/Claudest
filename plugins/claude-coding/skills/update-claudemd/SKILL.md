@@ -48,12 +48,15 @@ Signals:
 - `files` — tracked files: `git ls-files | wc -l`
 
 N (codebase-scan shards):
-- N = 1 if `churn < 20` OR `files < 100`
-- N = 2 if `20 ≤ churn < 60` OR `100 ≤ files < 500`
-- N = 3 if `60 ≤ churn < 150` OR `500 ≤ files < 2000`
-- N = 4 if `churn ≥ 150` OR `files ≥ 2000`
 
-Take the max of the two dimensions. Cap at 4. When N > 1, partition by top-level directory clusters (e.g. `plugins/` → shard 1; `scripts/ + tests/` → shard 2).
+| churn      | files         | N |
+|------------|---------------|---|
+| < 20       | < 100         | 1 |
+| 20 – 59    | 100 – 499     | 2 |
+| 60 – 149   | 500 – 1999    | 3 |
+| ≥ 150      | ≥ 2000        | 4 |
+
+Compute N for each column independently. Take the max. Cap at 4. When N > 1, partition by top-level directory clusters (e.g. `plugins/` → shard 1; `scripts/ + tests/` → shard 2).
 
 ## Phase 1 — Orient and Compute Fan-out
 
@@ -61,12 +64,17 @@ Glob for `CLAUDE.md` at the project root. If missing, inform the user that creat
 
 Record current `CLAUDE.md` line count with `wc -l`. List `.claude/claudemd-topics/*.md` if the directory exists and record each topic file's line count.
 
-Run cheap git probes as parallel Bash calls:
+Run cheap git probes in two steps.
 
-- `git log -1 --format="%ai" -- CLAUDE.md` — last CLAUDE.md commit date. If CLAUDE.md has no history, fall back to `git log --reverse --format="%ai" | head -1`
-- `git log --since="<date>" --oneline --no-merges | wc -l` — churn
+First, resolve the last CLAUDE.md commit date (sequential — downstream probe depends on it):
+
+- `git log -1 --format="%ai" -- CLAUDE.md` → record as `<last_claudemd_date>`. If CLAUDE.md has no history, fall back to `git log --reverse --format="%ai" | head -1`.
+
+Then run the remaining probes as parallel Bash calls:
+
+- `git log --since="<last_claudemd_date>" --oneline --no-merges | wc -l` — churn
 - `git ls-files | wc -l` — tracked files
-- `ls -d */ 2>/dev/null | wc -l` — top-level directory count
+- `git ls-files | awk -F/ 'NF>1{print $1}' | sort -u | wc -l` — top-level directory count
 
 Compute N using the fan-out rule. Decide the shard plan: which top-level directories each Codebase Scan agent will cover.
 

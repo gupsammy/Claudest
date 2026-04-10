@@ -43,7 +43,7 @@ Exit 1 = naming collision; ask user whether to overwrite or rename.
 
 Read `${CLAUDE_PLUGIN_ROOT}/skills/create-skill/references/frontmatter-options.md` for the full field catalog, description patterns, tool selection framework, and execution modifiers.
 
-**Description density rules:** Keep descriptions under 100 tokens (150 absolute max) — they load every session. Derive trigger phrases from the user's actual words in Phase 0, not paraphrases. See the token budget and trigger derivation principles in `frontmatter-options.md`.
+**Description density rules:** Keep descriptions under 150 tokens (200 absolute max) — they load every session. Descriptions over 250 characters are truncated in the skill listing. Derive trigger phrases from the user's actual words in Phase 0, not paraphrases. See the token budget, pushy routing pattern, and trigger derivation principles in `frontmatter-options.md`.
 
 **Intensional over extensional — apply to all generated content.** State the rule directly with its reasoning rather than listing examples that imply the rule. An intensional rule ("quoted phrases must be verbatim user speech *because* routing matches on literal tokens") generalizes to every input the skill will encounter. An extensional approach requires the reader to reverse-engineer the rule — two reasoning hops instead of one, covering only the shape of those specific examples. Since this skill generates instructions that will themselves guide further generation, the quality of reasoning propagates.
 
@@ -93,10 +93,12 @@ Brief overview (1-2 sentences).
 | Syntax | Purpose |
 |--------|---------|
 | `$ARGUMENTS` | All arguments as string |
-| `$1`, `$2`, `$3` | Positional arguments |
+| `$1`, `$2`, `$3` | Positional arguments (shell-style quoting for multi-word values) |
 | `@path/file` | Load file contents |
 | `@$1` | Load file from argument |
 | Exclamation + backticks | Execute bash command, include output |
+| `${CLAUDE_SKILL_DIR}` | Path to the skill's own directory (use for referencing bundled scripts/files) |
+| `${CLAUDE_SESSION_ID}` | Current session ID (useful for logging or session-specific output files) |
 
 **Example — injecting live context:**
 

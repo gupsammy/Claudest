@@ -141,7 +141,12 @@ def sync_session(conn: sqlite3.Connection, filepath: Path, project_dir: Path) ->
     cursor.execute("SELECT id FROM sessions WHERE uuid = ?", (session_uuid,))
     session_id = cursor.fetchone()[0]
 
-    # Step 2: Insert ALL messages once, dedup by (session_id, uuid)
+    # Build set of all UUIDs claimed by any branch (filter for message insertion)
+    valid_branch_uuids = set()
+    for branch in branches:
+        valid_branch_uuids.update(branch["uuids"])
+
+    # Step 2: Insert messages that belong to a branch, dedup by (session_id, uuid)
     existing_uuids = set()
     cursor.execute(
         "SELECT uuid FROM messages WHERE session_id = ? AND uuid IS NOT NULL",
@@ -161,14 +166,21 @@ def sync_session(conn: sqlite3.Connection, filepath: Path, project_dir: Path) ->
         if entry_type == "user" and is_tool_result(content):
             continue
 
+        uuid = entry.get("uuid")
+        if not uuid:
+            continue
+
+        # Skip messages not claimed by any branch (prevents orphan ingestion)
+        if uuid not in valid_branch_uuids:
+            continue
+
         notification = 1 if (entry_type == "user" and (is_task_notification(content) or is_teammate_message(content))) else 0
 
         text, has_tool_use, has_thinking, tool_summary = extract_text_content(content)
         if not text:
             continue
 
-        uuid = entry.get("uuid")
-        if uuid and uuid in existing_uuids:
+        if uuid in existing_uuids:
             continue
 
         origin = parse_origin(entry)
@@ -191,8 +203,7 @@ def sync_session(conn: sqlite3.Connection, filepath: Path, project_dir: Path) ->
         ))
         if cursor.rowcount > 0:
             new_count += 1
-            if uuid:
-                existing_uuids.add(uuid)
+            existing_uuids.add(uuid)
 
     # Step 3: Build uuid -> message_id mapping
     cursor.execute(
@@ -208,14 +219,11 @@ def sync_session(conn: sqlite3.Connection, filepath: Path, project_dir: Path) ->
     )
     existing_branches = {row[1]: row[0] for row in cursor.fetchall()}
 
-    current_leaf_uuids = set()
-
     for branch in branches:
         leaf_uuid = branch["leaf_uuid"]
         branch_uuids = branch["uuids"]
         is_active = branch["is_active"]
         fork_point_uuid = branch.get("fork_point_uuid")
-        current_leaf_uuids.add(leaf_uuid)
 
         # Filter messages to this branch
         branch_msgs = [m for m in messages if m.get("uuid") in branch_uuids]
@@ -277,16 +285,33 @@ def sync_session(conn: sqlite3.Connection, filepath: Path, project_dir: Path) ->
                 WHERE session_id = ? AND id != ? AND is_active = 1
             """, (session_id, branch_db_id))
 
-        # Rebuild branch_messages for this branch
-        cursor.execute("DELETE FROM branch_messages WHERE branch_id = ?", (branch_db_id,))
+        # Update branch_messages via targeted diff (not full rebuild)
+        cursor.execute(
+            "SELECT message_id FROM branch_messages WHERE branch_id = ?",
+            (branch_db_id,)
+        )
+        existing_bm_ids = {row[0] for row in cursor.fetchall()}
 
+        desired_bm_ids = set()
         for uuid in branch_uuids:
             msg_id = uuid_to_msg_id.get(uuid)
             if msg_id:
-                cursor.execute(
-                    "INSERT OR IGNORE INTO branch_messages (branch_id, message_id) VALUES (?, ?)",
-                    (branch_db_id, msg_id)
-                )
+                desired_bm_ids.add(msg_id)
+
+        to_add = desired_bm_ids - existing_bm_ids
+        to_remove = existing_bm_ids - desired_bm_ids
+
+        if to_remove:
+            ph = ",".join("?" * len(to_remove))
+            cursor.execute(
+                f"DELETE FROM branch_messages WHERE branch_id = ? AND message_id IN ({ph})",
+                (branch_db_id, *to_remove)
+            )
+        if to_add:
+            cursor.executemany(
+                "INSERT OR IGNORE INTO branch_messages (branch_id, message_id) VALUES (?, ?)",
+                [(branch_db_id, mid) for mid in to_add]
+            )
 
         # Aggregate branch content for FTS
         agg_content = aggregate_branch_content(cursor, branch_db_id)
@@ -304,27 +329,6 @@ def sync_session(conn: sqlite3.Connection, filepath: Path, project_dir: Path) ->
             """, (summary_md, summary_json, branch_db_id))
         except Exception:
             pass  # Don't fail sync on summary errors
-
-    # Step 5: Clean up stale branches
-    stale_branch_ids = [
-        old_branch_id
-        for old_leaf, old_branch_id in existing_branches.items()
-        if old_leaf not in current_leaf_uuids
-    ]
-    if stale_branch_ids:
-        placeholders = ",".join("?" * len(stale_branch_ids))
-        cursor.execute(f"DELETE FROM branch_messages WHERE branch_id IN ({placeholders})", stale_branch_ids)
-        cursor.execute(f"DELETE FROM branches WHERE id IN ({placeholders})", stale_branch_ids)
-
-    # Clean up orphaned messages (not referenced by any branch)
-    cursor.execute("""
-        DELETE FROM messages
-        WHERE session_id = ? AND id NOT IN (
-            SELECT DISTINCT bm.message_id FROM branch_messages bm
-            JOIN branches b ON bm.branch_id = b.id
-            WHERE b.session_id = ?
-        )
-    """, (session_id, session_id))
 
     return new_count
 

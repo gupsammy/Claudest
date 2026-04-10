@@ -24,21 +24,47 @@ allowed-tools:                      # Restrict available tools
   - Grep
   - Bash(git:*)
 
-# Lifecycle hooks (optional)
+# Lifecycle hooks (optional, scoped to this skill's lifetime)
 hooks:
   PreToolUse:
-    - command: "validation-script.sh"
+    - matcher: "Bash"
+      hooks:
+        - type: command
+          command: "scripts/validate-input.sh"
+          timeout: 10
+          statusMessage: "Validating..."
   PostToolUse:
-    - command: "cleanup.sh"
+    - hooks:
+        - type: command
+          command: "scripts/cleanup.sh"
+  Stop:
+    - hooks:
+        - type: command
+          command: "scripts/on-complete.sh"
+          once: true                # Skills only: run once, then auto-remove
+
+# Execution context
+context: fork                       # Run in a subagent (isolates from conversation)
+agent: Explore                      # Subagent type when context: fork (default: general-purpose)
+effort: high                        # Override session effort: low | medium | high | max (Opus only)
+paths: "*.py,src/**/*.ts"           # Glob patterns limiting auto-activation to matching files
+shell: bash                         # Shell for !`cmd` blocks: bash (default) or powershell
 
 # Behavior modifiers
 user-invocable: true                # Show in /command menu (default true)
-disable-model-invocation: true      # Prevent programmatic invocation (commands only)
+disable-model-invocation: true      # Prevent programmatic invocation
 argument-hint: "[arg1] [arg2]"      # Document expected arguments; quote if value contains [...]
 ---
 
 **`argument-hint` quoting rule:** Values containing `[...]` must be quoted (`"[arg]"`), because YAML treats unquoted `[` as the start of a flow sequence. Values using only `<...>` do not need quoting.
 ```
+
+**Hooks structure:** Each hook event (PreToolUse, PostToolUse, Stop, SessionStart, etc.)
+accepts an array of entries. Each entry can have a `matcher` (filter by tool name) and a
+`hooks` array with handlers. Handler fields: `type` (command, http, prompt, agent),
+`command`, `timeout` (seconds), `statusMessage` (custom spinner text), `once` (skills
+only — run once then auto-remove). Hooks are scoped to the skill's lifetime and cleaned
+up when it finishes.
 
 ---
 
@@ -53,16 +79,19 @@ argument-hint: "[arg1] [arg2]"      # Document expected arguments; quote if valu
 - **Include negative triggers for adjacent domains.** Routing is a classification problem — explicit exclusions sharpen the decision boundary. Add "Not for X" or "Don't use for Y" when the skill could plausibly false-trigger on a related but distinct domain.
 - **3–5 trigger phrases minimum.** Single-phrase descriptions have high miss rates. Varied phrases improve routing coverage across synonym space.
 - **Derive trigger phrases from user language.** Pull phrases from how the user actually described their need during requirements gathering, not from formalized or paraphrased versions. If the user said "fix my skill," use "fix my skill" — not "skill remediation." When no user phrasing is available, imagine the most natural way someone would describe this need without knowing the skill exists.
-- **Keep descriptions under 100 tokens (150 absolute max).** A 10-skill installation at 170 tokens each burns ~1,700 tokens per session on routing metadata alone. At 100 tokens that drops to ~1,000. Prioritize trigger phrases over explanatory prose — the description's job is routing, not documentation.
+- **Err toward overtriggering, not undertriggering.** Claude tends to undertrigger skills — to not invoke them when they'd be useful. After the core verbatim phrases, append a routing directive using intent categories: "Make sure to use this skill whenever the user mentions [X, Y, Z] — even if they don't explicitly say '[skill name]'." X/Y/Z should be intent categories and concept words (broad, generalizable), not verbatim query phrases (which overfit and bloat context). The core description uses verbatim phrases (optimized for recall); the routing suffix uses category words (broad, anti-overfit). These two layers are not interchangeable.
+- **Keep descriptions under 150 tokens (200 absolute max).** Anthropic's hard limit is 1024 characters (~250 tokens). Descriptions longer than 250 characters are truncated in the skill listing. The routing suffix from the overtriggering rule adds ~20-30 tokens — the raised budget accommodates it. Prioritize trigger phrases over explanatory prose — the description's job is routing, not documentation.
 - **Use `>` scalar, not `|`.** Folded scalar (`>`) collapses newlines to spaces, producing a single continuous string — correct for descriptions. Literal scalar (`|`) preserves newlines, which can create unexpected whitespace when parsed.
 
 ```yaml
-# Correct — third-person, verbatim phrases, folded scalar, negative trigger
+# Correct — verbatim phrases in core, category routing suffix, negative trigger
 description: >
   This skill should be used when the user asks to "create a hook",
   "add validation", "implement lifecycle automation", or mentions
-  pre/post tool events. Not for modifying existing hooks or debugging
-  hook failures.
+  pre/post tool events. Make sure to use this skill whenever the user
+  mentions hook lifecycle, automation, or tool events — even if they
+  don't explicitly say "hook". Not for modifying existing hooks or
+  debugging hook failures.
 
 # Wrong — vague, no trigger phrases, not third-person
 description: Provides guidance for hooks.
@@ -83,11 +112,17 @@ description: Deploy to staging environment
 
 ## Execution Modifiers
 
-Use these when the default behavior isn't sufficient:
+- **`hooks`** — Run scripts at lifecycle events, scoped to this skill's lifetime. See the Common Frontmatter Options block above for the full structure (matcher, type, timeout, statusMessage, once).
 
-- **`hooks`** — Run scripts before/after tool use, scoped to this skill's lifecycle. Useful for validation, logging, or side effects.
+- **`context: fork`** — Run the skill in an isolated subagent. The skill content becomes the subagent's prompt; it won't have access to conversation history. Use for task-type skills (deploy, generate, research) where isolation prevents accidental side effects. Pair with `agent` to choose the subagent type (Explore, Plan, general-purpose, or a custom agent from `.claude/agents/`).
 
-- **`disable-model-invocation: true`** — Prevent Claude from auto-loading this skill. Use for skills you want to invoke manually only (commands only).
+- **`effort`** — Override session effort level for this skill. Options: low, medium, high, max (max is Opus 4.6 only). Use high/max for skills requiring deep reasoning; low for simple lookup skills.
+
+- **`paths`** — Glob patterns (comma-separated or YAML list) limiting auto-activation. When set, Claude loads the skill automatically only when working with files matching the patterns. Use for language-specific or framework-specific skills.
+
+- **`shell`** — Shell for `!`backtick`` and ` ```! ` blocks: bash (default) or powershell. Setting powershell runs inline shell commands via PowerShell on Windows.
+
+- **`disable-model-invocation: true`** — Prevent Claude from auto-loading this skill. Use for skills with side effects you want to trigger manually only.
 
 - **`user-invocable: false`** — Hide from the `/` command menu. Use for background-knowledge skills that should trigger automatically but not appear as slash commands.
 
@@ -108,6 +143,24 @@ Default generous, restrict only when needed. The principle: restrict tools that 
 | **If delegating** | Skill | Required to invoke other skills programmatically |
 | **If notebooks** | NotebookEdit | Jupyter-specific; omit unless skill touches `.ipynb` files |
 | **If plan-gated** | ExitPlanMode, EnterPlanMode | For workflows requiring explicit user approval before execution |
+
+---
+
+## Skill Content Lifecycle
+
+When invoked, the rendered SKILL.md enters the conversation as a single message and stays
+for the rest of the session. Claude Code does not re-read the file on later turns — write
+guidance as standing instructions, not one-time steps.
+
+Auto-compaction carries invoked skills forward within a token budget: the first 5,000
+tokens of each skill are retained after compaction, and all recently invoked skills share
+a combined 25,000-token budget (filled most-recent-first). Skills exceeding 5,000 tokens
+lose their tail after compaction. Skills invoked long ago may be dropped entirely if the
+budget is exhausted. If a skill seems to stop influencing behavior, re-invoke it.
+
+Design implications: keep SKILL.md under 500 lines. Front-load critical instructions
+within the first ~5,000 tokens. Move detailed reference material to separate files that
+are loaded on demand.
 
 ---
 

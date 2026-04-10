@@ -23,7 +23,36 @@ allowed-tools:                      # Restrict available tools (see Tool Selecti
   - Read
   - Grep
   - Bash(git:*)
+
+# Lifecycle hooks (optional, scoped to this skill's lifetime)
+hooks:
+  PreToolUse:
+    - matcher: "Bash"
+      hooks:
+        - type: command
+          command: "scripts/validate-input.sh"
+          timeout: 10
+          statusMessage: "Validating..."
+  PostToolUse:
+    - hooks:
+        - type: command
+          command: "scripts/cleanup.sh"
+  Stop:
+    - hooks:
+        - type: command
+          command: "scripts/on-complete.sh"
+          once: true                # Skills only: run once, then auto-remove
+
+# Execution context
+context: fork                       # Run in a subagent (isolates from conversation)
+agent: Explore                      # Subagent type when context: fork (default: general-purpose)
+effort: high                        # Override session effort: low | medium | high | max (Opus only)
+paths: "*.py,src/**/*.ts"           # Glob patterns limiting auto-activation to matching files
+shell: bash                         # Shell for !`cmd` blocks: bash (default) or powershell
+
+# Behavior modifiers
 user-invocable: true                # Show in /command menu (default true)
+disable-model-invocation: true      # Prevent programmatic invocation
 argument-hint: "[arg1] [arg2]"      # Document expected arguments; quote if value contains [...]
 ---
 ```
@@ -133,6 +162,18 @@ description: Deploy to staging environment
 - **`description`** — How the routing model decides when to trigger this skill, or the label shown in the `/` menu for commands. See Description Patterns below.
 
 - **`allowed-tools`** — Restrict which tools the skill can use. Default is all tools. See Tool Selection below.
+
+- **`hooks`** — Run scripts at lifecycle events, scoped to this skill's lifetime. See the Common Frontmatter Options block above for the full structure (matcher, type, timeout, statusMessage, once).
+
+- **`context: fork`** — Run the skill in an isolated subagent. The skill content becomes the subagent's prompt; it won't have access to conversation history. Use for task-type skills (deploy, generate, research) where isolation prevents accidental side effects. Pair with `agent` to choose the subagent type (Explore, Plan, general-purpose, or a custom agent from `.claude/agents/`).
+
+- **`effort`** — Override session effort level for this skill. Options: low, medium, high, max (max is Opus 4.6 only). Use high/max for skills requiring deep reasoning; low for simple lookup skills.
+
+- **`paths`** — Glob patterns (comma-separated or YAML list) limiting auto-activation. When set, Claude loads the skill automatically only when working with files matching the patterns. Use for language-specific or framework-specific skills.
+
+- **`shell`** — Shell for `!`backtick`` and ` ```! ` blocks: bash (default) or powershell. Setting powershell runs inline shell commands via PowerShell on Windows.
+
+- **`disable-model-invocation: true`** — Prevent Claude from auto-loading this skill. Use for skills with side effects you want to trigger manually only.
 
 - **`user-invocable`** — Whether the skill appears in the `/` command menu. Default `true`. Set to `false` for background-knowledge skills that should trigger automatically but not appear as slash commands.
 

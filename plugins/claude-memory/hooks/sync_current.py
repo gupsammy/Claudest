@@ -167,9 +167,11 @@ def sync_session(conn: sqlite3.Connection, filepath: Path, project_dir: Path) ->
             continue
 
         uuid = entry.get("uuid")
+        if not uuid:
+            continue
 
         # Skip messages not claimed by any branch (prevents orphan ingestion)
-        if uuid and uuid not in valid_branch_uuids:
+        if uuid not in valid_branch_uuids:
             continue
 
         notification = 1 if (entry_type == "user" and (is_task_notification(content) or is_teammate_message(content))) else 0
@@ -178,7 +180,7 @@ def sync_session(conn: sqlite3.Connection, filepath: Path, project_dir: Path) ->
         if not text:
             continue
 
-        if uuid and uuid in existing_uuids:
+        if uuid in existing_uuids:
             continue
 
         origin = parse_origin(entry)
@@ -201,8 +203,7 @@ def sync_session(conn: sqlite3.Connection, filepath: Path, project_dir: Path) ->
         ))
         if cursor.rowcount > 0:
             new_count += 1
-            if uuid:
-                existing_uuids.add(uuid)
+            existing_uuids.add(uuid)
 
     # Step 3: Build uuid -> message_id mapping
     cursor.execute(

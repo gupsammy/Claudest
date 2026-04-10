@@ -1,6 +1,11 @@
 ---
 name: repair-skill
-description: This skill should be used when the user asks to "repair my skill", "audit this skill", "fix my skill", "review skill quality", "check if my skill is well-written", "diagnose skill problems", "what's wrong with this skill", or wants structural correctness fixes. Not for adding features or improving effectiveness — use improve-skill for that. Not for agents — use repair-agent.
+description: >
+  This skill should be used when the user asks to "fix my skill" or "audit this skill".
+  Make sure to use this skill whenever the user mentions skill quality, structural issues,
+  broken skills, or skill diagnostics — even if they don't explicitly say "repair-skill".
+  Not for adding features or improving effectiveness — use improve-skill. Not for agents
+  — use repair-agent.
 argument-hint: <path-to-skill-directory-or-SKILL.md>
 ---
 

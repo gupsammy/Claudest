@@ -1,8 +1,10 @@
 ---
 name: create-skill
 description: >
-  This skill should be used when the user asks to "create a skill", "make a command",
-  "write a slash command", "build a Claude extension", or "add a skill to a plugin".
+  This skill should be used when the user asks to "create a skill" or "make a command".
+  Make sure to use this skill whenever the user mentions skill creation, command authoring,
+  slash commands, or building Claude extensions — even if they don't explicitly say
+  "create-skill". Not for repairing or auditing existing skills — use repair-skill.
 argument-hint: "[skill|command] [name] - or leave empty to interview"
 ---
 # Skill & Command Generator

@@ -1,4 +1,4 @@
-# claude-skills ![v0.5.19](https://img.shields.io/badge/v0.5.19-blue?style=flat-square)
+# claude-skills ![v0.5.20](https://img.shields.io/badge/v0.5.20-blue?style=flat-square)
 
 Skill and agent authoring tools for Claude Code. Six complementary skills: one generates skills from scratch, one generates agents, one audits skills for structural correctness, one audits agents for structural correctness, one improves skills for effectiveness, and one designs CLI interfaces for the scripts those skills produce. A bundled `skill-lint` agent runs structural linting automatically after skill creation or improvement.
 

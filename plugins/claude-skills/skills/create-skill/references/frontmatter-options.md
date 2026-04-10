@@ -10,21 +10,32 @@ disclosure patterns.
 
 ---
 
-## Common Frontmatter Options
+## Essential Frontmatter
+
+Every skill needs these fields. Start here.
 
 ```yaml
 ---
-name: identifier                    # Required for skills
-description: >                      # How it's described/triggered
+name: identifier                    # Required — unique skill identifier
+description: >                      # How it's described/triggered (see patterns below)
   [See description patterns below]
-
-# Tool access
-allowed-tools:                      # Restrict available tools
+allowed-tools:                      # Restrict available tools (see Tool Selection below)
   - Read
   - Grep
   - Bash(git:*)
+user-invocable: true                # Show in /command menu (default true)
+argument-hint: "[arg1] [arg2]"      # Document expected arguments; quote if value contains [...]
+---
+```
 
-# Lifecycle hooks (optional, scoped to this skill's lifetime)
+**`argument-hint` quoting rule:** Values containing `[...]` must be quoted (`"[arg]"`), because YAML treats unquoted `[` as the start of a flow sequence. Values using only `<...>` do not need quoting.
+
+## Advanced Frontmatter
+
+Use when needed — most skills don't require these.
+
+```yaml
+# Lifecycle hooks (scoped to this skill's lifetime)
 hooks:
   PreToolUse:
     - matcher: "Bash"
@@ -46,17 +57,12 @@ hooks:
 # Execution context
 context: fork                       # Run in a subagent (isolates from conversation)
 agent: Explore                      # Subagent type when context: fork (default: general-purpose)
-effort: high                        # Override session effort: low | medium | high | max (Opus only)
+effort: high                        # Override session effort: low | medium | high | max (max: Opus 4.6 only)
 paths: "*.py,src/**/*.ts"           # Glob patterns limiting auto-activation to matching files
 shell: bash                         # Shell for !`cmd` blocks: bash (default) or powershell
 
-# Behavior modifiers
-user-invocable: true                # Show in /command menu (default true)
-disable-model-invocation: true      # Prevent programmatic invocation
-argument-hint: "[arg1] [arg2]"      # Document expected arguments; quote if value contains [...]
----
-
-**`argument-hint` quoting rule:** Values containing `[...]` must be quoted (`"[arg]"`), because YAML treats unquoted `[` as the start of a flow sequence. Values using only `<...>` do not need quoting.
+# Behavior modifiers (commands)
+disable-model-invocation: true      # Prevent programmatic invocation (commands only)
 ```
 
 **Hooks structure:** Each hook event (PreToolUse, PostToolUse, Stop, SessionStart, etc.)
@@ -70,28 +76,38 @@ up when it finishes.
 
 ## Description Patterns
 
-### For Skills (auto-triggered) — principles
+### For Skills (auto-triggered) — the two-layer model
 
-- **Third-person framing is a routing signal, not a stylistic choice.** The routing model evaluates the description as a triggering condition. First-person ("Use this skill when...") reads as an instruction to execute. Third-person ("This skill should be used when...") reads as a condition to test. The framing changes how the model interprets the field.
-- **Quoted phrases must be verbatim user speech.** Routing matches on literal token patterns. Write the exact words a user would type, not paraphrases: `"create a hook"` triggers correctly; `"hook creation workflows"` may not.
-- **The description is always in context, even when the skill isn't active.** Every session pays the token cost of every skill's description. Density matters: cover more trigger patterns in fewer words. Avoid restating the skill name or explaining what skills are.
-- **Cover the naive phrasing.** A user who doesn't know this skill exists won't search for it by name — they'll describe their problem in plain language. Include the phrasing someone would use who has never heard of this skill.
-- **Include negative triggers for adjacent domains.** Routing is a classification problem — explicit exclusions sharpen the decision boundary. Add "Not for X" or "Don't use for Y" when the skill could plausibly false-trigger on a related but distinct domain.
-- **3–5 trigger phrases minimum.** Single-phrase descriptions have high miss rates. Varied phrases improve routing coverage across synonym space.
-- **Derive trigger phrases from user language.** Pull phrases from how the user actually described their need during requirements gathering, not from formalized or paraphrased versions. If the user said "fix my skill," use "fix my skill" — not "skill remediation." When no user phrasing is available, imagine the most natural way someone would describe this need without knowing the skill exists.
-- **Err toward overtriggering, not undertriggering.** Claude tends to undertrigger skills — to not invoke them when they'd be useful. After the core verbatim phrases, append a routing directive using intent categories: "Make sure to use this skill whenever the user mentions [X, Y, Z] — even if they don't explicitly say '[skill name]'." X/Y/Z should be intent categories and concept words (broad, generalizable), not verbatim query phrases (which overfit and bloat context). The core description uses verbatim phrases (optimized for recall); the routing suffix uses category words (broad, anti-overfit). These two layers are not interchangeable.
-- **Keep descriptions under 150 tokens (200 absolute max).** Anthropic's hard limit is 1024 characters (~250 tokens). Descriptions longer than 250 characters are truncated in the skill listing. The routing suffix from the overtriggering rule adds ~20-30 tokens — the raised budget accommodates it. Prioritize trigger phrases over explanatory prose — the description's job is routing, not documentation.
-- **Use `>` scalar, not `|`.** Folded scalar (`>`) collapses newlines to spaces, producing a single continuous string — correct for descriptions. Literal scalar (`|`) preserves newlines, which can create unexpected whitespace when parsed.
+Skill descriptions serve one purpose: helping the routing model decide when to trigger. They use a two-layer structure where a broad routing directive provides primary coverage and a few verbatim phrases anchor the intent.
+
+**Layer 1: Routing directive (primary coverage).** A sentence at the end that tells the model to trigger broadly across an intent category. Format: "Make sure to use this skill whenever the user mentions [X, Y, Z] — even if they don't explicitly say '[skill name]'." X/Y/Z are intent categories and concept words (broad, generalizable), not verbatim query phrases. This is the main coverage mechanism — it catches the long tail of phrasings you can't anticipate.
+
+**Layer 2: Verbatim anchors (precision).** 2–3 quoted phrases representing the exact words a user would type. These provide high-confidence matches for common cases. Derive them from real user language, not formalized paraphrases: `"fix my skill"` not `"skill remediation"`. Cover the naive phrasing — what someone would say who has never heard of this skill.
+
+The two layers are complementary, not interchangeable: verbatim phrases optimize for precision on known patterns; the routing directive optimizes for recall across unknown patterns.
+
+#### Additional principles
+
+- **Third-person framing is a routing signal.** "This skill should be used when..." reads as a condition to test. "Use this skill when..." reads as an instruction to execute. The routing model treats these differently.
+- **Include negative triggers for adjacent domains.** Explicit exclusions sharpen the decision boundary. Add "Not for X" when the skill could plausibly false-trigger on a related domain.
+- **The description is always in context.** Every session pays the token cost of every skill's description. Keep it dense — the routing directive eliminates the need for exhaustive trigger phrase lists.
+- **Keep descriptions under 150 tokens (200 absolute max).** Anthropic's hard limit is 1024 characters (~250 tokens). Descriptions longer than 250 characters are truncated. The routing directive adds ~20-30 tokens — the budget accommodates it.
+- **Use `>` scalar, not `|`.** Folded scalar (`>`) collapses newlines to spaces — correct for descriptions. Literal scalar (`|`) preserves newlines, which can break parsing.
 
 ```yaml
-# Correct — verbatim phrases in core, category routing suffix, negative trigger
+# Correct — verbatim anchors, broad routing directive, negative trigger
+description: >
+  This skill should be used when the user asks to "create a hook"
+  or "add lifecycle automation". Make sure to use this skill whenever
+  the user mentions hook authoring, tool-event automation, or
+  validation pipelines — even if they don't explicitly say "hook".
+  Not for modifying existing hooks or debugging hook failures.
+
+# Wrong — exhaustive trigger phrases, no routing directive
 description: >
   This skill should be used when the user asks to "create a hook",
-  "add validation", "implement lifecycle automation", or mentions
-  pre/post tool events. Make sure to use this skill whenever the user
-  mentions hook lifecycle, automation, or tool events — even if they
-  don't explicitly say "hook". Not for modifying existing hooks or
-  debugging hook failures.
+  "add validation", "implement lifecycle automation", "set up
+  pre-tool hooks", "add post-tool cleanup", or "write hook scripts".
 
 # Wrong — vague, no trigger phrases, not third-person
 description: Provides guidance for hooks.
@@ -110,9 +126,23 @@ description: Deploy to staging environment
 
 ---
 
-## Execution Modifiers
+## Essential Field Reference
 
-- **`hooks`** — Run scripts at lifecycle events, scoped to this skill's lifetime. See the Common Frontmatter Options block above for the full structure (matcher, type, timeout, statusMessage, once).
+- **`name`** — Unique identifier. Required for all skills and commands.
+
+- **`description`** — How the routing model decides when to trigger this skill, or the label shown in the `/` menu for commands. See Description Patterns below.
+
+- **`allowed-tools`** — Restrict which tools the skill can use. Default is all tools. See Tool Selection below.
+
+- **`user-invocable`** — Whether the skill appears in the `/` command menu. Default `true`. Set to `false` for background-knowledge skills that should trigger automatically but not appear as slash commands.
+
+- **`argument-hint`** — Shown in autocomplete when the user types the command. Documents expected arguments.
+
+## Advanced Field Reference
+
+These fields add execution control, lifecycle hooks, and platform-specific behavior. Most skills don't need them.
+
+- **`hooks`** — Run scripts at lifecycle events, scoped to this skill's lifetime. See the Advanced Frontmatter block above for the full structure (matcher, type, timeout, statusMessage, once).
 
 - **`context: fork`** — Run the skill in an isolated subagent. The skill content becomes the subagent's prompt; it won't have access to conversation history. Use for task-type skills (deploy, generate, research) where isolation prevents accidental side effects. Pair with `agent` to choose the subagent type (Explore, Plan, general-purpose, or a custom agent from `.claude/agents/`).
 
@@ -120,11 +150,9 @@ description: Deploy to staging environment
 
 - **`paths`** — Glob patterns (comma-separated or YAML list) limiting auto-activation. When set, Claude loads the skill automatically only when working with files matching the patterns. Use for language-specific or framework-specific skills.
 
-- **`shell`** — Shell for `!`backtick`` and ` ```! ` blocks: bash (default) or powershell. Setting powershell runs inline shell commands via PowerShell on Windows.
+- **`shell`** — Shell for `!`backtick`` and ` ```! ` blocks: bash (default) or powershell. Setting powershell runs inline shell commands via PowerShell on Windows. Requires `CLAUDE_CODE_USE_POWERSHELL_TOOL=1` env var for inline `!` commands to execute via PowerShell.
 
-- **`disable-model-invocation: true`** — Prevent Claude from auto-loading this skill. Use for skills with side effects you want to trigger manually only.
-
-- **`user-invocable: false`** — Hide from the `/` command menu. Use for background-knowledge skills that should trigger automatically but not appear as slash commands.
+- **`disable-model-invocation: true`** — Commands only. Prevents Claude from auto-loading based on description. Has no effect on skills — use `user-invocable: false` instead for skills you want to hide from auto-triggering.
 
 ---
 

@@ -15,6 +15,7 @@ disclosure patterns.
 Every skill needs these fields. Start here.
 
 ```yaml
+# Complete field catalog — most skills only need: name, description, allowed-tools
 ---
 name: identifier                    # Required — unique skill identifier
 description: >                      # How it's described/triggered (see patterns below)
@@ -46,13 +47,13 @@ hooks:
 # Execution context
 context: fork                       # Run in a subagent (isolates from conversation)
 agent: Explore                      # Subagent type when context: fork (default: general-purpose)
-effort: high                        # Override session effort: low | medium | high | max (Opus only)
+effort: high                        # Override session effort: low | medium | high | max (max: Opus 4.6 only)
 paths: "*.py,src/**/*.ts"           # Glob patterns limiting auto-activation to matching files
 shell: bash                         # Shell for !`cmd` blocks: bash (default) or powershell
 
 # Behavior modifiers
 user-invocable: true                # Show in /command menu (default true)
-disable-model-invocation: true      # Prevent programmatic invocation
+disable-model-invocation: true      # Prevent programmatic invocation (commands only)
 argument-hint: "[arg1] [arg2]"      # Document expected arguments; quote if value contains [...]
 ---
 ```
@@ -163,17 +164,11 @@ description: Deploy to staging environment
 
 - **`allowed-tools`** — Restrict which tools the skill can use. Default is all tools. See Tool Selection below.
 
-- **`hooks`** — Run scripts at lifecycle events, scoped to this skill's lifetime. See the Common Frontmatter Options block above for the full structure (matcher, type, timeout, statusMessage, once).
+For `hooks`, `context`, `effort`, and `paths` — see Advanced Field Reference below.
 
-- **`context: fork`** — Run the skill in an isolated subagent. The skill content becomes the subagent's prompt; it won't have access to conversation history. Use for task-type skills (deploy, generate, research) where isolation prevents accidental side effects. Pair with `agent` to choose the subagent type (Explore, Plan, general-purpose, or a custom agent from `.claude/agents/`).
+- **`shell`** — Shell for `!`backtick`` and ` ```! ` blocks: bash (default) or powershell. Setting powershell runs inline shell commands via PowerShell on Windows. Requires `CLAUDE_CODE_USE_POWERSHELL_TOOL=1` env var for inline `!` commands to execute via PowerShell.
 
-- **`effort`** — Override session effort level for this skill. Options: low, medium, high, max (max is Opus 4.6 only). Use high/max for skills requiring deep reasoning; low for simple lookup skills.
-
-- **`paths`** — Glob patterns (comma-separated or YAML list) limiting auto-activation. When set, Claude loads the skill automatically only when working with files matching the patterns. Use for language-specific or framework-specific skills.
-
-- **`shell`** — Shell for `!`backtick`` and ` ```! ` blocks: bash (default) or powershell. Setting powershell runs inline shell commands via PowerShell on Windows.
-
-- **`disable-model-invocation: true`** — Prevent Claude from auto-loading this skill. Use for skills with side effects you want to trigger manually only.
+- **`disable-model-invocation: true`** — Commands only. Prevents Claude from auto-loading based on description. Has no effect on skills — use `user-invocable: false` instead.
 
 - **`user-invocable`** — Whether the skill appears in the `/` command menu. Default `true`. Set to `false` for background-knowledge skills that should trigger automatically but not appear as slash commands.
 

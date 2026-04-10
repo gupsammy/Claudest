@@ -18,10 +18,11 @@ be third-person for skills ("This skill should be used when..."), verb-first und
 chars for commands.
 
 Audit rules for description quality:
-- **Token budget:** Under 100 tokens for most skills, 150 absolute max. At 170+ tokens, a 10-skill installation burns ~1,700 tokens per session on routing metadata alone. Prioritize trigger phrases over explanatory prose.
+- **Token budget:** Under 150 tokens for most skills, 200 absolute max. Anthropic's hard limit is 1024 characters (~250 tokens); descriptions over 250 characters are truncated in the skill listing. Prioritize trigger phrases over explanatory prose.
 - **Trigger phrase derivation:** Phrases should be verbatim user speech — the exact words someone would type, not formalized paraphrases. "fix my skill" triggers better than "skill remediation workflow."
 - **Negative triggers:** In crowded domains (multiple skills with overlapping concerns), include "Not for X" or "Don't use for Y" to sharpen the routing decision boundary.
 - **3–5 varied trigger phrases minimum.** Single-phrase descriptions have high miss rates. Include naive phrasing from a user who has never heard of this skill.
+- **Overtriggering check:** Claude tends to undertrigger skills. If the description has no routing directive ("Make sure to use this skill whenever the user mentions [X, Y, Z] — even if they don't explicitly say '[skill name]'"), flag it for the author to consider adding one. The routing suffix uses intent categories and concept words (broad, generalizable), not verbatim query phrases (which overfit). The core uses verbatim phrases (optimized for recall); the suffix uses category words (broad, anti-overfit). These two layers are not interchangeable.
 
 ### `allowed-tools` (list)
 
@@ -82,20 +83,36 @@ restriction is a security and scope risk.
 
 ### `hooks` (object)
 
-Scoped to this skill's lifecycle. Runs scripts before or after specific tool events.
+Scoped to this skill's lifetime — runs only when the skill is active, cleaned up when it
+finishes.
 
 ```yaml
 hooks:
   PreToolUse:
-    - command: "scripts/validate-input.sh"
+    - matcher: "Bash"
+      hooks:
+        - type: command
+          command: "scripts/validate-input.sh"
+          timeout: 10
+          statusMessage: "Validating..."
   PostToolUse:
-    - command: "scripts/cleanup.sh"
+    - hooks:
+        - type: command
+          command: "scripts/cleanup.sh"
   Stop:
-    - command: "scripts/on-complete.sh"
+    - hooks:
+        - type: command
+          command: "scripts/on-complete.sh"
+          once: true
 ```
 
-Valid hook events: `PreToolUse`, `PostToolUse`, `Stop`. Use for validation, logging,
-side effects, or cleanup that must happen deterministically around tool calls.
+All hook events are supported (PreToolUse, PostToolUse, Stop, SessionStart, etc.). Each
+entry can have a `matcher` (filter by tool name) and a `hooks` array with handlers.
+Handler fields: `type` (command, http, prompt, agent), `command`, `timeout` (seconds),
+`statusMessage` (custom spinner text), `once` (skills only — run once then auto-remove).
+
+Audit rule: hooks with no `matcher` fire on every tool call — verify this is intentional.
+Hooks using `once: true` outside of skills are invalid (agents don't support it).
 
 ### `user-invocable` (boolean)
 
@@ -124,6 +141,57 @@ need quoting.
 Audit rule: any skill that reads `$ARGUMENTS` or `$1`/`$2` should have `argument-hint`
 set so users know what to pass.
 
+### `context` (string)
+
+Set to `fork` to run the skill in an isolated subagent. The skill content becomes the
+subagent's prompt; it won't have access to conversation history. Use for task-type skills
+where isolation prevents accidental side effects. Pair with `agent`.
+
+### `agent` (string)
+
+Which subagent type to use when `context: fork` is set. Options: built-in agents
+(`Explore`, `Plan`, `general-purpose`) or custom agents from `.claude/agents/`. If
+omitted, uses `general-purpose`.
+
+Audit rule: `agent` without `context: fork` is dead config — flag it.
+
+### `effort` (string)
+
+Override session effort level: `low`, `medium`, `high`, `max` (max is Opus 4.6 only).
+Use high/max for skills requiring deep reasoning; low for simple lookup skills.
+
+### `paths` (string or list)
+
+Glob patterns limiting auto-activation. When set, Claude loads the skill automatically
+only when working with files matching the patterns. Accepts comma-separated string or
+YAML list. Uses the same format as path-specific rules in CLAUDE.md.
+
+Audit rule: skills with `paths` set should not also have broad descriptions — the path
+filter narrows scope, so the description should match that narrowed scope.
+
+### `shell` (string)
+
+Shell for `!`backtick`` and ` ```! ` blocks: `bash` (default) or `powershell`. Only
+relevant for skills using inline shell execution.
+
+---
+
+## Skill Content Lifecycle
+
+When invoked, the rendered SKILL.md enters the conversation as a single message and stays
+for the rest of the session. Claude Code does not re-read the file on later turns — write
+guidance as standing instructions, not one-time steps.
+
+Auto-compaction carries invoked skills forward within a token budget: the first 5,000
+tokens of each skill are retained after compaction, and all recently invoked skills share
+a combined 25,000-token budget (filled most-recent-first). Skills exceeding 5,000 tokens
+lose their tail after compaction. Skills invoked long ago may be dropped entirely if the
+budget is exhausted.
+
+Audit relevance: if a skill's critical instructions appear after the first ~5,000 tokens,
+they will be lost after compaction. Flag this as a structural issue — front-load critical
+content or move reference material to separate files.
+
 ---
 
 ## Dynamic Content Syntax
@@ -133,10 +201,12 @@ These substitutions are processed before the skill body reaches Claude.
 | Syntax | Resolves to |
 |--------|-------------|
 | `$ARGUMENTS` | All arguments passed to the skill as a single string |
-| `$1`, `$2`, `$3` | Individual positional arguments |
+| `$1`, `$2`, `$3` | Individual positional arguments (shell-style quoting for multi-word values) |
 | `@path/to/file` | Contents of the file at that path, loaded inline |
 | `@$1` | Contents of the file whose path was passed as the first argument |
 | bang + backtick-wrapped command (e.g. `!date`) | Output of executing the command in a shell, injected inline |
+| `${CLAUDE_SKILL_DIR}` | Path to the skill's own directory (for referencing bundled scripts/files) |
+| `${CLAUDE_SESSION_ID}` | Current session ID (for logging or session-specific output files) |
 
 Audit rule: skills that accept a file path as input should use `@$1` to load it inline
 rather than requiring a separate Read tool call — the injection happens before the model

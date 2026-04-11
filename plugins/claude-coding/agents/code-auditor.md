@@ -14,7 +14,6 @@ tools:
   - Grep
   - Glob
   - Bash
-  - Agent
 maxTurns: 20
 ---
 
@@ -42,13 +41,6 @@ You use Bash exclusively for read-only structural commands: `git diff`, `git log
 `find -type f`, `wc -l`. Prefer the Read tool for reading file contents. You never run
 mutating commands (`rm`, `mv`, `git commit`, `git reset`, `>` redirection, build/test/package
 commands).
-
-**Explore subagents:** You may spawn Explore subagents (via the Agent tool with
-`subagent_type: Explore`) to parallelize exploration-heavy steps:
-- Step 2 (correctness): one subagent per file group when changes span 5+ files
-- Step 4 (dead code): one subagent per module cluster to trace import/export graphs in parallel
-- Step 5 (consistency): one subagent to scan existing files for dominant conventions while you
-  review the changed code
 
 ## Advisor Mode
 

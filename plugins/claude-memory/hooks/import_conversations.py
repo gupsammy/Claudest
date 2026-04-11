@@ -16,7 +16,6 @@ import json
 import sqlite3
 import sys
 from pathlib import Path
-from typing import Optional
 
 # Add path to shared utils
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -48,7 +47,6 @@ def import_session(
     conn: sqlite3.Connection,
     filepath: Path,
     project_id: int,
-    parent_session_id: Optional[int] = None
 ) -> tuple[int, int]:
     """
     Import a single session JSONL file with v3 schema.
@@ -92,13 +90,12 @@ def import_session(
 
     # Step 1: Upsert ONE session row
     cursor.execute("""
-        INSERT INTO sessions (uuid, project_id, parent_session_id, git_branch, cwd)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO sessions (uuid, project_id, git_branch, cwd)
+        VALUES (?, ?, ?, ?)
         ON CONFLICT(uuid) DO UPDATE SET
             git_branch = COALESCE(excluded.git_branch, sessions.git_branch),
-            cwd = COALESCE(excluded.cwd, sessions.cwd),
-            parent_session_id = COALESCE(excluded.parent_session_id, sessions.parent_session_id)
-    """, (session_uuid, project_id, parent_session_id, meta["git_branch"], meta["cwd"]))
+            cwd = COALESCE(excluded.cwd, sessions.cwd)
+    """, (session_uuid, project_id, meta["git_branch"], meta["cwd"]))
     cursor.execute("SELECT id FROM sessions WHERE uuid = ?", (session_uuid,))
     session_id = cursor.fetchone()[0]
 
@@ -371,32 +368,6 @@ def import_project(
         else:
             sessions_imported += branches_count
             messages_imported += msg_count
-
-        # Check for subagents
-        session_uuid = jsonl_file.stem
-        subagents_dir = project_dir / session_uuid / "subagents"
-        if subagents_dir.exists():
-            for subagent_file in subagents_dir.glob("*.jsonl"):
-                # Skip prompt_suggestion agents (autocomplete noise)
-                if "prompt_suggestion" in subagent_file.stem:
-                    sessions_skipped += 1
-                    continue
-                # For subagents, find parent session id
-                cursor.execute(
-                    "SELECT id FROM sessions WHERE uuid = ? LIMIT 1",
-                    (session_uuid,)
-                )
-                parent_row = cursor.fetchone()
-                parent_sid = parent_row[0] if parent_row else None
-
-                sub_branches, sub_msg_count = import_session(
-                    conn, subagent_file, project_id, parent_session_id=parent_sid
-                )
-                if sub_branches != -1:
-                    sessions_imported += sub_branches
-                    messages_imported += sub_msg_count
-                else:
-                    sessions_skipped += 1
 
     return sessions_imported, messages_imported, sessions_skipped
 

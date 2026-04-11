@@ -787,3 +787,47 @@ class TestCurrentOnboardingVersion:
     def test_value_is_one(self):
         """Both write_config and onboarding.py depend on this being 1."""
         assert CURRENT_ONBOARDING_VERSION == 1
+
+
+class TestMigrateDbBackupGuard:
+    """Gap 3 — backup failure must block the destructive nuke in migrate_db.
+
+    Prevents: a disk-full or permission error during backup silently destroying
+    the only copy of conversation data that predates the 30-day JSONL expiry.
+    """
+
+    def test_backup_failure_blocks_nuke(self, tmp_path, monkeypatch):
+        """When _backup_db_before_migration returns False, migrate_db must abort."""
+        # Create a file-backed v2 DB (sessions exists, branches does not)
+        db_file = tmp_path / "conversations.db"
+        conn = sqlite3.connect(str(db_file))
+        conn.execute("""
+            CREATE TABLE sessions (
+                id INTEGER PRIMARY KEY,
+                uuid TEXT UNIQUE NOT NULL,
+                project_id INTEGER
+            )
+        """)
+        conn.execute("INSERT INTO sessions (uuid) VALUES ('keep-me')")
+        conn.commit()
+
+        import memory_lib.db as db_module
+        monkeypatch.setattr(db_module, "_backup_db_before_migration", lambda *a, **kw: False)
+
+        result = migrate_db(conn)
+
+        # Must refuse to migrate when backup fails
+        assert result is False, (
+            "migrate_db must return False when _backup_db_before_migration returns False"
+        )
+
+        # Original DB file must still exist
+        assert db_file.exists(), "DB file must not be deleted when backup failed"
+
+        # File must still be readable and contain original data
+        verify = sqlite3.connect(str(db_file))
+        count = verify.execute("SELECT COUNT(*) FROM sessions WHERE uuid = 'keep-me'").fetchone()[0]
+        verify.close()
+        assert count == 1, (
+            "Original session data must be intact after aborted migration"
+        )

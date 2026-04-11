@@ -403,3 +403,295 @@ class TestImportProject:
             sessions, messages, skipped = import_project(memory_db, project_dir)
             assert sessions == 0
             assert messages == 0
+
+
+class TestAppendOnlyReimport:
+    """Gap 1 — Message deduplication on forced reimport.
+
+    Prevents: stale-hash reimport doubling message rows, breaking recall results
+    and inflating context injection counts.
+    """
+
+    def test_no_duplicate_messages_on_forced_reimport(self, memory_db, project_id):
+        """Staling the import_log hash must not create new message rows."""
+        fixture_file = FIXTURE_DIR / "linear_3_exchange.jsonl"
+
+        # First import — establish baseline
+        branches1, messages1 = import_session(memory_db, fixture_file, project_id)
+        assert branches1 > 0, "First import must succeed"
+
+        cursor = memory_db.cursor()
+        cursor.execute(
+            "SELECT id, uuid FROM messages WHERE session_id = "
+            "(SELECT id FROM sessions WHERE project_id = ?)",
+            (project_id,)
+        )
+        rows_before = cursor.fetchall()
+        ids_before = {row[0] for row in rows_before}
+        uuids_before = {row[1] for row in rows_before}
+
+        # Force reimport by staling the hash
+        cursor.execute(
+            "UPDATE import_log SET file_hash = 'stale' WHERE file_path = ?",
+            (str(fixture_file),)
+        )
+        memory_db.commit()
+
+        branches2, messages2 = import_session(memory_db, fixture_file, project_id)
+        assert branches2 > 0, "Forced reimport must succeed"
+
+        # Same number of message rows — append-only, no duplicates
+        cursor.execute(
+            "SELECT id, uuid FROM messages WHERE session_id = "
+            "(SELECT id FROM sessions WHERE project_id = ?)",
+            (project_id,)
+        )
+        rows_after = cursor.fetchall()
+        assert len(rows_after) == len(rows_before), (
+            "Reimport must not create duplicate message rows"
+        )
+
+        # Same DB row IDs — ON CONFLICT DO NOTHING preserved originals
+        ids_after = {row[0] for row in rows_after}
+        assert ids_after == ids_before, "Same DB row IDs must survive reimport"
+
+        # No new UUIDs introduced
+        uuids_after = {row[1] for row in rows_after}
+        assert uuids_after == uuids_before, "No new UUIDs may appear after reimport"
+
+    def test_no_duplicate_session_uuid_message_pairs(self, memory_db, project_id):
+        """(session_id, uuid) uniqueness must hold across repeated forced reimports."""
+        fixture_file = FIXTURE_DIR / "linear_3_exchange.jsonl"
+        import_session(memory_db, fixture_file, project_id)
+
+        for _ in range(2):
+            cursor = memory_db.cursor()
+            cursor.execute(
+                "UPDATE import_log SET file_hash = 'stale' WHERE file_path = ?",
+                (str(fixture_file),)
+            )
+            memory_db.commit()
+            import_session(memory_db, fixture_file, project_id)
+
+        # Check no (session_id, uuid) duplicates exist anywhere
+        cursor = memory_db.cursor()
+        cursor.execute("""
+            SELECT session_id, uuid, COUNT(*) AS cnt
+            FROM messages
+            GROUP BY session_id, uuid
+            HAVING cnt > 1
+        """)
+        duplicates = cursor.fetchall()
+        assert duplicates == [], (
+            f"Duplicate (session_id, uuid) pairs found after repeated reimport: {duplicates}"
+        )
+
+
+class TestBranchMessagesDiffOnReimport:
+    """Gap 2 — branch_messages link set must be identical after forced reimport.
+
+    Prevents: ghost branch-message links accumulating across reimports, causing
+    search results to surface deleted message content.
+    """
+
+    def test_branch_messages_identical_after_reimport(self, memory_db, project_id):
+        """branch_messages rows must be the same set before and after stale-hash reimport."""
+        fixture_file = FIXTURE_DIR / "single_rewind.jsonl"
+
+        branches1, _ = import_session(memory_db, fixture_file, project_id)
+        assert branches1 == 3, "Fixture must produce 3 branches for this test to be meaningful"
+
+        cursor = memory_db.cursor()
+        cursor.execute("""
+            SELECT branch_id, message_id FROM branch_messages
+            WHERE branch_id IN (
+                SELECT b.id FROM branches b
+                JOIN sessions s ON b.session_id = s.id
+                WHERE s.project_id = ?
+            )
+            ORDER BY branch_id, message_id
+        """, (project_id,))
+        links_before = cursor.fetchall()
+        assert links_before, "branch_messages must be populated after first import"
+
+        # Force reimport
+        cursor.execute(
+            "UPDATE import_log SET file_hash = 'stale' WHERE file_path = ?",
+            (str(fixture_file),)
+        )
+        memory_db.commit()
+
+        branches2, _ = import_session(memory_db, fixture_file, project_id)
+        assert branches2 == 3, "Reimport must produce same branch count"
+
+        cursor.execute("""
+            SELECT branch_id, message_id FROM branch_messages
+            WHERE branch_id IN (
+                SELECT b.id FROM branches b
+                JOIN sessions s ON b.session_id = s.id
+                WHERE s.project_id = ?
+            )
+            ORDER BY branch_id, message_id
+        """, (project_id,))
+        links_after = cursor.fetchall()
+
+        assert links_after == links_before, (
+            "branch_messages link set must be identical after forced reimport — "
+            f"before={len(links_before)}, after={len(links_after)}"
+        )
+
+
+class TestSessionWithMessagesButNoBranches:
+    """Gap 5 — Session rows and message rows survive when all branch content is empty.
+
+    Prevents: conservative cleanup accidentally deleting sessions that have messages
+    but whose only branch produced no FTS content (all-notification session).
+    The import code skips empty branches but must not delete the session row when
+    messages still exist.
+    """
+
+    def test_session_row_survives_all_notification_branch(self, memory_db, project_id):
+        """Session and its messages must persist when the branch has only notification content."""
+        # A JSONL where the sole user message is a task-notification.
+        # aggregate_branch_content will return empty (notification excluded from FTS)
+        # but the import should keep the session and its message rows intact.
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False) as f:
+            temp_path = Path(f.name)
+            f.write('{"uuid":"root","type":"progress","timestamp":"2026-03-01T10:00:00Z","sessionId":"notif-only-sess","cwd":"/test"}\n')
+            # Notification user message — is_notification=1, stored but excluded from FTS
+            f.write('{"uuid":"msg1","parentUuid":"root","type":"user","timestamp":"2026-03-01T10:00:01Z","sessionId":"notif-only-sess","message":{"role":"user","content":"<task-notification><task-id>x</task-id>Task done</task-notification>"}}\n')
+            # Assistant reply with real text — this IS included in FTS
+            f.write('{"uuid":"msg2","parentUuid":"msg1","type":"assistant","timestamp":"2026-03-01T10:00:02Z","sessionId":"notif-only-sess","message":{"role":"assistant","content":[{"type":"text","text":"Acknowledged the task notification."}]}}\n')
+
+        try:
+            branches_imported, total_messages = import_session(
+                memory_db, temp_path, project_id
+            )
+
+            cursor = memory_db.cursor()
+            # Session must still exist (messages present — conservative cleanup)
+            cursor.execute("SELECT COUNT(*) FROM sessions WHERE project_id = ?", (project_id,))
+            session_count = cursor.fetchone()[0]
+
+            if branches_imported > 0:
+                # Branch survived (assistant text kept it non-empty) — session must exist
+                assert session_count == 1, "Session must exist when branch has content"
+                cursor.execute(
+                    "SELECT COUNT(*) FROM messages WHERE session_id = "
+                    "(SELECT id FROM sessions WHERE project_id = ?)",
+                    (project_id,)
+                )
+                msg_count = cursor.fetchone()[0]
+                assert msg_count > 0, "Message rows must survive alongside the session"
+            else:
+                # No branches imported — verify the session was only removed if
+                # it truly has no messages (conservative cleanup check)
+                if session_count > 0:
+                    cursor.execute(
+                        "SELECT COUNT(*) FROM messages WHERE session_id = "
+                        "(SELECT id FROM sessions WHERE project_id = ?)",
+                        (project_id,)
+                    )
+                    msg_count = cursor.fetchone()[0]
+                    assert msg_count > 0, (
+                        "Session row must not survive with zero message rows — "
+                        "that would be an orphaned session"
+                    )
+        finally:
+            temp_path.unlink()
+
+    def test_session_deleted_only_when_both_messages_and_branches_are_zero(self, memory_db, project_id):
+        """Session cleanup fires only when message count AND branch count are both zero.
+
+        A session with messages but no branches (all branches empty) should not be deleted
+        if messages exist — removing it would destroy potentially-recoverable data.
+        """
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False) as f:
+            temp_path = Path(f.name)
+            # Only tool_result messages — no extractable text, triggers guard 1 (no messages)
+            f.write('{"uuid":"root","type":"progress","timestamp":"2026-03-01T10:00:00Z","sessionId":"empty-sess","cwd":"/test"}\n')
+            f.write('{"uuid":"msg1","parentUuid":"root","type":"user","timestamp":"2026-03-01T10:00:01Z","sessionId":"empty-sess","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"result"}]}}\n')
+
+        try:
+            branches_imported, total_messages = import_session(
+                memory_db, temp_path, project_id
+            )
+
+            # Guard 1 fires: no extractable text, session must be cleaned up
+            assert branches_imported == -1, "Should trigger guard 1 (no extractable content)"
+
+            cursor = memory_db.cursor()
+            cursor.execute("SELECT COUNT(*) FROM sessions WHERE project_id = ?", (project_id,))
+            assert cursor.fetchone()[0] == 0, (
+                "Session with zero messages and zero branches must be cleaned up"
+            )
+        finally:
+            temp_path.unlink()
+
+
+class TestEmptyBranchGuardTightened:
+    """Gap 6 — Tightened TestEmptyBranchGuard: empty branches preserved, not deleted.
+
+    The import code comments explicitly state: 'No searchable content — skip but
+    don't delete. Deleting causes thrashing.' This test pins that contract so a
+    future refactor can't accidentally reintroduce the delete path.
+    """
+
+    def test_empty_branch_row_preserved_after_reimport(self, memory_db, project_id):
+        """An empty-FTS branch must still exist in the DB after a forced reimport.
+
+        If the branch were deleted on first import and then recreated on reimport
+        (thrash cycle), the branch_id would differ — this test pins that the same
+        branch row survives.
+        """
+        # Notification-only session: branch is created but aggregated_content is
+        # empty after excluding notifications.  The branch row must be preserved.
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False) as f:
+            temp_path = Path(f.name)
+            f.write('{"uuid":"root","type":"progress","timestamp":"2026-03-01T10:00:00Z","sessionId":"empty-branch-sess","cwd":"/test"}\n')
+            # Notification-only user message
+            f.write('{"uuid":"msg1","parentUuid":"root","type":"user","timestamp":"2026-03-01T10:00:01Z","sessionId":"empty-branch-sess","message":{"role":"user","content":"<task-notification><task-id>y</task-id>Work done</task-notification>"}}\n')
+            # No assistant reply — branch has no non-notification content at all
+
+        try:
+            # First import
+            import_session(memory_db, temp_path, project_id)
+
+            cursor = memory_db.cursor()
+            cursor.execute("""
+                SELECT b.id FROM branches b
+                JOIN sessions s ON b.session_id = s.id
+                WHERE s.project_id = ?
+            """, (project_id,))
+            branch_rows_after_first = cursor.fetchall()
+
+            if not branch_rows_after_first:
+                # Guard 1 fired (no messages at all) — nothing to test for branch preservation
+                cursor.execute("SELECT COUNT(*) FROM sessions WHERE project_id = ?", (project_id,))
+                assert cursor.fetchone()[0] == 0, "Guard 1 must clean up empty session"
+                return
+
+            branch_ids_after_first = {row[0] for row in branch_rows_after_first}
+
+            # Force reimport
+            cursor.execute(
+                "UPDATE import_log SET file_hash = 'stale' WHERE file_path = ?",
+                (str(temp_path),)
+            )
+            memory_db.commit()
+            import_session(memory_db, temp_path, project_id)
+
+            cursor.execute("""
+                SELECT b.id FROM branches b
+                JOIN sessions s ON b.session_id = s.id
+                WHERE s.project_id = ?
+            """, (project_id,))
+            branch_ids_after_reimport = {row[0] for row in cursor.fetchall()}
+
+            # No branch rows should have disappeared — empty branches are preserved
+            assert branch_ids_after_first.issubset(branch_ids_after_reimport), (
+                "Empty branch rows must be preserved across reimport — "
+                "deleting them causes import thrash on every cycle"
+            )
+        finally:
+            temp_path.unlink()

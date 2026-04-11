@@ -2,7 +2,7 @@
 # find-candidates.sh — Find merged and stale git branches
 # Usage: find-candidates.sh [pattern]
 # Output: Two labeled sections (MERGED / STALE), one branch per line.
-#         Merged branches checked out in a worktree are annotated: branch [worktree:/path]
+#         Branches checked out in a worktree are annotated: branch [worktree:/path]
 #         Empty section = no candidates of that type.
 # Exit 0 always; downstream decides what to do with empty output.
 

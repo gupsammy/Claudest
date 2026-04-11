@@ -34,9 +34,9 @@ bash ${CLAUDE_PLUGIN_ROOT}/skills/clean-branches/scripts/find-candidates.sh "$PA
 ```
 The script outputs two labeled sections (`=== MERGED ===` and `=== STALE ===`), one branch per line. Branches checked out in a worktree are annotated: `branch-name [worktree:/path/to/wt]`. Parse each section into its own list, preserving the worktree annotation.
 
-After parsing, apply these worktree rules before building the candidate lists:
+After parsing, apply these worktree rules before building the candidate lists. Process the MERGED list first, then the STALE list — a branch that appears in both (merged AND older than 30 days) is governed by the MERGED rule only; skip it when processing STALE.
 
-- **Stale branch + active worktree** → move immediately to the **blocked** list, regardless of worktree state. A stale branch with a live worktree may still have in-progress work — never offer it for cleanup.
+- **Stale branch + active worktree** → move immediately to the **blocked** list, regardless of worktree state. A stale branch with a live worktree may still have in-progress work — never offer it for cleanup. Skip branches already classified as merged.
 - **Merged branch + active worktree** → check whether the worktree is clean:
   ```bash
   git -C /path/to/wt status --porcelain
@@ -73,6 +73,7 @@ Delete only what the user confirmed. For each confirmed branch:
    ```bash
    git worktree remove /path/to/wt
    ```
+   If the command fails (the worktree acquired changes in the window between Step 2 and now), report the error and skip that branch — do not force-remove.
 
 2. Then delete the branch:
    ```bash

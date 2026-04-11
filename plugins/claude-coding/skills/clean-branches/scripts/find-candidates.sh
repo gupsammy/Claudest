@@ -76,7 +76,7 @@ if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
       # Skip protected branches
       case "$branch" in main|master|develop|release/*) continue ;; esac
       # Skip branches already caught by git branch --merged
-      echo "$MERGED" | grep -qx "$branch" && continue
+      echo "$MERGED" | grep -qFx "$branch" && continue
       # Apply pattern filter
       if [ -n "$PATTERN" ] && ! echo "$branch" | grep -q "$PATTERN"; then
         continue
@@ -84,7 +84,7 @@ if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
       # Confirm branch exists locally
       git rev-parse --verify "$branch" >/dev/null 2>&1 || continue
       # Check if a merged PR targeted this branch
-      echo "$GH_MERGED" | grep -qx "$branch" || continue
+      echo "$GH_MERGED" | grep -qFx "$branch" || continue
       wt=$(worktree_for "$branch")
       if [[ -n "$wt" ]]; then
         echo "$branch [worktree:$wt] [squash-merged]"

@@ -154,7 +154,7 @@ class TestWriteConfigAtomicWrite:
         _patch_config_path(monkeypatch, cfg)
 
         # Patch os.fdopen to raise after the tempfile is created
-        def exploding_fdopen(fd, mode):
+        def exploding_fdopen(fd, _mode):
             # Close the fd to avoid leaking it, then raise
             os.close(fd)
             raise OSError("simulated write failure")
@@ -175,7 +175,7 @@ class TestWriteConfigAtomicWrite:
         cfg.write_text(json.dumps(original))
         _patch_config_path(monkeypatch, cfg)
 
-        def exploding_fdopen(fd, mode):
+        def exploding_fdopen(fd, _mode):
             os.close(fd)
             raise OSError("simulated write failure")
 

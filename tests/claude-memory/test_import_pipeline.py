@@ -417,7 +417,7 @@ class TestAppendOnlyReimport:
         fixture_file = FIXTURE_DIR / "linear_3_exchange.jsonl"
 
         # First import — establish baseline
-        branches1, messages1 = import_session(memory_db, fixture_file, project_id)
+        branches1, _messages1 = import_session(memory_db, fixture_file, project_id)
         assert branches1 > 0, "First import must succeed"
 
         cursor = memory_db.cursor()

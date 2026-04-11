@@ -812,7 +812,7 @@ class TestMigrateDbBackupGuard:
         conn.commit()
 
         import memory_lib.db as db_module
-        monkeypatch.setattr(db_module, "_backup_db_before_migration", lambda *a, **kw: False)
+        monkeypatch.setattr(db_module, "_backup_db_before_migration", lambda *_a, **_kw: False)
 
         result = migrate_db(conn)
 

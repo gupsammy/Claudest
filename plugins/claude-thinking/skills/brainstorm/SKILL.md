@@ -1,12 +1,11 @@
 ---
 name: brainstorm
-description: >
-  This skill should be used when the user says "interview me about", "help me clarify",
-  "stress-test my idea", "let's explore this concept", "challenge my assumptions about",
-  "probe my assumptions", or needs structured questioning to refine and articulate
-  their thinking.
-model: opus
-allowed-tools: [Read, Write, AskUserQuestion]
+description: |
+  This skill should be used when the user says "interview me about", "help me clarify", "stress-test my idea", "let's explore this concept", "challenge my assumptions about", "probe my assumptions", or needs structured questioning to refine and articulate their thinking.
+allowed-tools:
+  - Read
+  - Write
+  - AskUserQuestion
 argument-hint: "[topic] - optional topic to interview about"
 ---
 

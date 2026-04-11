@@ -26,19 +26,19 @@
     {
       "name": "claude-skills",
       "description": "Skill and agent authoring tools: generate, audit, and improve Claude Code skills, commands, and agents",
-      "version": "0.5.22",
+      "version": "0.5.23",
       "source": "./plugins/claude-skills"
     },
     {
       "name": "claude-coding",
       "description": "Coding workflow skills: intelligent commits, push & PR, branch cleanup, CLAUDE.md maintenance, README generation, changelog creation, README updating, and GitHub Actions setup",
-      "version": "0.2.38",
+      "version": "0.2.41",
       "source": "./plugins/claude-coding"
     },
     {
       "name": "claude-thinking",
       "description": "Structured thinking and multi-perspective deliberation tools",
-      "version": "0.3.3",
+      "version": "0.3.4",
       "source": "./plugins/claude-thinking"
     },
     {

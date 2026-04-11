@@ -7,6 +7,7 @@ description: >
   Not for agent files — those have a different contract.
 model: inherit
 color: yellow
+memory: project
 tools:
   - Read
   - Glob
@@ -98,3 +99,12 @@ VALIDATION: [N/N] checklist items pass
 - Skill path is a single file (not in a directory): audit the file; skip anatomy dimension
 - Skill is an agent file (AGENT.md): decline — agent linting is a different contract
 - No findings at any severity: report "Clean — no structural issues found"
+
+## Agent Memory
+
+Update your agent memory as you discover recurring skill patterns, common violations per
+project, and conventions that differ across codebases. Consult your memory before starting
+work — prior runs may have already identified this project's dominant skill conventions.
+
+After each run, append to your agent MEMORY.md: skill linted, finding counts by severity
+(critical/major/minor: N each), and any project-specific calibration notes for future runs.

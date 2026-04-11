@@ -252,6 +252,8 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     if current < SCHEMA_VERSION:
         print(f"Schema upgraded to v{SCHEMA_VERSION} — full re-import required", file=sys.stderr)
         conn.execute("DELETE FROM token_import_log")
+        # Drop the legacy import_log table from pre-v4 schemas; replaced by token_import_log.
+        conn.execute("DROP TABLE IF EXISTS import_log")
         if current == 0:
             conn.execute("INSERT INTO schema_version (version) VALUES (?)", (SCHEMA_VERSION,))
         else:
@@ -751,7 +753,11 @@ def import_session(conn: sqlite3.Connection, session: ParsedSession, jnl: JnlFil
          analytics["model_switch_count"])
     )
 
-    # Insert hook executions only if none exist for this session (hooks don't change mid-session)
+    # Insert hook executions only if none exist for this session. Intentional trade-off: on
+    # re-import (JSONL file grown since first ingest), session_metrics.total_hook_ms is
+    # recomputed from the full file, but hook_executions stays frozen at the first-import
+    # count. This avoids duplicate rows for hooks that were already recorded; the aggregate
+    # metric stays accurate while per-row hook analytics may undercount later hooks.
     has_hooks = conn.execute(
         "SELECT 1 FROM hook_executions WHERE session_id = ? LIMIT 1", (sid,)
     ).fetchone()

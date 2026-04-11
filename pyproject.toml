@@ -5,6 +5,10 @@ requires-python = ">=3.7"
 [project.optional-dependencies]
 dev = ["pytest>=7", "hypothesis", "pre-commit"]
 
+[tool.ruff.lint.per-file-ignores]
+"plugins/claude-memory/hooks/*.py" = ["E402"]
+"tests/claude-memory/*.py" = ["E402"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["plugins/claude-memory/skills/recall-conversations/scripts"]

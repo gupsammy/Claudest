@@ -239,3 +239,69 @@ class TestValidateSessionIdRejectsTraversal:
     def test_validate_session_id_rejects_uuid_with_extra(self):
         """Should reject UUID with extra characters."""
         assert validate_session_id("016e1f0d-cff2-4552-9e21-43833c9a468e-extra") is False
+
+
+class TestSyncBranchMessagesDiff:
+    """Test that sync_session's branch_messages diff is stable across repeated syncs.
+
+    Prevents: ghost branch-message links accumulating on every PostToolUse turn,
+    which would cause search to surface deleted/stale message content and bloat
+    branch_messages with duplicate rows that survive until manual DB repair.
+    """
+
+    def test_branch_messages_stable_on_resync(self, memory_db_with_project):
+        """branch_messages row set must be identical after a second sync of the same session."""
+        conn, _ = memory_db_with_project
+        fixture_path = FIXTURE_DIR / "single_rewind.jsonl"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_dir = Path(tmpdir)
+
+            # First sync — populate branches and branch_messages
+            sync_session(conn, fixture_path, project_dir)
+            conn.commit()
+
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT branch_id, message_id FROM branch_messages ORDER BY branch_id, message_id"
+            )
+            links_after_first = cursor.fetchall()
+            assert links_after_first, "branch_messages must be populated after first sync"
+
+            # Second sync — same file, same session; the diff should be a no-op
+            sync_session(conn, fixture_path, project_dir)
+            conn.commit()
+
+            cursor.execute(
+                "SELECT branch_id, message_id FROM branch_messages ORDER BY branch_id, message_id"
+            )
+            links_after_second = cursor.fetchall()
+
+            assert links_after_second == links_after_first, (
+                "branch_messages link set must be identical after resync — "
+                f"before={len(links_after_first)}, after={len(links_after_second)}"
+            )
+
+    def test_no_duplicate_branch_messages_on_repeated_sync(self, memory_db_with_project):
+        """Repeated syncs must never produce duplicate (branch_id, message_id) pairs."""
+        conn, _ = memory_db_with_project
+        fixture_path = FIXTURE_DIR / "single_rewind.jsonl"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_dir = Path(tmpdir)
+
+            for _ in range(3):
+                sync_session(conn, fixture_path, project_dir)
+                conn.commit()
+
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT branch_id, message_id, COUNT(*) AS cnt
+                FROM branch_messages
+                GROUP BY branch_id, message_id
+                HAVING cnt > 1
+            """)
+            duplicates = cursor.fetchall()
+            assert not duplicates, (
+                f"Duplicate (branch_id, message_id) pairs found after 3 syncs: {duplicates}"
+            )

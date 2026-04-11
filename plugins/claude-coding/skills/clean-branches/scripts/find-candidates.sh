@@ -64,6 +64,37 @@ while IFS= read -r branch; do
   fi
 done <<< "$MERGED"
 
+# --- Squash/rebase-merged detection via GitHub PR history ---
+# git branch --merged only detects true merge commits; squash and rebase merges
+# rewrite commits so the branch ancestry never appears in main. gh pr list is the
+# only reliable source for these.
+if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
+  GH_MERGED=$(gh pr list --state merged --limit 300 --json headRefName --jq '.[].headRefName' 2>/dev/null || true)
+  if [ -n "$GH_MERGED" ]; then
+    while IFS= read -r branch; do
+      [ -z "$branch" ] && continue
+      # Skip protected branches
+      case "$branch" in main|master|develop|release/*) continue ;; esac
+      # Skip branches already caught by git branch --merged
+      echo "$MERGED" | grep -qx "$branch" && continue
+      # Apply pattern filter
+      if [ -n "$PATTERN" ] && ! echo "$branch" | grep -q "$PATTERN"; then
+        continue
+      fi
+      # Confirm branch exists locally
+      git rev-parse --verify "$branch" >/dev/null 2>&1 || continue
+      # Check if a merged PR targeted this branch
+      echo "$GH_MERGED" | grep -qx "$branch" || continue
+      wt=$(worktree_for "$branch")
+      if [[ -n "$wt" ]]; then
+        echo "$branch [worktree:$wt] [squash-merged]"
+      else
+        echo "$branch [squash-merged]"
+      fi
+    done < <(git branch --format='%(refname:short)')
+  fi
+fi
+
 # --- Stale branches (no commits in 30+ days) ---
 # Unix timestamps used for accurate threshold — git relative dates miss edge cases
 echo "=== STALE ==="

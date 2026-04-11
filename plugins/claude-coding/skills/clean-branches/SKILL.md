@@ -2,12 +2,11 @@
 name: clean-branches
 description: >
   This skill should be used when the user says "clean up branches", "delete merged
-  branches", "prune stale branches", "git branch cleanup", "remove old branches",
-  or wants to tidy up or purge old branches.
+  branches", or "prune stale branches". Use whenever the user mentions branch cleanup,
+  pruning, or stale branch deletion — even if they don't say "clean-branches" explicitly.
 argument-hint: "[branch-pattern]"
 allowed-tools:
-  - Bash(git:*)
-  - Bash(bash:*)
+  - Bash
   - AskUserQuestion
 ---
 
@@ -17,8 +16,7 @@ Safely remove merged and stale git branches with confirmation.
 
 ## Process
 
-**0. Parse arguments**
-If `$ARGUMENTS` provided, treat it as a glob pattern to filter branch candidates (e.g., `feature/*` shows only feature branches). Pass it to the candidate script in Step 2.
+If `$ARGUMENTS` is provided, treat it as a glob pattern to filter branch candidates (e.g., `feature/*`) and pass it to the candidate script in Step 1.
 
 **1. Fetch latest state**
 ```bash
@@ -32,7 +30,11 @@ Run the candidate detection script, passing the optional pattern filter:
 ```bash
 bash ${CLAUDE_PLUGIN_ROOT}/skills/clean-branches/scripts/find-candidates.sh "$PATTERN"
 ```
-The script outputs two labeled sections (`=== MERGED ===` and `=== STALE ===`), one branch per line. Branches checked out in a worktree are annotated: `branch-name [worktree:/path/to/wt]`. Parse each section into its own list, preserving the worktree annotation.
+The script outputs two labeled sections (`=== MERGED ===` and `=== STALE ===`), one branch per line. Branches carry two optional annotations:
+- `[worktree:/path/to/wt]` — branch is checked out in a worktree
+- `[squash-merged]` — branch was merged via squash or rebase PR; git does not recognize it as merged locally (requires force-delete in Step 5)
+
+Parse each section into its own list, preserving both annotations.
 
 After parsing, apply these worktree rules before building the candidate lists. Process the MERGED list first, then the STALE list — a branch that appears in both (merged AND older than 30 days) is governed by the MERGED rule only; skip it when processing STALE.
 
@@ -59,7 +61,7 @@ Use AskUserQuestion. For merged branches that carry a worktree annotation, the c
 
 Structure:
 - Header: "Branch cleanup"
-- For merged branches: one option per branch. If the branch has a worktree: label = "branch-name + worktree", description = "Removes branch and worktree at /path". If no worktree: label = branch name, description = "Removes local branch". Include a "Keep all merged branches" fallback. If there are multiple candidates with no worktrees, a "Delete all N" batch option is acceptable.
+- For merged branches: one option per branch. If the branch has a worktree: label = "branch-name + worktree", description = "Removes branch and worktree at /path". If the branch is squash/rebase-merged: append "(squash/rebase PR — force delete)" to the description so the user knows `-D` will be used. If no worktree and not squash-merged: label = branch name, description = "Removes local branch". Include a "Keep all merged branches" fallback. If there are multiple candidates with no worktrees, a "Delete all N" batch option is acceptable.
 - For stale branches: use multiSelect:true. Each option: label = branch name, description = age. (No stale branch with a worktree will appear here — they were moved to blocked in Step 2.)
 - Always include a "Skip — keep all" option
 
@@ -76,16 +78,19 @@ Delete only what the user confirmed. For each confirmed branch:
    If the command fails (the worktree acquired changes in the window between Step 2 and now), report the error and skip that branch — do not force-remove.
 
 2. Then delete the branch:
-   ```bash
-   git branch -d <branch-name>
-   ```
-   Use `-d` (not `-D`) — git refuses to delete branches with unmerged commits.
+   - Regular merged (no `[squash-merged]` annotation): `git branch -d <branch-name>`
+   - Squash/rebase-merged (`[squash-merged]` annotation): `git branch -D <branch-name>`
 
-3. If the user explicitly requests remote cleanup:
+   `-D` is required for squash/rebase-merged branches because git does not recognise their commits as merged into base — using `-d` will fail. The `[squash-merged]` annotation on a confirmed selection is explicit user authorisation to force-delete.
+
+3. After local deletions are complete, offer remote cleanup:
+
+   Use AskUserQuestion with multiSelect:true listing every branch that was successfully deleted locally and has a known remote (`git ls-remote --heads origin <branch-name>` to verify). Let the user select which remotes to also delete. If none have a remote, skip this step.
+
+   For each selected remote:
    ```bash
    git push origin --delete <branch-name>
    ```
-   Remote deletion requires explicit user request — never delete remotes unless the user says so directly.
 
 ## Output
 

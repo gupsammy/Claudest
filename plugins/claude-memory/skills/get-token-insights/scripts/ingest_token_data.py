@@ -683,13 +683,14 @@ def import_session(conn: sqlite3.Connection, session: ParsedSession, jnl: JnlFil
     # Append-only: insert new turns, skip existing (JSONL source expires after 30 days)
     analytics = compute_session_analytics(session)
 
+    # Prefetch existing turn indices to avoid N+1 queries on reimport
+    existing_indices = {
+        row[0] for row in conn.execute(
+            "SELECT turn_index FROM turns WHERE session_id = ?", (sid,)
+        )
+    }
     for turn in session.turns:
-        # Skip turns that already exist
-        existing = conn.execute(
-            "SELECT id FROM turns WHERE session_id = ? AND turn_index = ?",
-            (sid, turn.index)
-        ).fetchone()
-        if existing:
+        if turn.index in existing_indices:
             continue
 
         conn.execute(

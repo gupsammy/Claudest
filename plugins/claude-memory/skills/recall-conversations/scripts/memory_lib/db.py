@@ -249,8 +249,6 @@ def migrate_db(conn: sqlite3.Connection) -> bool:
             db_path = Path(row[2])
             break
 
-    conn.close()
-
     if db_path and db_path.exists():
         # JSONL source files expire after 30 days — data older than that
         # exists only in this DB. Back up before destroying.
@@ -259,6 +257,7 @@ def migrate_db(conn: sqlite3.Connection) -> bool:
             # Backup failed (disk full, permissions, etc.) — refuse to destroy
             # the only copy. Return False so caller uses the old schema as-is.
             return False
+        conn.close()
         db_path.unlink()
         # Clean up WAL/SHM files — orphaned WAL replayed into an empty DB
         # causes "database disk image is malformed" errors.
@@ -481,18 +480,23 @@ def _backup_db_before_migration(db_path: Path, label: str) -> bool:
         return False
     ts = time.strftime("%Y%m%d-%H%M%S")
     backup_path = db_path.with_suffix(f".pre-{label}-{ts}.db")
+    src = None
+    dst = None
     try:
         src = sqlite3.connect(str(db_path))
         dst = sqlite3.connect(str(backup_path))
         src.backup(dst)
-        dst.close()
-        src.close()
         # Verify backup is non-empty
         if not backup_path.exists() or backup_path.stat().st_size == 0:
             return False
         return True
     except Exception:
         return False
+    finally:
+        if dst:
+            dst.close()
+        if src:
+            src.close()
 
 
 def _backfill_origin(conn: sqlite3.Connection, cursor: sqlite3.Cursor) -> None:

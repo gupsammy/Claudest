@@ -289,12 +289,8 @@ def import_session(
     # Check if session has any branches at all (pre-existing + new)
     cursor.execute("SELECT COUNT(*) FROM branches WHERE session_id = ?", (session_id,))
     if cursor.fetchone()[0] == 0:
-        # No branches but messages may exist (FK constraint prevents session delete).
-        # Check if session is truly empty (no messages either) before removing.
-        cursor.execute("SELECT COUNT(*) FROM messages WHERE session_id = ?", (session_id,))
-        if cursor.fetchone()[0] == 0:
-            cursor.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
-        # Either way, nothing useful was imported for branch-based search
+        # Messages exist (guaranteed by early return above) but no branches —
+        # nothing useful for branch-based search.
         return -1, 0
 
     # Step 5: Update import_log

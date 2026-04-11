@@ -244,7 +244,6 @@ class TestTokenImportLogSchema:
                 "INSERT INTO token_import_log (file_path, mtime_ns) VALUES (?, ?)",
                 (str(f), 2000),
             )
-            token_db.commit()
 
     def test_import_log_not_present(self, token_db):
         """The legacy import_log table must NOT exist — ensure_schema drops it on v4 init."""

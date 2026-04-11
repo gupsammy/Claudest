@@ -191,7 +191,7 @@ def save_prompt_log(
     """Save the prompt used to generate images as a single .md file."""
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    content = f"# Image Generation Log\n\n"
+    content = "# Image Generation Log\n\n"
     content += f"**Generated**: {timestamp}\n\n"
 
     if model:
@@ -200,13 +200,13 @@ def save_prompt_log(
     if len(output_images) == 1:
         content += f"**Output**: `{output_images[0].name}`\n\n"
     else:
-        content += f"**Outputs**:\n"
+        content += "**Outputs**:\n"
         for img in output_images:
             content += f"- `{img.name}`\n"
         content += "\n"
 
     if source_images:
-        content += f"**Source Images**:\n"
+        content += "**Source Images**:\n"
         for src in source_images:
             content += f"- `{src}`\n"
         content += "\n"

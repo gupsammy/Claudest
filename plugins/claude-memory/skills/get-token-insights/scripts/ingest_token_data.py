@@ -2048,9 +2048,9 @@ def _build_insights(**kw) -> list[dict]:
                 "title": "Cost Concentration",
                 "severity": "INFO",
                 "finding": f"{top['project']} accounts for {top_pct}% of total spend (${top['cost_usd']:.2f} of ${total_cost:.2f}).",
-                "root_cause": f"This project dominates your usage. Either it has the most sessions, uses "
-                              f"the most expensive model, or both. Review whether all work in this project "
-                              f"requires the current model tier.",
+                "root_cause": "This project dominates your usage. Either it has the most sessions, uses "
+                              "the most expensive model, or both. Review whether all work in this project "
+                              "requires the current model tier.",
                 "waste_tokens": 0,
                 "waste_usd": 0,
                 "solution": {

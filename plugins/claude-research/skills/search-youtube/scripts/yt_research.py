@@ -764,7 +764,7 @@ def run_batch(handler, items: list, args, g):
     else:
         for i, r in enumerate(results):
             if i > 0:
-                print(f"\n--- next ---\n")
+                print("\n--- next ---\n")
             print(r)
 
     if errors:

@@ -34,7 +34,7 @@ To enable auto-updates, run `/plugin`, go to the Marketplaces tab, and toggle au
 
 <a id="claude-memory"></a>
 
-### 🧠 claude-memory &nbsp; ![v0.8.85](https://img.shields.io/badge/v0.8.85-blue?style=flat-square)
+### 🧠 claude-memory &nbsp; ![v0.8.86](https://img.shields.io/badge/v0.8.86-blue?style=flat-square)
 
 Conversation memory for Claude Code. Stores every session in a SQLite database with full-text search (FTS5, BM25 ranking, zero external dependencies) and makes past conversations available to the agent automatically.
 
@@ -53,7 +53,7 @@ For the full story behind the architecture: [What I Learned Building a Memory Sy
 
 <a id="claude-research"></a>
 
-### 🔍 claude-research &nbsp; ![v0.2.3](https://img.shields.io/badge/v0.2.3-blue?style=flat-square)
+### 🔍 claude-research &nbsp; ![v0.2.4](https://img.shields.io/badge/v0.2.4-blue?style=flat-square)
 
 Cross-platform research skills for Claude Code.
 
@@ -137,7 +137,7 @@ Structured thinking and multi-perspective deliberation tools for Claude Code.
 
 <a id="claude-content"></a>
 
-### 🎬 claude-content &nbsp; ![v0.4.5](https://img.shields.io/badge/v0.4.5-blue?style=flat-square)
+### 🎬 claude-content &nbsp; ![v0.4.6](https://img.shields.io/badge/v0.4.6-blue?style=flat-square)
 
 Content creation and processing tools for Claude Code. Image generation and the full video/audio manipulation workflow.
 

@@ -8,7 +8,7 @@
     {
       "name": "claude-memory",
       "description": "Searchable conversation memory with full-text search",
-      "version": "0.8.85",
+      "version": "0.8.86",
       "source": "./plugins/claude-memory"
     },
     {
@@ -20,7 +20,7 @@
     {
       "name": "claude-research",
       "description": "Cross-platform research skills: deep multi-source research across Reddit, X, YouTube, and the web, plus a standalone YouTube research toolkit",
-      "version": "0.2.3",
+      "version": "0.2.4",
       "source": "./plugins/claude-research"
     },
     {
@@ -44,7 +44,7 @@
     {
       "name": "claude-content",
       "description": "Content creation skills: image generation, video compression, conversion, GIF creation, social media formatting, and audio extraction",
-      "version": "0.4.5",
+      "version": "0.4.6",
       "source": "./plugins/claude-content"
     },
     {

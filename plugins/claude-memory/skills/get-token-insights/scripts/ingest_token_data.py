@@ -25,7 +25,7 @@ DASHBOARD_OUT_PATH = DB_PATH.parent / "dashboard.html"
 BATCH_SIZE = 50
 PROGRESS_INTERVAL = 100
 COMMAND_TRUNCATE = 200
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 # SQL fragment: true Bash antipatterns — standalone cat/grep/find/ls that have
 # a dedicated tool equivalent. Excludes legitimate patterns:
@@ -183,12 +183,13 @@ CREATE TABLE IF NOT EXISTS hook_executions (
 CREATE INDEX IF NOT EXISTS idx_he_session ON hook_executions(session_id);
 CREATE INDEX IF NOT EXISTS idx_he_command ON hook_executions(hook_command);
 
-CREATE TABLE IF NOT EXISTS import_log (
+CREATE TABLE IF NOT EXISTS token_import_log (
   id INTEGER PRIMARY KEY,
   file_path TEXT UNIQUE NOT NULL,
-  file_hash TEXT,
+  session_id TEXT,
   imported_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  messages_imported INTEGER DEFAULT 0
+  turn_count INTEGER DEFAULT 0,
+  mtime_ns INTEGER
 );
 """
 
@@ -232,11 +233,6 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
             conn.execute(f"ALTER TABLE token_snapshots ADD COLUMN {col} {typedef}")
         except sqlite3.OperationalError:
             pass
-    # Ensure import_log has mtime_ns
-    try:
-        conn.execute("ALTER TABLE import_log ADD COLUMN mtime_ns INTEGER")
-    except sqlite3.OperationalError:
-        pass
     # Add new workflow-analytics columns if missing (v2 schema)
     for col, typedef in [("skill_name", "TEXT"), ("subagent_type", "TEXT"), ("agent_model", "TEXT")]:
         try:
@@ -255,7 +251,7 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     current = row[0] if row else 0
     if current < SCHEMA_VERSION:
         print(f"Schema upgraded to v{SCHEMA_VERSION} — full re-import required", file=sys.stderr)
-        conn.execute("DELETE FROM import_log")
+        conn.execute("DELETE FROM token_import_log")
         if current == 0:
             conn.execute("INSERT INTO schema_version (version) VALUES (?)", (SCHEMA_VERSION,))
         else:
@@ -309,7 +305,7 @@ def should_skip_file(conn: sqlite3.Connection, filepath: Path) -> bool:
     except OSError:
         return True
     cur = conn.execute(
-        "SELECT mtime_ns FROM import_log WHERE file_path = ?",
+        "SELECT mtime_ns FROM token_import_log WHERE file_path = ?",
         (str(filepath),)
     )
     row = cur.fetchone()
@@ -321,7 +317,7 @@ def should_skip_file(conn: sqlite3.Connection, filepath: Path) -> bool:
 def record_import(conn: sqlite3.Connection, filepath: Path, session_id: str, turn_count: int) -> None:
     mtime_ns = filepath.stat().st_mtime_ns
     conn.execute(
-        """INSERT OR REPLACE INTO import_log (file_path, file_hash, imported_at, messages_imported, mtime_ns)
+        """INSERT OR REPLACE INTO token_import_log (file_path, session_id, imported_at, turn_count, mtime_ns)
            VALUES (?, ?, datetime('now'), ?, ?)""",
         (str(filepath), session_id, turn_count, mtime_ns)
     )
@@ -684,16 +680,18 @@ def compute_session_analytics(session: ParsedSession) -> dict:
 def import_session(conn: sqlite3.Connection, session: ParsedSession, jnl: JnlFile) -> None:
     sid = session.session_id
 
-    # Delete existing data for this session (idempotent re-import)
-    conn.execute("DELETE FROM hook_executions WHERE session_id = ?", (sid,))
-    conn.execute("DELETE FROM turn_tool_calls WHERE session_id = ?", (sid,))
-    conn.execute("DELETE FROM turns WHERE session_id = ?", (sid,))
-    conn.execute("DELETE FROM session_metrics WHERE session_id = ?", (sid,))
-
+    # Append-only: insert new turns, skip existing (JSONL source expires after 30 days)
     analytics = compute_session_analytics(session)
 
-    # Insert turns
     for turn in session.turns:
+        # Skip turns that already exist
+        existing = conn.execute(
+            "SELECT id FROM turns WHERE session_id = ? AND turn_index = ?",
+            (sid, turn.index)
+        ).fetchone()
+        if existing:
+            continue
+
         conn.execute(
             """INSERT INTO turns (session_id, turn_index, timestamp, model,
                input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
@@ -708,7 +706,7 @@ def import_session(conn: sqlite3.Connection, session: ParsedSession, jnl: JnlFil
         )
         turn_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
 
-        # Insert tool calls
+        # Insert tool calls only for newly inserted turns
         for tc in turn.tool_calls:
             conn.execute(
                 """INSERT INTO turn_tool_calls (turn_id, session_id, tool_name, tool_use_id,
@@ -720,12 +718,12 @@ def import_session(conn: sqlite3.Connection, session: ParsedSession, jnl: JnlFil
                  tc.skill_name, tc.subagent_type, tc.agent_model)
             )
 
-    # Insert session_metrics
+    # Upsert session_metrics — summary recalculated from full data on each pass
     first_ts = session.turns[0].timestamp if session.turns else None
     last_ts = session.turns[-1].timestamp if session.turns else None
 
     conn.execute(
-        """INSERT INTO session_metrics (session_id, project_path, git_branch, cc_version,
+        """INSERT OR REPLACE INTO session_metrics (session_id, project_path, git_branch, cc_version,
            slug, entrypoint, is_sidechain, parent_session_id,
            first_turn_ts, last_turn_ts, turn_count, user_msg_count,
            total_input_tokens, total_output_tokens, total_cache_read, total_cache_creation,
@@ -752,13 +750,17 @@ def import_session(conn: sqlite3.Connection, session: ParsedSession, jnl: JnlFil
          analytics["model_switch_count"])
     )
 
-    # Insert per-hook execution records
-    for hc in session.hook_calls:
-        conn.execute(
-            """INSERT INTO hook_executions (session_id, hook_command, duration_ms, is_error)
-               VALUES (?,?,?,?)""",
-            (sid, hc["hook_command"], hc["duration_ms"], hc["is_error"])
-        )
+    # Insert hook executions only if none exist for this session (hooks don't change mid-session)
+    has_hooks = conn.execute(
+        "SELECT 1 FROM hook_executions WHERE session_id = ? LIMIT 1", (sid,)
+    ).fetchone()
+    if not has_hooks:
+        for hc in session.hook_calls:
+            conn.execute(
+                """INSERT INTO hook_executions (session_id, hook_command, duration_ms, is_error)
+                   VALUES (?,?,?,?)""",
+                (sid, hc["hook_command"], hc["duration_ms"], hc["is_error"])
+            )
 
 
 # ── Backfill token_snapshots ─────────────────────────────────────────

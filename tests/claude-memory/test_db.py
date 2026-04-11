@@ -307,8 +307,12 @@ class TestVersionedMigration:
         assert origin == "telegram"
         conn.close()
 
-    def test_v3_backfill_nullifies_hash_for_channel_sessions(self, tmp_path):
-        """v3 migration nullifies file_hash for sessions with isMeta+origin channel messages."""
+    def test_v3_backfill_preserves_hash_for_channel_sessions(self, tmp_path):
+        """v3 migration preserves file_hash — no longer nullifies to trigger reimport.
+
+        Phase 2 hash nullification was removed because the reimport path was
+        destructive (delete-all-then-insert) and JSONL files expire after 30 days.
+        """
         conn = _versioned_db(user_version=2)
         conn.execute("CREATE TABLE sessions (id INTEGER PRIMARY KEY, uuid TEXT UNIQUE, project_id INTEGER, parent_session_id INTEGER, git_branch TEXT, cwd TEXT)")
         conn.execute("INSERT INTO sessions (id, uuid) VALUES (1, 'chan-uuid')")
@@ -327,7 +331,7 @@ class TestVersionedMigration:
         _migrate_columns(conn)
 
         hash_val = conn.execute("SELECT file_hash FROM import_log").fetchone()[0]
-        assert hash_val is None  # Nullified to trigger reimport of this session
+        assert hash_val == "original"  # Hash preserved — no destructive reimport triggered
         conn.close()
 
 

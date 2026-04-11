@@ -12,7 +12,6 @@ from memory_lib.summarizer import (
     truncate_mid,
     build_context_summary_json,
     compute_context_summary,
-    extract_markers,
     render_context_summary,
 )
 from memory_lib.db import SCHEMA, _migrate_columns
@@ -77,97 +76,6 @@ class TestBuildExchangePairs:
         assert len(exchanges) == 1
         assert exchanges[0]["user"] == "Last question"
         assert exchanges[0]["assistant"] == ""
-
-
-class TestExtractMarkers:
-    def test_keyword_decided(self):
-        exchanges = [
-            {"user": "What approach?", "assistant": "We decided to use Redis for caching instead of memcached.", "index": 0},
-        ]
-        markers = extract_markers(exchanges)
-        assert any(m["type"] == "DECIDED" for m in markers)
-
-    def test_keyword_next_step(self):
-        exchanges = [
-            {"user": "What's next?", "assistant": "The next step is implementing the API endpoint for users.", "index": 0},
-        ]
-        markers = extract_markers(exchanges)
-        assert any(m["type"] == "NEXT" for m in markers)
-
-    def test_keyword_blocked(self):
-        exchanges = [
-            {"user": "Status?", "assistant": "We're blocked on the auth service being down in staging.", "index": 0},
-        ]
-        markers = extract_markers(exchanges)
-        assert any(m["type"] == "OPEN" for m in markers)
-
-    def test_keyword_rejected(self):
-        exchanges = [
-            {"user": "skip the tests for now and just deploy", "assistant": "OK, skipping tests.", "index": 0},
-        ]
-        markers = extract_markers(exchanges)
-        assert any(m["type"] == "REJECTED" for m in markers)
-
-    def test_user_intent_prefix(self):
-        exchanges = [
-            {"user": "let's refactor the database module to use connection pooling", "assistant": "Sounds good.", "index": 0},
-        ]
-        markers = extract_markers(exchanges)
-        assert any(m["type"] == "OPEN" for m in markers)
-
-    def test_positional_last_sentence(self):
-        exchanges = [
-            {"user": "Q1", "assistant": "Short answer.", "index": 0},
-            {"user": "Q2", "assistant": "Let me explain. First this. Then that. Finally, we need to implement the caching layer before deploy.", "index": 1},
-        ]
-        markers = extract_markers(exchanges)
-        # Last sentence of final response should produce a NEXT marker
-        assert len(markers) > 0
-
-    def test_question_detection(self):
-        exchanges = [
-            {"user": "Should we proceed with the migration?", "assistant": "Want me to start the migration now?", "index": 0},
-        ]
-        markers = extract_markers(exchanges)
-        assert any(m["type"] == "OPEN" for m in markers)
-
-    def test_dedup_by_substring(self):
-        exchanges = [
-            {"user": "plan?", "assistant": "We decided to use Redis. We decided to use Redis for caching.", "index": 0},
-        ]
-        markers = extract_markers(exchanges)
-        decided = [m for m in markers if m["type"] == "DECIDED"]
-        assert len(decided) <= 1  # Deduped
-
-    def test_cap_per_type(self):
-        # Generate many DECIDED markers
-        exchanges = [
-            {"user": "plan?", "assistant": f"We decided to use approach {i} for component {i} in system." * 2, "index": i}
-            for i in range(10)
-        ]
-        markers = extract_markers(exchanges)
-        decided_count = sum(1 for m in markers if m["type"] == "DECIDED")
-        assert decided_count <= 3
-
-    def test_cap_total(self):
-        # Generate many markers of different types
-        exchanges = [
-            {"user": f"let's implement feature number {i} in the codebase", "assistant": f"We decided to use approach {i} for the implementation. Next step is testing approach {i} thoroughly.", "index": i}
-            for i in range(20)
-        ]
-        markers = extract_markers(exchanges)
-        assert len(markers) <= 10
-
-    def test_empty_exchanges(self):
-        assert extract_markers([]) == []
-
-    def test_short_text_ignored(self):
-        exchanges = [
-            {"user": "ok", "assistant": "done", "index": 0},
-        ]
-        markers = extract_markers(exchanges)
-        # Short text (<10 chars) should not produce markers
-        assert len(markers) == 0
 
 
 class TestBuildContextSummaryJson:
@@ -254,7 +162,7 @@ class TestRenderContextSummary:
         summary = {
             "version": 2,
             "topic": "test",
-            "markers": [],
+
             "first_exchanges": [
                 {"user": "Q1", "assistant": "A1", "timestamp": "2025-01-15T10:00:00Z"},
             ],
@@ -276,7 +184,7 @@ class TestRenderContextSummary:
         summary = {
             "version": 2,
             "topic": "test",
-            "markers": [],
+
             "first_exchanges": [
                 {"user": "Q1", "assistant": "A1", "timestamp": "2025-01-15T10:00:00Z"},
                 {"user": "Q2", "assistant": "A2", "timestamp": "2025-01-15T10:01:00Z"},
@@ -303,33 +211,12 @@ class TestRenderContextSummary:
         assert "Tools:" in result
         assert "/recall-conversations" in result
 
-    def test_markers_rendered(self):
-        summary = {
-            "version": 2,
-            "topic": "test",
-            "markers": [
-                {"type": "DECIDED", "text": "Use Redis for caching", "source_exchange": 3},
-                {"type": "OPEN", "text": "Auth service needs fixing", "source_exchange": 5},
-            ],
-            "first_exchanges": [
-                {"user": "Q1", "assistant": "A1", "timestamp": "2025-01-15T10:00:00Z"},
-            ],
-            "last_exchanges": [{"user": "Q1", "assistant": "A1", "timestamp": "2025-01-15T10:00:00Z"}],
-            "metadata": {"exchange_count": 1, "started_at": "2025-01-15T10:00:00Z",
-                          "ended_at": "2025-01-15T10:30:00Z", "git_branch": "main",
-                          "files_modified": [], "commits": [], "tool_counts": {}},
-        }
-        result = render_context_summary(summary)
-        assert "### Key Signals" in result
-        assert "[DECIDED] Use Redis for caching" in result
-        assert "[OPEN] Auth service needs fixing" in result
-
     def test_mid_truncation_in_render(self):
         long_response = "Start " + "x" * 1000 + " End"
         summary = {
             "version": 2,
             "topic": "test",
-            "markers": [],
+
             "first_exchanges": [
                 {"user": "Q1", "assistant": long_response, "timestamp": "2025-01-15T10:00:00Z"},
             ],

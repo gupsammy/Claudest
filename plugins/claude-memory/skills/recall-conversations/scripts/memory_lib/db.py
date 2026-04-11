@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import json
 import logging
-import shutil
 import sqlite3
 import time
 from logging.handlers import RotatingFileHandler
@@ -241,7 +240,7 @@ def migrate_db(conn: sqlite3.Connection) -> bool:
     if not cursor.fetchone():
         return False  # Fresh DB, no migration needed
 
-    # Old schema detected — nuke and recreate
+    # Old schema detected — backup then nuke and recreate
     db_path = None
     # Get the database file path from connection
     cursor.execute("PRAGMA database_list")
@@ -250,10 +249,22 @@ def migrate_db(conn: sqlite3.Connection) -> bool:
             db_path = Path(row[2])
             break
 
-    conn.close()
-
     if db_path and db_path.exists():
+        # JSONL source files expire after 30 days — data older than that
+        # exists only in this DB. Back up before destroying.
+        backed_up = _backup_db_before_migration(db_path, "pre-v3-nuke")
+        if not backed_up:
+            # Backup failed (disk full, permissions, etc.) — refuse to destroy
+            # the only copy. Return False so caller uses the old schema as-is.
+            return False
+        conn.close()
         db_path.unlink()
+        # Clean up WAL/SHM files — orphaned WAL replayed into an empty DB
+        # causes "database disk image is malformed" errors.
+        for suffix in ("-wal", "-shm"):
+            wal_path = db_path.with_name(db_path.name + suffix)
+            if wal_path.exists():
+                wal_path.unlink()
 
     # Reconnect and create fresh schema
     new_conn = sqlite3.connect(str(db_path) if db_path else ":memory:")
@@ -459,27 +470,45 @@ CREATE INDEX IF NOT EXISTS idx_token_snapshots_start ON token_snapshots(start_ti
         conn.commit()
 
 
-def _backup_db_before_migration(db_path: Path, label: str) -> None:
-    """Create a timestamped backup of the DB before a destructive migration."""
+def _backup_db_before_migration(db_path: Path, label: str) -> bool:
+    """Create a timestamped WAL-safe backup using sqlite3.Connection.backup().
+
+    Returns True if backup succeeded and was verified, False otherwise.
+    sqlite3.Connection.backup() does a page-level copy that respects WAL journaling.
+    """
     if not db_path.name or not db_path.exists():
-        return
+        return False
     ts = time.strftime("%Y%m%d-%H%M%S")
     backup_path = db_path.with_suffix(f".pre-{label}-{ts}.db")
+    src = None
+    dst = None
     try:
-        shutil.copy2(db_path, backup_path)
-    except OSError:
-        pass  # Best-effort — don't block migration if backup fails
+        src = sqlite3.connect(str(db_path))
+        dst = sqlite3.connect(str(backup_path))
+        src.backup(dst)
+        # Verify backup is non-empty
+        if not backup_path.exists() or backup_path.stat().st_size == 0:
+            return False
+        return True
+    except Exception:
+        return False
+    finally:
+        if dst:
+            dst.close()
+        if src:
+            src.close()
 
 
 def _backfill_origin(conn: sqlite3.Connection, cursor: sqlite3.Cursor) -> None:
     """Selectively backfill origin column from JSONL files without full reimport.
 
-    Phase 1: For each file in import_log, scan for entries with origin fields
+    For each file in import_log, scan for entries with origin fields
     and UPDATE existing message rows by session_id + uuid.
 
-    Phase 2: For files containing isMeta+origin entries (channel messages that
-    were previously filtered by the parser), nullify file_hash so the next
-    normal import re-processes just those sessions via the standard pipeline.
+    Note: Previously had a Phase 2 that nullified file_hash to force reimport
+    of sessions with channel messages. Removed because the reimport path is
+    destructive (delete-all-then-insert) and JSONL files expire after 30 days —
+    triggering a reimport risks irrecoverable data loss.
     """
     import json
     from memory_lib.content import parse_origin
@@ -509,7 +538,6 @@ def _backfill_origin(conn: sqlite3.Connection, cursor: sqlite3.Cursor) -> None:
         if not p.exists():
             continue
 
-        has_channel_messages = False
         try:
             with open(p, "r", encoding="utf-8", errors="replace") as f:
                 for line in f:
@@ -525,11 +553,7 @@ def _backfill_origin(conn: sqlite3.Connection, cursor: sqlite3.Cursor) -> None:
                     if not origin:
                         continue
 
-                    # Phase 2 detection: isMeta entries with origin were previously skipped
-                    if obj.get("isMeta"):
-                        has_channel_messages = True
-
-                    # Phase 1: UPDATE origin for existing messages
+                    # UPDATE origin for existing messages
                     uuid = obj.get("uuid")
                     if uuid and obj.get("type") in ("user", "assistant"):
                         origin_value = parse_origin(obj)
@@ -540,13 +564,6 @@ def _backfill_origin(conn: sqlite3.Connection, cursor: sqlite3.Cursor) -> None:
                             )
         except OSError:
             continue
-
-        # Phase 2: Nullify hash so next import re-processes this session
-        if has_channel_messages:
-            cursor.execute(
-                "UPDATE import_log SET file_hash = NULL WHERE file_path = ?",
-                (file_path,)
-            )
 
     conn.commit()
 

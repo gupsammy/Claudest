@@ -239,3 +239,124 @@ class TestValidateSessionIdRejectsTraversal:
     def test_validate_session_id_rejects_uuid_with_extra(self):
         """Should reject UUID with extra characters."""
         assert validate_session_id("016e1f0d-cff2-4552-9e21-43833c9a468e-extra") is False
+
+
+class TestSyncBranchMessagesDiff:
+    """Test that sync_session's branch_messages diff is stable across repeated syncs.
+
+    Prevents: ghost branch-message links accumulating on every PostToolUse turn,
+    which would cause search to surface deleted/stale message content and bloat
+    branch_messages with duplicate rows that survive until manual DB repair.
+    """
+
+    def test_branch_messages_stable_on_resync(self, memory_db_with_project):
+        """branch_messages row set must be identical after a second sync of the same session."""
+        conn, _ = memory_db_with_project
+        fixture_path = FIXTURE_DIR / "single_rewind.jsonl"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_dir = Path(tmpdir)
+
+            # First sync — populate branches and branch_messages
+            sync_session(conn, fixture_path, project_dir)
+            conn.commit()
+
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT branch_id, message_id FROM branch_messages ORDER BY branch_id, message_id"
+            )
+            links_after_first = cursor.fetchall()
+            assert links_after_first, "branch_messages must be populated after first sync"
+
+            # Second sync — same file, same session; the diff should be a no-op
+            sync_session(conn, fixture_path, project_dir)
+            conn.commit()
+
+            cursor.execute(
+                "SELECT branch_id, message_id FROM branch_messages ORDER BY branch_id, message_id"
+            )
+            links_after_second = cursor.fetchall()
+
+            assert links_after_second == links_after_first, (
+                "branch_messages link set must be identical after resync — "
+                f"before={len(links_after_first)}, after={len(links_after_second)}"
+            )
+
+    def test_no_duplicate_branch_messages_on_repeated_sync(self, memory_db_with_project):
+        """Repeated syncs must never produce duplicate (branch_id, message_id) pairs."""
+        conn, _ = memory_db_with_project
+        fixture_path = FIXTURE_DIR / "single_rewind.jsonl"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_dir = Path(tmpdir)
+
+            for _ in range(3):
+                sync_session(conn, fixture_path, project_dir)
+                conn.commit()
+
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT branch_id, message_id, COUNT(*) AS cnt
+                FROM branch_messages
+                GROUP BY branch_id, message_id
+                HAVING cnt > 1
+            """)
+            duplicates = cursor.fetchall()
+            assert not duplicates, (
+                f"Duplicate (branch_id, message_id) pairs found after 3 syncs: {duplicates}"
+            )
+
+    def test_new_messages_add_branch_links_without_removing_old(self, memory_db_with_project):
+        """Growing a session mid-sync must add new branch_messages and keep existing ones.
+
+        Prevents: the diff logic silently dropping links when new messages arrive
+        (to_add stays empty or to_remove incorrectly prunes valid links), which
+        would cause a mid-session Stop hook to lose newly-synced conversation turns
+        from search results until the next full reimport.
+        """
+        conn, _ = memory_db_with_project
+        fixture_lines = (FIXTURE_DIR / "single_rewind.jsonl").read_text().splitlines()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_dir = Path(tmpdir)
+
+            # Use a UUID-shaped stem so sync_session can parse it as a session UUID.
+            # Both files share the same stem so they map to the same session row in the DB.
+            session_stem = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+            partial_path = project_dir / f"{session_stem}.jsonl"
+            full_path = project_dir / f"{session_stem}.jsonl"
+
+            # First sync: a truncated session (first 20 raw lines — 2 user/assistant
+            # exchanges that survive the text-content filter).
+            partial_path.write_text("\n".join(fixture_lines[:20]))
+            sync_session(conn, partial_path, project_dir)
+            conn.commit()
+
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT branch_id, message_id FROM branch_messages ORDER BY branch_id, message_id"
+            )
+            links_after_partial = set(cursor.fetchall())
+            assert links_after_partial, "branch_messages must be populated after partial sync"
+
+            # Second sync: the full session (all fixture lines — many more exchanges).
+            full_path.write_text("\n".join(fixture_lines))
+            sync_session(conn, full_path, project_dir)
+            conn.commit()
+
+            cursor.execute(
+                "SELECT branch_id, message_id FROM branch_messages ORDER BY branch_id, message_id"
+            )
+            links_after_full = set(cursor.fetchall())
+
+            # All links from the partial sync must still exist (append-only for existing links)
+            assert links_after_partial.issubset(links_after_full), (
+                "branch_messages from partial sync were removed after full sync — "
+                f"missing: {links_after_partial - links_after_full}"
+            )
+
+            # The full sync must have added new links (growth was actually recorded)
+            assert len(links_after_full) > len(links_after_partial), (
+                "branch_messages did not grow after syncing a longer session — "
+                f"partial={len(links_after_partial)}, full={len(links_after_full)}"
+            )

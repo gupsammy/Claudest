@@ -69,7 +69,7 @@ def _setup_db_and_import(filepath: Path) -> sqlite3.Connection:
     for branch in branches:
         branch_msgs = [m for m in messages if m.get("uuid") in branch["uuids"]]
         branch_msgs.sort(key=lambda e: e.get("timestamp") or "")
-        exchange_count, files, commits, tool_counts = compute_branch_metadata(branch_msgs)
+        exchange_count, files, commits, _tool_counts = compute_branch_metadata(branch_msgs)
 
         cursor.execute("""
             INSERT INTO branches (session_id, leaf_uuid, is_active, exchange_count)

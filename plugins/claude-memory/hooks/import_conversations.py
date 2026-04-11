@@ -16,7 +16,6 @@ import json
 import sqlite3
 import sys
 from pathlib import Path
-from typing import Optional
 
 # Add path to shared utils
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -48,7 +47,6 @@ def import_session(
     conn: sqlite3.Connection,
     filepath: Path,
     project_id: int,
-    parent_session_id: Optional[int] = None
 ) -> tuple[int, int]:
     """
     Import a single session JSONL file with v3 schema.
@@ -92,27 +90,22 @@ def import_session(
 
     # Step 1: Upsert ONE session row
     cursor.execute("""
-        INSERT INTO sessions (uuid, project_id, parent_session_id, git_branch, cwd)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO sessions (uuid, project_id, git_branch, cwd)
+        VALUES (?, ?, ?, ?)
         ON CONFLICT(uuid) DO UPDATE SET
             git_branch = COALESCE(excluded.git_branch, sessions.git_branch),
-            cwd = COALESCE(excluded.cwd, sessions.cwd),
-            parent_session_id = COALESCE(excluded.parent_session_id, sessions.parent_session_id)
-    """, (session_uuid, project_id, parent_session_id, meta["git_branch"], meta["cwd"]))
+            cwd = COALESCE(excluded.cwd, sessions.cwd)
+    """, (session_uuid, project_id, meta["git_branch"], meta["cwd"]))
     cursor.execute("SELECT id FROM sessions WHERE uuid = ?", (session_uuid,))
     session_id = cursor.fetchone()[0]
 
-    # Step 2: Clear existing data for re-import (FK-safe order: branch_messages → branches → messages)
-    cursor.execute("SELECT id FROM branches WHERE session_id = ?", (session_id,))
-    old_branch_ids = [row[0] for row in cursor.fetchall()]
-    if old_branch_ids:
-        placeholders = ",".join("?" * len(old_branch_ids))
-        # Placeholders are auto-generated "?" strings; values are DB-generated integers
-        cursor.execute(f"DELETE FROM branch_messages WHERE branch_id IN ({placeholders})", old_branch_ids)
-    cursor.execute("DELETE FROM branches WHERE session_id = ?", (session_id,))
-    cursor.execute("DELETE FROM messages WHERE session_id = ?", (session_id,))
+    # Step 2: Append-only message insert (never delete — JSONL source expires after 30 days)
+    # Build set of UUIDs claimed by any branch to filter noise
+    valid_branch_uuids = set()
+    for branch in branches:
+        valid_branch_uuids.update(branch["uuids"])
 
-    total_messages = 0
+    new_messages = 0
     for entry in messages:
         entry_type = entry.get("type")
         if entry_type not in ("user", "assistant"):
@@ -122,6 +115,10 @@ def import_session(
         content = message.get("content", "")
 
         if entry_type == "user" and is_tool_result(content):
+            continue
+
+        uuid = entry.get("uuid")
+        if not uuid or uuid not in valid_branch_uuids:
             continue
 
         notification = 1 if (entry_type == "user" and (is_task_notification(content) or is_teammate_message(content))) else 0
@@ -138,7 +135,7 @@ def import_session(
             ON CONFLICT(session_id, uuid) DO NOTHING
         """, (
             session_id,
-            entry.get("uuid"),
+            uuid,
             entry.get("parentUuid"),
             entry.get("timestamp"),
             entry_type,
@@ -150,10 +147,15 @@ def import_session(
             origin,
         ))
         if cursor.rowcount > 0:
-            total_messages += 1
+            new_messages += 1
 
-    # Skip sessions with no extractable messages
+    # Check total message count (pre-existing + new) — not just new inserts
+    cursor.execute("SELECT COUNT(*) FROM messages WHERE session_id = ?", (session_id,))
+    total_messages = cursor.fetchone()[0]
+
+    # Skip sessions with no extractable messages at all
     if total_messages == 0:
+        # Safe to remove: session was just created with no data
         cursor.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
         return -1, 0
 
@@ -164,7 +166,12 @@ def import_session(
     )
     uuid_to_msg_id = {row[1]: row[0] for row in cursor.fetchall()}
 
-    # Step 4: Build branches + branch_messages
+    # Step 4: Upsert branches + diff branch_messages (mirrors sync_current.py)
+    cursor.execute(
+        "SELECT id, leaf_uuid FROM branches WHERE session_id = ?",
+        (session_id,)
+    )
+    existing_branches = {row[1]: row[0] for row in cursor.fetchall()}
     branches_imported = 0
 
     for branch in branches:
@@ -184,40 +191,79 @@ def import_session(
         branch_meta = extract_session_metadata(branch_msgs)
         exchange_count, files, commits, tool_counts = compute_branch_metadata(branch_msgs)
 
-        # Insert branch
-        cursor.execute("""
-            INSERT INTO branches (session_id, leaf_uuid, fork_point_uuid, is_active,
-                                  started_at, ended_at, exchange_count, files_modified, commits, tool_counts)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            session_id,
-            leaf_uuid,
-            fork_point_uuid,
-            int(is_active),
-            branch_meta["started_at"],
-            branch_meta["ended_at"],
-            exchange_count,
-            json.dumps(files) if files else None,
-            json.dumps(commits) if commits else None,
-            json.dumps(tool_counts) if tool_counts else None
-        ))
-        branch_db_id = cursor.lastrowid
+        files_json = json.dumps(files) if files else None
+        commits_json = json.dumps(commits) if commits else None
+        tool_counts_json = json.dumps(tool_counts) if tool_counts else None
 
-        # Insert branch_messages mapping
+        if leaf_uuid in existing_branches:
+            # Update existing branch metadata
+            branch_db_id = existing_branches[leaf_uuid]
+            cursor.execute("""
+                UPDATE branches SET
+                    is_active = ?, fork_point_uuid = ?,
+                    started_at = ?, ended_at = ?,
+                    exchange_count = ?, files_modified = ?, commits = ?, tool_counts = ?
+                WHERE id = ?
+            """, (
+                int(is_active), fork_point_uuid,
+                branch_meta["started_at"], branch_meta["ended_at"],
+                exchange_count, files_json, commits_json, tool_counts_json,
+                branch_db_id
+            ))
+        else:
+            # Insert new branch
+            cursor.execute("""
+                INSERT INTO branches (session_id, leaf_uuid, fork_point_uuid, is_active,
+                                      started_at, ended_at, exchange_count, files_modified, commits, tool_counts)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                session_id, leaf_uuid, fork_point_uuid, int(is_active),
+                branch_meta["started_at"], branch_meta["ended_at"],
+                exchange_count, files_json, commits_json, tool_counts_json
+            ))
+            branch_db_id = cursor.lastrowid
+
+        # Ensure only one active branch per session
+        if is_active:
+            cursor.execute("""
+                UPDATE branches SET is_active = 0
+                WHERE session_id = ? AND id != ? AND is_active = 1
+            """, (session_id, branch_db_id))
+
+        # Diff branch_messages: add missing, remove stale links (not messages)
+        cursor.execute(
+            "SELECT message_id FROM branch_messages WHERE branch_id = ?",
+            (branch_db_id,)
+        )
+        existing_bm_ids = {row[0] for row in cursor.fetchall()}
+
+        desired_bm_ids = set()
         for uuid in branch_uuids:
             msg_id = uuid_to_msg_id.get(uuid)
             if msg_id:
-                cursor.execute(
-                    "INSERT OR IGNORE INTO branch_messages (branch_id, message_id) VALUES (?, ?)",
-                    (branch_db_id, msg_id)
-                )
+                desired_bm_ids.add(msg_id)
+
+        to_add = desired_bm_ids - existing_bm_ids
+        to_remove = existing_bm_ids - desired_bm_ids
+
+        if to_remove:
+            ph = ",".join("?" * len(to_remove))
+            cursor.execute(
+                f"DELETE FROM branch_messages WHERE branch_id = ? AND message_id IN ({ph})",
+                (branch_db_id, *to_remove)
+            )
+        if to_add:
+            cursor.executemany(
+                "INSERT OR IGNORE INTO branch_messages (branch_id, message_id) VALUES (?, ?)",
+                [(branch_db_id, mid) for mid in to_add]
+            )
 
         # Aggregate branch content for FTS
         agg_content = aggregate_branch_content(cursor, branch_db_id)
         if not agg_content:
-            # No searchable content — remove this branch
-            cursor.execute("DELETE FROM branch_messages WHERE branch_id = ?", (branch_db_id,))
-            cursor.execute("DELETE FROM branches WHERE id = ?", (branch_db_id,))
+            # No searchable content — skip but don't delete. Deleting causes
+            # thrashing: branch exists in JSONL → recreated next import → empty
+            # again → deleted again, every cycle. An empty branch row is harmless.
             continue
 
         cursor.execute(
@@ -237,20 +283,11 @@ def import_session(
 
         branches_imported += 1
 
-    # Clean up orphaned messages (not referenced by any branch)
-    cursor.execute("""
-        DELETE FROM messages
-        WHERE session_id = ? AND id NOT IN (
-            SELECT DISTINCT bm.message_id FROM branch_messages bm
-            JOIN branches b ON bm.branch_id = b.id
-            WHERE b.session_id = ?
-        )
-    """, (session_id, session_id))
-
-    # If no branches survived, remove the empty session
-    if branches_imported == 0:
-        cursor.execute("DELETE FROM messages WHERE session_id = ?", (session_id,))
-        cursor.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
+    # Check if session has any branches at all (pre-existing + new)
+    cursor.execute("SELECT COUNT(*) FROM branches WHERE session_id = ?", (session_id,))
+    if cursor.fetchone()[0] == 0:
+        # Messages exist (guaranteed by early return above) but no branches —
+        # nothing useful for branch-based search.
         return -1, 0
 
     # Step 5: Update import_log
@@ -331,32 +368,6 @@ def import_project(
         else:
             sessions_imported += branches_count
             messages_imported += msg_count
-
-        # Check for subagents
-        session_uuid = jsonl_file.stem
-        subagents_dir = project_dir / session_uuid / "subagents"
-        if subagents_dir.exists():
-            for subagent_file in subagents_dir.glob("*.jsonl"):
-                # Skip prompt_suggestion agents (autocomplete noise)
-                if "prompt_suggestion" in subagent_file.stem:
-                    sessions_skipped += 1
-                    continue
-                # For subagents, find parent session id
-                cursor.execute(
-                    "SELECT id FROM sessions WHERE uuid = ? LIMIT 1",
-                    (session_uuid,)
-                )
-                parent_row = cursor.fetchone()
-                parent_sid = parent_row[0] if parent_row else None
-
-                sub_branches, sub_msg_count = import_session(
-                    conn, subagent_file, project_id, parent_session_id=parent_sid
-                )
-                if sub_branches != -1:
-                    sessions_imported += sub_branches
-                    messages_imported += sub_msg_count
-                else:
-                    sessions_skipped += 1
 
     return sessions_imported, messages_imported, sessions_skipped
 

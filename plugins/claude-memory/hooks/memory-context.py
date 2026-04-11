@@ -28,7 +28,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR.parent / "skills" / "recall-conversations" / "scripts"))
 
 from memory_lib.db import get_db_path, load_config, load_settings, setup_logging, get_db_connection
-from memory_lib.formatting import format_time, format_time_full, get_project_key
+from memory_lib.formatting import format_time, format_time_full, get_project_key, normalize_cwd
 from memory_lib.summarizer import build_exchange_pairs, truncate_mid
 
 
@@ -143,8 +143,9 @@ def _find_cleared_from_session_uuid(db_path: Path, cwd: str) -> str | None:
     handoff_cwd = data.get("cwd")
     timestamp_str = data.get("timestamp")
 
-    # Validate before consuming: wrong cwd means this handoff belongs to another session
-    if not session_id or handoff_cwd != cwd:
+    # Validate before consuming: wrong cwd means this handoff belongs to another session.
+    # Normalize both sides so worktree paths (.claude/worktrees/<name>) match the base repo.
+    if not session_id or normalize_cwd(handoff_cwd or "") != normalize_cwd(cwd):
         return None
 
     # Stale guard: reject handoffs older than 30 seconds
@@ -374,6 +375,25 @@ def _build_fallback_context(session: dict) -> str:
     return "\n".join(lines)
 
 
+def _extract_topic(session: dict) -> str:
+    """Extract topic string from a session entry.
+
+    Prefers cached context_summary (always present for synced sessions).
+    Falls back to first user message content for uncached branches.
+    """
+    cached = session.get("context_summary", "")
+    if cached:
+        for line in cached.splitlines():
+            if "**Topic:**" in line:
+                part = line.split("**Topic:**", 1)[1]
+                return part.split(" | ")[0].strip()
+    for msg in session.get("messages", []):
+        if msg.get("role") == "user":
+            content = msg.get("content", "")
+            return (content[:120] + "...") if len(content) > 120 else content
+    return ""
+
+
 def build_origin_block(source: str, sessions: list[dict]) -> str:
     """Build a structured Session Origin block that tells the new session where it came from."""
     if not sessions:
@@ -400,6 +420,11 @@ def build_origin_block(source: str, sessions: list[dict]) -> str:
         f"- Exchanges: {exchanges}",
         f"- Last active: {ended}",
     ]
+
+    if source == "clear":
+        topic = _extract_topic(primary)
+        if topic:
+            lines.append(f"- Topic: {topic}")
 
     if len(sessions) > 1:
         lines.append(f"- +{len(sessions) - 1} supplementary session(s) included below")

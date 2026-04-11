@@ -15,23 +15,6 @@ import sqlite3
 
 from memory_lib.formatting import format_time, format_time_full
 
-# --- Marker extraction heuristics ---
-
-# Keyword patterns: (compiled_regex, marker_type)
-_KEYWORD_PATTERNS = [
-    (re.compile(r"(?:decided|let'?s go with|chose|the plan is|we(?:'re| are) going with)\s+(.{10,120})", re.IGNORECASE), "DECIDED"),
-    (re.compile(r"(?:next step|TODO|need to|we should|the next thing)\s*(?:is|:)?\s*(.{10,120})", re.IGNORECASE), "NEXT"),
-    (re.compile(r"(?:blocked on|waiting for|can'?t proceed|depends on)\s+(.{10,120})", re.IGNORECASE), "OPEN"),
-    (re.compile(r"(?:skip(?:ped)?|don'?t|instead of|not going to|rejected)\s+(.{10,120})", re.IGNORECASE), "REJECTED"),
-]
-
-# User intent prefixes
-_INTENT_RE = re.compile(r"^(?:let'?s|can you|I want|we need to|I need)\s+(.{10,120})", re.IGNORECASE | re.MULTILINE)
-
-# Max markers per type and total
-_MAX_PER_TYPE = 3
-_MAX_TOTAL = 10
-
 # Truncation limits
 _FRONT_CHARS = 300
 _BACK_CHARS = 600
@@ -57,19 +40,6 @@ def truncate_mid(text: str, front: int = _FRONT_CHARS, back: int = _BACK_CHARS) 
     if not text or len(text) <= front + back + 20:
         return text
     return text[:front] + "\n[... truncated ...]\n" + text[-back:]
-
-
-def _last_sentence(text: str) -> str:
-    """Extract the last sentence from text."""
-    # Split on sentence boundaries
-    sentences = re.split(r'(?<=[.!?])\s+', text.strip())
-    return sentences[-1] if sentences else ""
-
-
-def _extract_bullet_items(text: str) -> list[str]:
-    """Extract bullet or numbered list items from text."""
-    items = re.findall(r'^[\s]*[-*\d.]+\s+(.+)$', text, re.MULTILINE)
-    return items[:5]
 
 
 def detect_disposition(exchanges: list[dict]) -> str:
@@ -104,90 +74,6 @@ def detect_disposition(exchanges: list[dict]) -> str:
         return "COMPLETED"
 
     return "IN_PROGRESS"
-
-
-def extract_markers(exchanges: list[dict]) -> list[dict]:
-    """
-    Run heuristic layers on exchange pairs to extract structured markers.
-
-    Each exchange is {"user": str, "assistant": str, "index": int}.
-    Returns list of {"type": str, "text": str, "source_exchange": int}.
-    """
-    markers = []  # type: list[dict]
-    seen_texts = set()  # type: set[str]
-
-    def _add(marker_type: str, text: str, source: int) -> None:
-        text = text.strip()
-        if not text or len(text) < 10:
-            return
-        # Truncate long markers
-        if len(text) > 150:
-            text = text[:147] + "..."
-        # Dedup by substring containment
-        text_lower = text.lower()
-        for existing in seen_texts:
-            if text_lower in existing or existing in text_lower:
-                return
-        seen_texts.add(text_lower)
-        markers.append({"type": marker_type, "text": text, "source_exchange": source})
-
-    for ex in exchanges:
-        idx = ex.get("index", 0)
-        asst = ex.get("assistant", "")
-        user = ex.get("user", "")
-
-        # Layer 1: Keyword matching on assistant text
-        for pattern, marker_type in _KEYWORD_PATTERNS:
-            for match in pattern.finditer(asst):
-                _add(marker_type, match.group(0), idx)
-
-        # Layer 4: User intent prefixes
-        for match in _INTENT_RE.finditer(user):
-            _add("OPEN", match.group(0), idx)
-
-        # Layer 5: Negation tracking in user messages
-        for pattern, marker_type in _KEYWORD_PATTERNS:
-            if marker_type == "REJECTED":
-                for match in pattern.finditer(user):
-                    _add("REJECTED", match.group(0), idx)
-
-    # Layer 2: Positional — last exchange gets special treatment
-    if exchanges:
-        last = exchanges[-1]
-        last_asst = last.get("assistant", "")
-        last_idx = last.get("index", 0)
-
-        # Last sentence of final assistant response
-        last_sent = _last_sentence(last_asst)
-        if last_sent and len(last_sent) > 20:
-            _add("NEXT", last_sent, last_idx)
-
-        # Bullet items from final assistant response
-        for item in _extract_bullet_items(last_asst):
-            _add("OPEN", item, last_idx)
-
-    # Layer 3: Question detection — unanswered questions in last user message
-    if exchanges:
-        last = exchanges[-1]
-        last_user = last.get("user", "")
-        last_asst = last.get("assistant", "")
-        last_idx = last.get("index", 0)
-
-        if last_user.rstrip().endswith("?"):
-            # Check if assistant response suggests unfinished work
-            if re.search(r'(?:want me to|should I|shall I|ready to|want to proceed)', last_asst, re.IGNORECASE):
-                _add("OPEN", last_user.strip()[:150], last_idx)
-
-    # Enforce caps: max per type, max total
-    type_counts = {}  # type: dict[str, int]
-    capped = []
-    for m in markers:
-        t = m["type"]
-        type_counts[t] = type_counts.get(t, 0) + 1
-        if type_counts[t] <= _MAX_PER_TYPE and len(capped) < _MAX_TOTAL:
-            capped.append(m)
-
-    return capped
 
 
 def build_exchange_pairs(messages: list[dict]) -> list[dict]:
@@ -240,7 +126,7 @@ def build_context_summary_json(branch_row: dict, messages: list[dict]) -> dict:
     """
     exchanges = build_exchange_pairs(messages)
     if not exchanges:
-        return {"version": 2, "topic": "", "markers": [], "first_exchanges": [],
+        return {"version": 2, "topic": "", "first_exchanges": [],
                 "last_exchanges": [], "metadata": {}}
 
     # Topic from first user message
@@ -248,10 +134,7 @@ def build_context_summary_json(branch_row: dict, messages: list[dict]) -> dict:
     if len(topic) > 120:
         topic = topic[:120] + "..."
 
-    # Disposition from final exchange; markers disabled (topic + disposition + gap summary
-    # provide equivalent signal without the garbled-regex-fragment risk)
     disposition = detect_disposition(exchanges)
-    markers = []
 
     # First exchanges (up to 2)
     first_exchanges = [
@@ -299,7 +182,6 @@ def build_context_summary_json(branch_row: dict, messages: list[dict]) -> dict:
         "version": 2,
         "topic": topic,
         "disposition": disposition,
-        "markers": markers,
         "first_exchanges": first_exchanges,
         "last_exchanges": last_exchanges,
         "metadata": {
@@ -314,30 +196,13 @@ def build_context_summary_json(branch_row: dict, messages: list[dict]) -> dict:
     }
 
 
-def _build_gap_summary(summary_json: dict, gap_start: int, gap_end: int) -> str:
-    """Build a one-line summary of what happened in the omitted middle exchanges.
-
-    Extracts file paths mentioned, questions asked, and markers sourced from the gap.
-    """
-    parts = []
-
-    # File paths from metadata
+def _build_gap_summary(summary_json: dict) -> str:
+    """Build a one-line summary of what happened in the omitted middle exchanges."""
     files = summary_json.get("metadata", {}).get("files_modified", [])
     if files:
-        # Show up to 3 short filenames
         short = [f.rsplit("/", 1)[-1] for f in files[:3]]
-        parts.append(", ".join(short))
-
-    # Count questions in the gap from markers
-    gap_markers = [
-        m for m in summary_json.get("markers", [])
-        if gap_start <= m.get("source_exchange", -1) < gap_end
-    ]
-    questions = sum(1 for m in gap_markers if m["type"] == "OPEN")
-    if questions:
-        parts.append(f"{questions} open question{'s' if questions > 1 else ''}")
-
-    return "; ".join(parts)
+        return ", ".join(short)
+    return ""
 
 
 def render_context_summary(summary_json: dict) -> str:
@@ -397,13 +262,6 @@ def render_context_summary(summary_json: dict) -> str:
     lines.append("")
 
     # Key Signals section (omitted if no markers)
-    markers = summary_json.get("markers", [])
-    if markers:
-        lines.append("### Key Signals\n")
-        for m in markers:
-            lines.append(f"- [{m['type']}] {m['text']}")
-        lines.append("")
-
     exchange_count = meta.get("exchange_count", 0)
     first_exs = summary_json.get("first_exchanges", [])
     last_exs = summary_json.get("last_exchanges", [])
@@ -437,7 +295,7 @@ def render_context_summary(summary_json: dict) -> str:
         # Gap indicator with summary of middle exchanges
         gap = exchange_count - len(first_exs) - len(last_exs)
         if gap > 0:
-            gap_detail = _build_gap_summary(summary_json, len(first_exs), exchange_count - len(last_exs))
+            gap_detail = _build_gap_summary(summary_json)
             if gap_detail:
                 lines.append(f"[... {gap} earlier exchanges covering: {gap_detail} ...]\n")
             else:

@@ -8,7 +8,7 @@
     {
       "name": "claude-memory",
       "description": "Searchable conversation memory with full-text search",
-      "version": "0.8.82",
+      "version": "0.8.83",
       "source": "./plugins/claude-memory"
     },
     {

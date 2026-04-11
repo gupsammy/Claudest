@@ -3,13 +3,11 @@
 from __future__ import annotations
 
 import importlib.util
-import json
 import sqlite3
 import sys
 from pathlib import Path
 from uuid import uuid4
 
-import pytest
 
 # Load memory-context.py as a module (hyphen in filename)
 HOOKS_DIR = Path(__file__).resolve().parents[2] / "plugins" / "claude-memory" / "hooks"

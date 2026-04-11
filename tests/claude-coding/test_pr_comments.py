@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 
 from fetch_pr_comments import (
-    BOT_BODY_LIMIT,
     _deduplicate_actionable,
     _extract_section_key,
     _keys_match,
@@ -13,7 +12,6 @@ from fetch_pr_comments import (
     _parse_slurped,
     _short_date,
     _truncate,
-    build_result,
     classify_inline_comment,
     extract_sections,
     format_text,

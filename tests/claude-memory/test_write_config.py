@@ -147,15 +147,13 @@ class TestWriteConfigNonDictExistingConfig:
 
 
 class TestWriteConfigAtomicWrite:
-    def test_no_tmp_file_left_on_write_failure(self, tmp_path, monkeypatch, capsys):
+    def test_no_tmp_file_left_on_write_failure(self, tmp_path, monkeypatch):
         """If the atomic write fails, no .tmp file should remain — prevents stale temp artifacts."""
         import os
         cfg = tmp_path / "config.json"
         _patch_config_path(monkeypatch, cfg)
 
         # Patch os.fdopen to raise after the tempfile is created
-        real_fdopen = os.fdopen
-
         def exploding_fdopen(fd, mode):
             # Close the fd to avoid leaking it, then raise
             os.close(fd)
@@ -176,8 +174,6 @@ class TestWriteConfigAtomicWrite:
         cfg = tmp_path / "config.json"
         cfg.write_text(json.dumps(original))
         _patch_config_path(monkeypatch, cfg)
-
-        real_fdopen = os.fdopen
 
         def exploding_fdopen(fd, mode):
             os.close(fd)

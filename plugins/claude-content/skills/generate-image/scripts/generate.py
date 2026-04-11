@@ -86,8 +86,6 @@ NB_RATIOS = PRO_RATIOS + ["1:4", "4:1", "1:8", "8:1"]
 PRO_RESOLUTIONS = ["1K", "2K", "4K"]
 NB_RESOLUTIONS = ["0.5K"] + PRO_RESOLUTIONS
 
-DEFAULT_OUTPUT_DIR = Path.home() / "Documents" / "generated images"
-
 
 # --- Aspect ratio auto-detection ---
 

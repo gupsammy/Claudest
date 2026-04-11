@@ -16,7 +16,7 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR.parent / "skills" / "recall-conversations" / "scripts"))
 
-from memory_lib.db import CONFIG_PATH, CURRENT_ONBOARDING_VERSION, load_config
+from memory_lib.db import CONFIG_PATH, CURRENT_ONBOARDING_VERSION, load_config  # noqa: F401 — CONFIG_PATH re-exported for test monkeypatching
 
 PYTHON_EXE = sys.executable
 WRITE_CONFIG_PATH = str(SCRIPT_DIR / "write_config.py")

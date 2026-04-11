@@ -8,7 +8,7 @@
     {
       "name": "claude-memory",
       "description": "Searchable conversation memory with full-text search",
-      "version": "0.8.80",
+      "version": "0.8.81",
       "source": "./plugins/claude-memory"
     },
     {
@@ -44,7 +44,7 @@
     {
       "name": "claude-content",
       "description": "Content creation skills: image generation, video compression, conversion, GIF creation, social media formatting, and audio extraction",
-      "version": "0.4.4",
+      "version": "0.4.5",
       "source": "./plugins/claude-content"
     },
     {

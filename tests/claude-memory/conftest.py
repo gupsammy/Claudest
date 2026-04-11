@@ -21,11 +21,6 @@ def memory_db():
     conn.close()
 
 
-@pytest.fixture
-def fixture_dir():
-    """Path to the fixtures directory."""
-    return FIXTURE_DIR
-
 
 @pytest.fixture(params=sorted(FIXTURE_DIR.glob("*.jsonl")), ids=lambda p: p.stem)
 def jsonl_fixture(request):

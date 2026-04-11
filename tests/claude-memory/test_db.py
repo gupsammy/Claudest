@@ -7,7 +7,6 @@ import sqlite3
 import tempfile
 from pathlib import Path
 
-import pytest
 
 from memory_lib.db import (
     CURRENT_ONBOARDING_VERSION,

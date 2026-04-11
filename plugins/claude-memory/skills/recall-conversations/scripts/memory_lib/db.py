@@ -594,7 +594,7 @@ def _migrate_project_paths(conn: sqlite3.Connection) -> None:
     cursor.execute("SELECT id, path, name FROM projects")
     projects = cursor.fetchall()
 
-    for proj_id, stored_path, stored_name in projects:
+    for proj_id, stored_path, _stored_name in projects:
         real_cwd = best_cwd.get(proj_id)
         if not real_cwd or real_cwd == stored_path:
             continue  # No cwd data or already correct
@@ -678,7 +678,7 @@ def setup_logging(settings: Optional[dict] = None) -> logging.Logger:
     Returns a null logger if logging is disabled.
     """
     logger = logging.getLogger("claude-memory")
-    logger.handlers = []  # Clear existing handlers
+    logger.handlers.clear()
 
     if not settings or not settings.get("logging_enabled", False):
         logger.addHandler(logging.NullHandler())

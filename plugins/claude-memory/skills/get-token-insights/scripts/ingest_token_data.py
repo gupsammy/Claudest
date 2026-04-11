@@ -10,8 +10,6 @@ backfills token_snapshots, and outputs a JSON analysis blob to stdout.
 from __future__ import annotations
 
 import json
-import os
-import re
 import sqlite3
 import sys
 from dataclasses import dataclass, field
@@ -637,7 +635,7 @@ def compute_session_analytics(session: ParsedSession) -> dict:
     total_turn_ms = 0
     total_tool_errors = 0
 
-    cache_ttl_ms, cache_tier = _detect_cache_ttl_ms(session)
+    cache_ttl_ms, _ = _detect_cache_ttl_ms(session)
 
     for turn in session.turns:
         # Cache cliff detection
@@ -819,20 +817,6 @@ def backfill_token_snapshots(conn: sqlite3.Connection) -> None:
 
 
 # ── Helpers ───────────────────────────────────────────────────────────
-
-def _percentile(sorted_vals: list, p: float) -> float:
-    if not sorted_vals:
-        return 0.0
-    k = (len(sorted_vals) - 1) * p / 100.0
-    f = int(k)
-    c = f + 1
-    if c >= len(sorted_vals):
-        return float(sorted_vals[-1])
-    return sorted_vals[f] + (k - f) * (sorted_vals[c] - sorted_vals[f])
-
-
-def _avg(arr: list) -> float:
-    return sum(arr) / len(arr) if arr else 0.0
 
 
 def _project_slug(path: str | None) -> str:
@@ -1492,7 +1476,6 @@ def build_output(conn: sqlite3.Connection) -> dict:
         top_bash_cmds.append({"command": row[0], "count": row[1]})
 
     # Compute weighted average cost rates for waste-to-dollar conversion
-    total_all_input = total_input + total_cache_read + total_cache_creation
     avg_input_cpm = 5.0  # default to Opus 4.6 rate
     avg_output_cpm = 25.0
     if model_split:

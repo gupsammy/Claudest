@@ -3,19 +3,17 @@
 
 from __future__ import annotations
 
-import json
 import sqlite3
 import sys
 import tempfile
 from pathlib import Path
-from typing import Optional
 
 import pytest
 
 # Add hooks dir to sys.path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "plugins" / "claude-memory" / "hooks"))
 
-from import_conversations import import_session, import_project, get_file_hash
+from import_conversations import import_session, import_project
 from memory_lib.db import SCHEMA, _migrate_columns
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures"
@@ -203,7 +201,7 @@ class TestReimportIdempotent:
         fixture_file = FIXTURE_DIR / "linear_3_exchange.jsonl"
 
         # First import
-        branches1, messages1 = import_session(memory_db, fixture_file, project_id)
+        branches1, _messages1 = import_session(memory_db, fixture_file, project_id)
         assert branches1 > 0, "First import should succeed"
 
         # Count sessions after first import
@@ -290,7 +288,7 @@ class TestFKSafeReimport:
         fixture_file = FIXTURE_DIR / "linear_3_exchange.jsonl"
 
         # First import
-        branches1, messages1 = import_session(memory_db, fixture_file, project_id)
+        branches1, _messages1 = import_session(memory_db, fixture_file, project_id)
         assert branches1 > 0
         memory_db.commit()
 
@@ -311,7 +309,7 @@ class TestFKSafeReimport:
         memory_db.execute("PRAGMA foreign_keys = ON")
         fixture_file = FIXTURE_DIR / "single_rewind.jsonl"
 
-        branches1, messages1 = import_session(memory_db, fixture_file, project_id)
+        branches1, _messages1 = import_session(memory_db, fixture_file, project_id)
         assert branches1 == 3
         memory_db.commit()
 

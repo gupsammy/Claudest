@@ -143,7 +143,9 @@ Complete when: existing PR state is known and target status is determined.
 
 ### 6. Push
 
-Push the branch to origin. If no upstream is set, use `git push -u origin "$BRANCH"`.
+Always push with `git push -u origin "$BRANCH"` — the `-u` flag sets tracking on new branches
+and is a no-op when the upstream is already correctly set, so it is always safe to use.
+
 If push fails because the remote branch has diverged, run `git pull --rebase origin $BRANCH`
 and retry the push once. If the rebase itself has conflicts, stop and report.
 

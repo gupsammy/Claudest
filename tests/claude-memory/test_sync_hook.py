@@ -305,3 +305,58 @@ class TestSyncBranchMessagesDiff:
             assert not duplicates, (
                 f"Duplicate (branch_id, message_id) pairs found after 3 syncs: {duplicates}"
             )
+
+    def test_new_messages_add_branch_links_without_removing_old(self, memory_db_with_project):
+        """Growing a session mid-sync must add new branch_messages and keep existing ones.
+
+        Prevents: the diff logic silently dropping links when new messages arrive
+        (to_add stays empty or to_remove incorrectly prunes valid links), which
+        would cause a mid-session Stop hook to lose newly-synced conversation turns
+        from search results until the next full reimport.
+        """
+        conn, _ = memory_db_with_project
+        fixture_lines = (FIXTURE_DIR / "single_rewind.jsonl").read_text().splitlines()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_dir = Path(tmpdir)
+
+            # Use a UUID-shaped stem so sync_session can parse it as a session UUID.
+            # Both files share the same stem so they map to the same session row in the DB.
+            session_stem = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+            partial_path = project_dir / f"{session_stem}.jsonl"
+            full_path = project_dir / f"{session_stem}.jsonl"
+
+            # First sync: a truncated session (first 20 raw lines — 2 user/assistant
+            # exchanges that survive the text-content filter).
+            partial_path.write_text("\n".join(fixture_lines[:20]))
+            sync_session(conn, partial_path, project_dir)
+            conn.commit()
+
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT branch_id, message_id FROM branch_messages ORDER BY branch_id, message_id"
+            )
+            links_after_partial = set(cursor.fetchall())
+            assert links_after_partial, "branch_messages must be populated after partial sync"
+
+            # Second sync: the full session (all fixture lines — many more exchanges).
+            full_path.write_text("\n".join(fixture_lines))
+            sync_session(conn, full_path, project_dir)
+            conn.commit()
+
+            cursor.execute(
+                "SELECT branch_id, message_id FROM branch_messages ORDER BY branch_id, message_id"
+            )
+            links_after_full = set(cursor.fetchall())
+
+            # All links from the partial sync must still exist (append-only for existing links)
+            assert links_after_partial.issubset(links_after_full), (
+                "branch_messages from partial sync were removed after full sync — "
+                f"missing: {links_after_partial - links_after_full}"
+            )
+
+            # The full sync must have added new links (growth was actually recorded)
+            assert len(links_after_full) > len(links_after_partial), (
+                "branch_messages did not grow after syncing a longer session — "
+                f"partial={len(links_after_partial)}, full={len(links_after_full)}"
+            )

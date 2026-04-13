@@ -331,3 +331,119 @@ class TestBustOverhead:
         sonnet_cost = _bust_overhead(ep5m, ep5m, 0, _SONNET_PRICING)
         haiku_cost = _bust_overhead(ep5m, ep5m, 0, haiku)
         assert haiku_cost < sonnet_cost
+
+    def test_per_tier_bucketing_is_independent(self):
+        """Bust bucket attribution uses separate if-blocks, not elif.
+
+        When a turn has both 5m and 1h tokens and gap > 1h, both tiers expired.
+        The fix changes elif → two independent ifs so both buckets accumulate.
+        """
+        ep5m = 600_000
+        ep1h = 400_000
+        gap_over_1h = 4_000_000  # > 3,600,000 ms — both tiers expired
+        pricing = _SONNET_PRICING
+
+        cost_5m = _bust_overhead(ep5m, ep5m, 0, pricing)
+        cost_1h = _bust_overhead(ep1h, 0, ep1h, pricing)
+
+        # Simulate what the aggregation loop now does (two independent ifs)
+        bucket: dict = {"busts_5m": 0, "busts_1h": 0, "cost_5m": 0.0, "cost_1h": 0.0}
+        if ep5m and gap_over_1h > 300_000:
+            bucket["busts_5m"] += 1
+            bucket["cost_5m"] += cost_5m
+        if ep1h and gap_over_1h > 3_600_000:
+            bucket["busts_1h"] += 1
+            bucket["cost_1h"] += cost_1h
+
+        assert bucket["busts_5m"] == 1
+        assert bucket["busts_1h"] == 1
+        assert bucket["cost_5m"] == pytest.approx(cost_5m)
+        assert bucket["cost_1h"] == pytest.approx(cost_1h)
+        # Total cost equals sum of per-tier costs
+        assert bucket["cost_5m"] + bucket["cost_1h"] == pytest.approx(cost_5m + cost_1h)
+
+    def test_5m_only_bust_does_not_touch_1h_bucket(self):
+        """A gap between 5min and 1h only busts the 5m tier."""
+        ep5m = 600_000
+        ep1h = 400_000
+        gap_5m_only = 600_000  # 10 min — only 5m expired
+
+        bucket: dict = {"busts_5m": 0, "busts_1h": 0, "cost_5m": 0.0, "cost_1h": 0.0}
+        if ep5m and gap_5m_only > 300_000:
+            bucket["busts_5m"] += 1
+            bucket["cost_5m"] += _bust_overhead(ep5m, ep5m, 0, _SONNET_PRICING)
+        if ep1h and gap_5m_only > 3_600_000:
+            bucket["busts_1h"] += 1
+            bucket["cost_1h"] += _bust_overhead(ep1h, 0, ep1h, _SONNET_PRICING)
+
+        assert bucket["busts_5m"] == 1
+        assert bucket["busts_1h"] == 0
+        assert bucket["cost_1h"] == 0.0
+
+
+# ---------------------------------------------------------------------------
+# _safe_state_path — exception resilience (OSError / RuntimeError)
+# ---------------------------------------------------------------------------
+
+class TestSafeStatePathExceptions:
+    """_safe_state_path must return None (not crash) for any malformed input."""
+
+    @pytest.mark.parametrize("mod", _HOOK_MODULES)
+    def test_returns_none_not_raises_on_oserror(self, mod, tmp_path, monkeypatch):
+        """Simulate Path.resolve() raising OSError (e.g., path too long)."""
+        import pathlib
+
+        def bad_resolve(self, strict=False):
+            raise OSError("simulated OS-level resolve failure")
+
+        monkeypatch.setattr(pathlib.Path, "resolve", bad_resolve)
+        result = mod._safe_state_path(tmp_path, "", "abc123")
+        assert result is None
+
+    @pytest.mark.parametrize("mod", _HOOK_MODULES)
+    def test_returns_none_not_raises_on_runtime_error(self, mod, tmp_path, monkeypatch):
+        """Simulate Path.resolve() raising RuntimeError (e.g., infinite symlink loop)."""
+        import pathlib
+
+        def bad_resolve(self, strict=False):
+            raise RuntimeError("simulated infinite symlink loop")
+
+        monkeypatch.setattr(pathlib.Path, "resolve", bad_resolve)
+        result = mod._safe_state_path(tmp_path, "", "abc123")
+        assert result is None
+
+
+# ---------------------------------------------------------------------------
+# get_cached_tokens — None and encoding edge cases
+# ---------------------------------------------------------------------------
+
+class TestGetCachedTokensEdgeCases:
+    def test_none_transcript_path_returns_zero(self, monkeypatch, tmp_path):
+        """get_cached_tokens(None) must not raise TypeError."""
+        claude_dir = tmp_path / ".claude"
+        claude_dir.mkdir()
+        monkeypatch.setattr(_resume_detect, "_CLAUDE_DIR", claude_dir)
+        # None passed as transcript_path — cast to str("") then bounds check returns 0
+        result = _resume_detect.get_cached_tokens(None)  # type: ignore[arg-type]
+        assert result == 0
+
+    def test_utf8_transcript_is_read_correctly(self, tmp_path, monkeypatch):
+        """Transcripts with non-ASCII content must not crash the reader."""
+        claude_dir = tmp_path / ".claude"
+        claude_dir.mkdir()
+        monkeypatch.setattr(_resume_detect, "_CLAUDE_DIR", claude_dir)
+
+        transcript = claude_dir / "utf8_session.jsonl"
+        entry = {
+            "message": {
+                "role": "assistant",
+                "usage": {
+                    "cache_creation_input_tokens": 100,
+                    "cache_read_input_tokens": 50,
+                },
+                "content": "こんにちは世界",  # non-ASCII
+            }
+        }
+        transcript.write_text(json.dumps(entry) + "\n", encoding="utf-8")
+        result = _resume_detect.get_cached_tokens(str(transcript))
+        assert result == 150

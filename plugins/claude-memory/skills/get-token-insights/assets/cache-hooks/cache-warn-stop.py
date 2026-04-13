@@ -22,11 +22,11 @@ CACHE_WARN_DIR = Path.home() / ".claude-memory" / "cache-warn"
 
 def _safe_state_path(cache_dir: Path, prefix: str, session_id: str) -> Path | None:
     """Return resolved path only if it stays within cache_dir; else None."""
-    candidate = (cache_dir / f"{prefix}{session_id}.json").resolve()
     try:
+        candidate = (cache_dir / f"{prefix}{session_id}.json").resolve()
         candidate.relative_to(cache_dir.resolve())
         return candidate
-    except ValueError:
+    except (ValueError, OSError, RuntimeError):
         return None
 
 

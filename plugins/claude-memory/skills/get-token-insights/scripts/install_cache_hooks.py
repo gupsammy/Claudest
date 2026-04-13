@@ -92,10 +92,15 @@ def check_status() -> dict[str, dict]:
     return result
 
 
+class InstallError(Exception):
+    """Raised by install() on hard failures; caught by main() which calls sys.exit(1)."""
+
+
 def install(dry_run: bool = False) -> bool:
     """
     Install hook scripts and settings.json entries.
     Returns True if any change was made (or would be made in dry-run).
+    Raises InstallError on hard failures (missing assets, bad settings.json).
     """
     changed = False
 
@@ -105,8 +110,7 @@ def install(dry_run: bool = False) -> bool:
         src = ASSET_DIR / fname
         dest = HOOKS_DIR / fname
         if not src.exists():
-            print(f"[ERROR] Asset not found: {src}", file=sys.stderr)
-            sys.exit(1)
+            raise InstallError(f"Asset not found: {src}")
         if dest.exists():
             if dest.read_bytes() == src.read_bytes():
                 print(f"  [skip] {fname} — already up to date")
@@ -122,14 +126,12 @@ def install(dry_run: bool = False) -> bool:
 
     # 2. Merge settings.json
     if not SETTINGS_PATH.exists():
-        print("[ERROR] ~/.claude/settings.json not found — cannot wire hooks", file=sys.stderr)
-        sys.exit(1)
+        raise InstallError("~/.claude/settings.json not found — cannot wire hooks")
 
     try:
         cfg = json.loads(SETTINGS_PATH.read_text())
     except json.JSONDecodeError as exc:
-        print(f"[ERROR] settings.json is malformed: {exc}", file=sys.stderr)
-        sys.exit(1)
+        raise InstallError(f"settings.json is malformed: {exc}") from exc
 
     hooks_cfg = cfg.setdefault("hooks", {})
     settings_changed = False
@@ -174,7 +176,11 @@ def main() -> None:
     if args.dry_run:
         print("[dry-run] No files will be written.\n")
 
-    changed = install(dry_run=args.dry_run)
+    try:
+        changed = install(dry_run=args.dry_run)
+    except InstallError as exc:
+        print(f"[ERROR] {exc}", file=sys.stderr)
+        sys.exit(1)
 
     if not changed:
         print("\nAll hooks already installed — nothing to do.")

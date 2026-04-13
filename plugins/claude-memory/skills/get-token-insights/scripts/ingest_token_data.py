@@ -1033,16 +1033,15 @@ def build_output(conn: sqlite3.Connection) -> dict:
     """):
         day, model, inp, out, cr, cc, e5, e1, gap = row
         pricing = _get_pricing(model)
-        cost = _bust_overhead(cc or 0, e5 or 0, e1 or 0, pricing)
         bucket = bust_by_day.setdefault(day, {
             "busts_5m": 0, "busts_1h": 0, "cost_5m": 0.0, "cost_1h": 0.0,
         })
         if e5 and gap > 300_000:
             bucket["busts_5m"] += 1
-            bucket["cost_5m"] += cost
-        elif e1 and gap > 3_600_000:
+            bucket["cost_5m"] += _bust_overhead(e5 or 0, e5 or 0, 0, pricing)
+        if e1 and gap > 3_600_000:
             bucket["busts_1h"] += 1
-            bucket["cost_1h"] += cost
+            bucket["cost_1h"] += _bust_overhead(e1 or 0, 0, e1 or 0, pricing)
 
     # Fill all dates in range so the two lines align on the x-axis.
     cache_bust_temporal: list[dict] = []

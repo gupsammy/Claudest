@@ -43,11 +43,11 @@ def _format_tokens(n: int) -> str:
 
 def _safe_state_path(cache_dir: Path, prefix: str, session_id: str) -> Path | None:
     """Return resolved path only if it stays within cache_dir; else None."""
-    candidate = (cache_dir / f"{prefix}{session_id}.json").resolve()
     try:
+        candidate = (cache_dir / f"{prefix}{session_id}.json").resolve()
         candidate.relative_to(cache_dir.resolve())
         return candidate
-    except ValueError:
+    except (ValueError, OSError, RuntimeError):
         return None
 
 
@@ -77,6 +77,14 @@ def check_resume_warn(session_id: str) -> str | None:
 
 
 def main() -> None:
+    try:
+        _main()
+    except Exception:
+        # Never hard-block a UserPromptSubmit hook — always let the prompt through
+        print(json.dumps({"continue": True}))
+
+
+def _main() -> None:
     try:
         hook_input = json.load(sys.stdin)
     except (json.JSONDecodeError, EOFError):

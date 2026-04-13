@@ -20,6 +20,16 @@ from pathlib import Path
 CACHE_WARN_DIR = Path.home() / ".claude-memory" / "cache-warn"
 
 
+def _safe_state_path(cache_dir: Path, prefix: str, session_id: str) -> Path | None:
+    """Return resolved path only if it stays within cache_dir; else None."""
+    candidate = (cache_dir / f"{prefix}{session_id}.json").resolve()
+    try:
+        candidate.relative_to(cache_dir.resolve())
+        return candidate
+    except ValueError:
+        return None
+
+
 def main() -> None:
     try:
         raw = sys.stdin.read()
@@ -29,7 +39,9 @@ def main() -> None:
             return
 
         CACHE_WARN_DIR.mkdir(parents=True, exist_ok=True)
-        state_path = CACHE_WARN_DIR / f"{session_id}.json"
+        state_path = _safe_state_path(CACHE_WARN_DIR, "", session_id)
+        if state_path is None:
+            return
 
         warned_gaps: list = []
         if state_path.exists():

@@ -41,10 +41,20 @@ def _format_tokens(n: int) -> str:
     return str(n)
 
 
+def _safe_state_path(cache_dir: Path, prefix: str, session_id: str) -> Path | None:
+    """Return resolved path only if it stays within cache_dir; else None."""
+    candidate = (cache_dir / f"{prefix}{session_id}.json").resolve()
+    try:
+        candidate.relative_to(cache_dir.resolve())
+        return candidate
+    except ValueError:
+        return None
+
+
 def check_resume_warn(session_id: str) -> str | None:
     """If a resume-pending flag exists for this session, consume it and return a warning."""
-    flag_path = CACHE_WARN_DIR / f"resume-pending-{session_id}.json"
-    if not flag_path.exists():
+    flag_path = _safe_state_path(CACHE_WARN_DIR, "resume-pending-", session_id)
+    if flag_path is None or not flag_path.exists():
         return None
 
     try:
@@ -95,8 +105,8 @@ def main() -> None:
     if resume_warning:
         # Also mark the current gap as warned so the idle-gap check doesn't
         # double-fire on the re-send after this block.
-        state_path = CACHE_WARN_DIR / f"{session_id}.json"
-        if state_path.exists():
+        state_path = _safe_state_path(CACHE_WARN_DIR, "", session_id)
+        if state_path is not None and state_path.exists():
             try:
                 state = json.loads(state_path.read_text())
                 last_stop_iso = state.get("last_stop_time", "")
@@ -115,8 +125,8 @@ def main() -> None:
         print(json.dumps({"decision": "block", "reason": resume_warning}))
         return
 
-    state_path = CACHE_WARN_DIR / f"{session_id}.json"
-    if not state_path.exists():
+    state_path = _safe_state_path(CACHE_WARN_DIR, "", session_id)
+    if state_path is None or not state_path.exists():
         # Stop hook hasn't fired yet this session — no baseline to compare
         print(json.dumps({"continue": True}))
         return

@@ -17,11 +17,27 @@ import sys
 from pathlib import Path
 
 CACHE_WARN_DIR = Path.home() / ".claude-memory" / "cache-warn"
+_CLAUDE_DIR = Path.home() / ".claude"
+
+
+def _safe_state_path(cache_dir: Path, prefix: str, session_id: str) -> Path | None:
+    """Return resolved path only if it stays within cache_dir; else None."""
+    candidate = (cache_dir / f"{prefix}{session_id}.json").resolve()
+    try:
+        candidate.relative_to(cache_dir.resolve())
+        return candidate
+    except ValueError:
+        return None
 
 
 def get_cached_tokens(transcript_path: str) -> int:
     """Read last assistant message usage from transcript JSONL."""
     path = Path(transcript_path)
+    try:
+        resolved = path.resolve()
+        resolved.relative_to(_CLAUDE_DIR.resolve())
+    except ValueError:
+        return 0
     if not path.exists():
         return 0
 
@@ -67,7 +83,9 @@ def main() -> None:
     cached_tokens = get_cached_tokens(transcript_path)
 
     CACHE_WARN_DIR.mkdir(parents=True, exist_ok=True)
-    flag_path = CACHE_WARN_DIR / f"resume-pending-{session_id}.json"
+    flag_path = _safe_state_path(CACHE_WARN_DIR, "resume-pending-", session_id)
+    if flag_path is None:
+        return
     flag_path.write_text(json.dumps({
         "session_id": session_id,
         "cached_tokens": cached_tokens,

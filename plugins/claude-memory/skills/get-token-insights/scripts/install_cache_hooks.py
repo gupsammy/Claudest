@@ -106,7 +106,7 @@ def install(dry_run: bool = False) -> bool:
         dest = HOOKS_DIR / fname
         if not src.exists():
             print(f"[ERROR] Asset not found: {src}", file=sys.stderr)
-            return False
+            sys.exit(1)
         if dest.exists():
             if dest.read_bytes() == src.read_bytes():
                 print(f"  [skip] {fname} — already up to date")
@@ -123,13 +123,13 @@ def install(dry_run: bool = False) -> bool:
     # 2. Merge settings.json
     if not SETTINGS_PATH.exists():
         print("[ERROR] ~/.claude/settings.json not found — cannot wire hooks", file=sys.stderr)
-        return False
+        sys.exit(1)
 
     try:
         cfg = json.loads(SETTINGS_PATH.read_text())
     except json.JSONDecodeError as exc:
         print(f"[ERROR] settings.json is malformed: {exc}", file=sys.stderr)
-        return False
+        sys.exit(1)
 
     hooks_cfg = cfg.setdefault("hooks", {})
     settings_changed = False

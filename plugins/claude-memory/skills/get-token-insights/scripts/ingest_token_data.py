@@ -94,6 +94,20 @@ def _turn_cost(input_tok: int, output_tok: int, cache_read: int,
     ) / 1_000_000
     return cost
 
+
+def _bust_overhead(cache_creation: int, ephem_5m: int, ephem_1h: int,
+                   pricing: dict[str, float]) -> float:
+    """Compute incremental cost of cache re-creation vs cache read.
+
+    When a cache busts, tokens that would have been cache reads are instead
+    re-created at the higher write rate. Only that delta is attributable to
+    the bust — input/output/cache-read charges are turn-invariant.
+    """
+    unclassified = max(0, cache_creation - ephem_5m - ephem_1h)
+    delta_5m = (ephem_5m + unclassified) * (pricing["cache_write_5m"] - pricing["cache_read"])
+    delta_1h = ephem_1h * (pricing["cache_write_1h"] - pricing["cache_read"])
+    return (delta_5m + delta_1h) / 1_000_000
+
 # ── Schema ────────────────────────────────────────────────────────────
 
 SCHEMA_SQL = """
@@ -1019,7 +1033,7 @@ def build_output(conn: sqlite3.Connection) -> dict:
     """):
         day, model, inp, out, cr, cc, e5, e1, gap = row
         pricing = _get_pricing(model)
-        cost = _turn_cost(inp or 0, out or 0, cr or 0, cc or 0, e5 or 0, e1 or 0, pricing)
+        cost = _bust_overhead(cc or 0, e5 or 0, e1 or 0, pricing)
         bucket = bust_by_day.setdefault(day, {
             "busts_5m": 0, "busts_1h": 0, "cost_5m": 0.0, "cost_1h": 0.0,
         })

@@ -1,4 +1,4 @@
-# claude-memory ![v0.8.93](https://img.shields.io/badge/v0.8.93-blue?style=flat-square)
+# claude-memory ![v0.8.94](https://img.shields.io/badge/v0.8.94-blue?style=flat-square)
 
 Searchable conversation memory for Claude Code. Auto-syncs sessions to a SQLite database with full-text search, injects previous session context on startup, and provides on-demand recall of past conversations.
 

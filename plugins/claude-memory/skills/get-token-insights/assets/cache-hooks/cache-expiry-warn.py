@@ -97,7 +97,7 @@ def _main() -> None:
 
     # Skip cache warning for system-generated messages — these are not human prompts
     # and blocking them breaks background task result delivery.
-    _prompt = hook_input.get("user_prompt", "").lstrip()
+    _prompt = hook_input.get("prompt", "").lstrip()
     _SYSTEM_PREFIXES = (
         "<task-notification>",
         "<local-command-caveat>",

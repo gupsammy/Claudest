@@ -97,7 +97,7 @@ Highlight the hooks with the biggest latency changes (from `trends.hook_trends`)
 
 If `trends` is empty or has no `current_window`, skip Part C and note that not enough historical data exists for comparison yet.
 
-Present the full analysis as markdown with the sections above. Ask the user if they want to dive deeper into any specific project, skill, or insight.
+Present the full analysis as markdown with the sections above. Do not pause or ask questions — proceed immediately to Step 3.
 
 ## Step 3: Open Dashboard
 
@@ -106,6 +106,8 @@ python3 -c "import webbrowser, pathlib; webbrowser.open((pathlib.Path.home() / '
 ```
 
 Note the dashboard is available for deeper exploration — Section 2 (Context Management) shows the cache-bust cost charts and an amber alert banner if costs are material. Section 6 (Claude Code Ecosystem) has the skill, agent, and hook charts.
+
+If `cache_bust_ttl_impact.material == true`, tell the user: "One last thing coming up — I'll offer to install the cache-bust warning hooks." Then proceed immediately to Step 4 without pausing.
 
 ## Step 4: Cache-Bust Hook Install Offer
 
@@ -137,4 +139,6 @@ python3 ${CLAUDE_PLUGIN_ROOT}/skills/get-token-insights/scripts/install_cache_ho
 
 If the script reports "All hooks already installed", confirm that to the user and skip. If it installs, tell the user: "Restart Claude Code (quit + reopen) for the hooks to activate."
 
-If `cache_bust_ttl_impact.material == false`, skip Step 4 entirely and note: "Your cache-bust costs are below the $0.50/day threshold — hooks would be low value right now."
+If `cache_bust_ttl_impact.material == false`, skip Step 4 entirely.
+
+After the AskUserQuestion in Step 4 resolves — regardless of which option the user chose — ask: "Want to dive deeper into any specific project, skill, or insight from the analysis?"

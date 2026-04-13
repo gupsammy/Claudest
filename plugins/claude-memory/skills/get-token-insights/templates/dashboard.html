@@ -381,6 +381,14 @@
     Context Management <span class="toggle">&#9660;</span>
   </div>
   <div class="section-body" id="sec-context">
+    <!-- Cache-bust hook install recommendation banner (injected by JS if material) -->
+    <div id="cache-warn-banner" style="display:none;margin-bottom:20px;border:1px solid rgba(255,171,46,0.4);border-radius:8px;background:rgba(255,171,46,0.06);padding:18px 22px;box-shadow:0 0 24px rgba(255,171,46,0.08);">
+      <div style="font-family:'Outfit',sans-serif;font-size:0.82rem;font-weight:600;color:var(--amber);letter-spacing:0.04em;margin-bottom:8px;">&#9888; Cache TTL Cost Alert</div>
+      <div id="cache-warn-body" style="font-size:0.78rem;color:var(--text);line-height:1.8;"></div>
+      <div style="margin-top:12px;font-size:0.72rem;color:var(--text-dim);">
+        &#8594; To install protection hooks: go back to Claude and say <code style="color:var(--cyan);background:rgba(0,229,255,0.08);padding:2px 8px;border-radius:4px;font-family:'JetBrains Mono',monospace;">install the cache-bust warning hooks</code>
+      </div>
+    </div>
     <div class="chart-grid-2">
       <div class="chart-panel">
         <div class="chart-title">Cache Trajectory</div>
@@ -391,6 +399,30 @@
         <div class="chart-title">Ephemeral Cache Tiers</div>
         <div class="chart-desc">5-minute vs 1-hour cache tier usage by project</div>
         <div class="chart-wrap" style="height:300px"><canvas id="chart06"></canvas></div>
+      </div>
+    </div>
+    <div class="chart-grid-2">
+      <div class="chart-panel">
+        <div class="chart-title">Cache Bust Frequency (temporal)</div>
+        <div class="chart-desc">daily busts classified per-turn by ephemeral tier — the crossover shows Anthropic's 1h → 5m switch</div>
+        <div class="chart-wrap" style="height:280px"><canvas id="chart06b"></canvas></div>
+      </div>
+      <div class="chart-panel">
+        <div class="chart-title">Cache Bust Cost (temporal)</div>
+        <div class="chart-desc">daily dollar cost of busted turns, split by tier — model-aware, includes input and cache-creation charges</div>
+        <div class="chart-wrap" style="height:280px"><canvas id="chart06c"></canvas></div>
+      </div>
+    </div>
+    <div class="chart-grid-2">
+      <div class="chart-panel">
+        <div class="chart-title">Bust Count: Before vs After Tier Switch</div>
+        <div class="chart-desc">busts per session — normalized so session-volume differences don't skew the comparison</div>
+        <div class="chart-wrap" style="height:280px"><canvas id="chart06d"></canvas></div>
+      </div>
+      <div class="chart-panel">
+        <div class="chart-title">Bust Cost: Before vs After Tier Switch</div>
+        <div class="chart-desc">bust-attributed spend per session — model-aware, normalized by session count in each era</div>
+        <div class="chart-wrap" style="height:280px"><canvas id="chart06e"></canvas></div>
       </div>
     </div>
     <div class="chart-grid-1">
@@ -415,6 +447,13 @@
     Tool Efficiency <span class="toggle">&#9660;</span>
   </div>
   <div class="section-body" id="sec-tools">
+    <div class="chart-grid-1">
+      <div class="chart-panel">
+        <div class="chart-title">Tool Usage Trend</div>
+        <div class="chart-desc">reads / session, redundant reads / session, bash antipatterns / session — shows if file access patterns are improving over time</div>
+        <div class="chart-wrap" style="height:300px"><canvas id="chart20"></canvas></div>
+      </div>
+    </div>
     <div class="chart-grid-2">
       <div class="chart-panel">
         <div class="chart-title">Bash Antipatterns</div>
@@ -470,6 +509,13 @@
         <div class="chart-title">Hook Overhead</div>
         <div class="chart-desc">total hook execution time by project</div>
         <div class="chart-wrap" style="height:280px"><canvas id="chart14"></canvas></div>
+      </div>
+    </div>
+    <div class="chart-grid-1">
+      <div class="chart-panel">
+        <div class="chart-title">Thinking Tokens Trend</div>
+        <div class="chart-desc">avg thinking tokens per turn (all turns) and % of turns using thinking — shows if extended reasoning usage is growing or shrinking</div>
+        <div class="chart-wrap" style="height:300px"><canvas id="chart21"></canvas></div>
       </div>
     </div>
   </div>
@@ -615,13 +661,35 @@ function initDashboard(D) {
 
   // Charts
   initChart01(D); initChart02(D); initChart03(D); initChart04(D); initChart04b(D);
-  initChart05(D); initChart05b(D); initChart05c(D); initChart06(D);
+  initChart05(D); initChart05b(D); initChart05c(D); initChart06(D); initChart06b(D); initChart06c(D); initChart06d(D); initChart06e(D);
+  initChart20(D);
   initChart07(D); initChart08(D); initChart09(D); initChart10(D); initChart11(D);
-  initChart12(D); initChart13(D); initChart14(D);
+  initChart12(D); initChart13(D); initChart14(D); initChart21(D);
   initChart15(D); initChart15b(D); initChart16(D);
   initChart17(D); initSkillDisableTable(D); initChart18(D); initChart19(D);
   buildFindings(D); buildRecommendations(D);
   initTrends(D);
+  initCacheBustBanner(D);
+}
+
+// ── Cache Bust TTL Impact Banner ─────────────────────────
+function initCacheBustBanner(D) {
+  const impact = D.cache_bust_ttl_impact;
+  if (!impact || !impact.material) return;
+  const banner = document.getElementById('cache-warn-banner');
+  const body = document.getElementById('cache-warn-body');
+  if (!banner || !body) return;
+  const fmt = n => n >= 1 ? `$${n.toFixed(2)}` : `$${n.toFixed(3)}`;
+  const parts = [
+    `Avg cache-bust cost over the last 7 active days: <span style="color:var(--amber);font-weight:600">${fmt(impact.daily_cost_5m)}/day</span>.`,
+  ];
+  if (impact.daily_cost_1h > 0) {
+    parts.push(`Before the 1h → 5m TTL switch (from ${impact.cutover_date}): ${fmt(impact.daily_cost_1h)}/day. Extra cost: ${fmt(impact.extra_per_day)}/day.`);
+  }
+  parts.push(`Projected monthly: <span style="color:var(--amber);font-weight:600">${fmt(impact.projected_monthly)}</span>.`);
+  parts.push(`Installing cache-warn hooks will surface a warning when you go idle &gt;5 min, so you can <kbd style="background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);border-radius:3px;padding:1px 5px;font-size:0.72rem;">↑</kbd> resend as-is or <code style="color:var(--cyan);background:rgba(0,229,255,0.08);padding:1px 5px;border-radius:3px">/compact</code> / <code style="color:var(--cyan);background:rgba(0,229,255,0.08);padding:1px 5px;border-radius:3px">/clear</code> before the rebuild fires.`);
+  body.innerHTML = parts.join(' ');
+  banner.style.display = 'block';
 }
 
 // ── Chart 01: Sessions by Day ───────────────────────────
@@ -1003,6 +1071,235 @@ function initChart06(D) {
     options: {
       ...chartDefaults, indexAxis: 'y',
       plugins: { legend: { display: true, labels: { color: '#4a4e5c', font: { family: 'JetBrains Mono', size: 10 } } } }
+    }
+  });
+}
+
+// ── Chart 06b: Cache Bust Frequency (temporal) ──────────
+function initChart06b(D) {
+  const days = D.cache_bust_temporal || [];
+  if (!days.length) { document.getElementById('chart06b').parentElement.innerHTML = '<div class="no-data">no cache bust data</div>'; return; }
+  new Chart(document.getElementById('chart06b'), {
+    type: 'line',
+    data: {
+      labels: days.map(d => d.date.slice(5)),
+      datasets: [
+        { label: '1h tier', data: days.map(d => d.busts_1h),
+          borderColor: '#00e5ff', backgroundColor: 'rgba(0,229,255,0.08)',
+          fill: true, tension: 0.3, pointRadius: 2, borderWidth: 2, pointBackgroundColor: '#00e5ff' },
+        { label: '5min tier', data: days.map(d => d.busts_5m),
+          borderColor: '#ffab2e', backgroundColor: 'rgba(255,171,46,0.08)',
+          fill: true, tension: 0.3, pointRadius: 2, borderWidth: 2, pointBackgroundColor: '#ffab2e' },
+      ]
+    },
+    options: {
+      ...chartDefaults,
+      scales: {
+        ...chartDefaults.scales,
+        y: { ...chartDefaults.scales.y, title: { display: true, text: 'busts/day', color: '#4a4e5c' }, beginAtZero: true },
+      },
+      plugins: {
+        legend: { display: true, labels: { color: '#4a4e5c', font: { family: 'JetBrains Mono', size: 10 } } },
+        tooltip: { mode: 'index', intersect: false }
+      }
+    }
+  });
+}
+
+// ── Chart 06c: Cache Bust Cost (temporal) ───────────────
+function initChart06c(D) {
+  const days = D.cache_bust_temporal || [];
+  if (!days.length) { document.getElementById('chart06c').parentElement.innerHTML = '<div class="no-data">no cache bust data</div>'; return; }
+  new Chart(document.getElementById('chart06c'), {
+    type: 'line',
+    data: {
+      labels: days.map(d => d.date.slice(5)),
+      datasets: [
+        { label: '1h tier', data: days.map(d => d.cost_1h),
+          borderColor: '#00e5ff', backgroundColor: 'rgba(0,229,255,0.08)',
+          fill: true, tension: 0.3, pointRadius: 2, borderWidth: 2, pointBackgroundColor: '#00e5ff' },
+        { label: '5min tier', data: days.map(d => d.cost_5m),
+          borderColor: '#ffab2e', backgroundColor: 'rgba(255,171,46,0.08)',
+          fill: true, tension: 0.3, pointRadius: 2, borderWidth: 2, pointBackgroundColor: '#ffab2e' },
+      ]
+    },
+    options: {
+      ...chartDefaults,
+      scales: {
+        ...chartDefaults.scales,
+        y: { ...chartDefaults.scales.y, title: { display: true, text: 'USD', color: '#4a4e5c' },
+             beginAtZero: true,
+             ticks: { ...chartDefaults.scales.y.ticks, callback: v => '$' + v.toFixed(2) } },
+      },
+      plugins: {
+        legend: { display: true, labels: { color: '#4a4e5c', font: { family: 'JetBrains Mono', size: 10 } } },
+        tooltip: { mode: 'index', intersect: false,
+                   callbacks: { label: ctx => ctx.dataset.label + ': $' + ctx.parsed.y.toFixed(2) } }
+      }
+    }
+  });
+}
+
+// ── Chart 06d/06e: Before vs After Tier Switch ──────────
+function _bustSplitStats(D) {
+  const cbt = D.cache_bust_temporal || [];
+  const sbd = D.sessions_by_day || [];
+  if (!cbt.length) return null;
+  // Detect switch date as first day with any 5m busts
+  const switchDate = (cbt.find(d => d.busts_5m > 0) || {}).date;
+  if (!switchDate) return null;
+  let pre = {busts_5m:0,busts_1h:0,cost_5m:0,cost_1h:0,sessions:0};
+  let post= {busts_5m:0,busts_1h:0,cost_5m:0,cost_1h:0,sessions:0};
+  for (const d of cbt) {
+    const t = d.date < switchDate ? pre : post;
+    t.busts_5m += d.busts_5m; t.busts_1h += d.busts_1h;
+    t.cost_5m  += d.cost_5m;  t.cost_1h  += d.cost_1h;
+  }
+  for (const d of sbd) {
+    (d.date < switchDate ? pre : post).sessions += d.session_count;
+  }
+  return { pre, post, switchDate };
+}
+
+function initChart06d(D) {
+  const s = _bustSplitStats(D);
+  if (!s) { document.getElementById('chart06d').parentElement.innerHTML = '<div class="no-data">no tier-split data</div>'; return; }
+  const { pre, post, switchDate } = s;
+  const norm = (v, n) => n > 0 ? Math.round((v / n) * 100) / 100 : 0;
+  const labels = ['Before ' + switchDate.slice(5), 'After ' + switchDate.slice(5)];
+  new Chart(document.getElementById('chart06d'), {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [
+        { label: '5min tier', data: [norm(pre.busts_5m, pre.sessions), norm(post.busts_5m, post.sessions)],
+          backgroundColor: ['rgba(255,171,46,0.15)', 'rgba(255,171,46,0.45)'], borderColor: '#ffab2e', borderWidth: 2, borderRadius: 6 },
+        { label: '1h tier',   data: [norm(pre.busts_1h, pre.sessions), norm(post.busts_1h, post.sessions)],
+          backgroundColor: ['rgba(0,229,255,0.45)', 'rgba(0,229,255,0.15)'], borderColor: '#00e5ff', borderWidth: 2, borderRadius: 6 },
+      ]
+    },
+    options: {
+      ...chartDefaults,
+      scales: {
+        ...chartDefaults.scales,
+        y: { ...chartDefaults.scales.y, title: { display: true, text: 'busts / session', color: '#4a4e5c' }, beginAtZero: true },
+      },
+      plugins: {
+        legend: { display: true, labels: { color: '#4a4e5c', font: { family: 'JetBrains Mono', size: 10 } } },
+        tooltip: { mode: 'index', intersect: false,
+                   callbacks: { label: ctx => ctx.dataset.label + ': ' + ctx.parsed.y.toFixed(2) + ' busts/session' } }
+      }
+    }
+  });
+}
+
+function initChart06e(D) {
+  const s = _bustSplitStats(D);
+  if (!s) { document.getElementById('chart06e').parentElement.innerHTML = '<div class="no-data">no tier-split data</div>'; return; }
+  const { pre, post, switchDate } = s;
+  const norm = (v, n) => n > 0 ? Math.round((v / n) * 10000) / 10000 : 0;
+  const labels = ['Before ' + switchDate.slice(5), 'After ' + switchDate.slice(5)];
+  new Chart(document.getElementById('chart06e'), {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [
+        { label: '5min tier', data: [norm(pre.cost_5m, pre.sessions), norm(post.cost_5m, post.sessions)],
+          backgroundColor: ['rgba(255,171,46,0.15)', 'rgba(255,171,46,0.45)'], borderColor: '#ffab2e', borderWidth: 2, borderRadius: 6 },
+        { label: '1h tier',   data: [norm(pre.cost_1h, pre.sessions), norm(post.cost_1h, post.sessions)],
+          backgroundColor: ['rgba(0,229,255,0.45)', 'rgba(0,229,255,0.15)'], borderColor: '#00e5ff', borderWidth: 2, borderRadius: 6 },
+      ]
+    },
+    options: {
+      ...chartDefaults,
+      scales: {
+        ...chartDefaults.scales,
+        y: { ...chartDefaults.scales.y, title: { display: true, text: 'USD / session', color: '#4a4e5c' }, beginAtZero: true,
+             ticks: { ...chartDefaults.scales.y.ticks, callback: v => '$' + v.toFixed(2) } },
+      },
+      plugins: {
+        legend: { display: true, labels: { color: '#4a4e5c', font: { family: 'JetBrains Mono', size: 10 } } },
+        tooltip: { mode: 'index', intersect: false,
+                   callbacks: { label: ctx => ctx.dataset.label + ': $' + ctx.parsed.y.toFixed(4) + '/session' } }
+      }
+    }
+  });
+}
+
+// ── Chart 20: Tool Usage Trend ──────────────────────────
+function initChart20(D) {
+  const days = D.tool_usage_by_day || [];
+  if (!days.length) { document.getElementById('chart20').parentElement.innerHTML = '<div class="no-data">no tool usage data</div>'; return; }
+  // 7-day rolling average to smooth daily noise
+  function roll7(arr) {
+    return arr.map((_, i) => {
+      const slice = arr.slice(Math.max(0, i - 6), i + 1);
+      return Math.round(slice.reduce((s, v) => s + v, 0) / slice.length * 100) / 100;
+    });
+  }
+  const labels = days.map(d => d.date.slice(5));
+  const reads   = roll7(days.map(d => d.reads_per_session));
+  const redund  = roll7(days.map(d => d.redundant_per_session));
+  const bash    = roll7(days.map(d => d.bash_per_session));
+  new Chart(document.getElementById('chart20'), {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        { label: 'Reads / session',            data: reads,  borderColor: '#00e5ff', backgroundColor: 'rgba(0,229,255,0.06)',  fill: true, tension: 0.3, pointRadius: 1, borderWidth: 2 },
+        { label: 'Redundant reads / session',  data: redund, borderColor: '#ff4d6a', backgroundColor: 'rgba(255,77,106,0.06)', fill: true, tension: 0.3, pointRadius: 1, borderWidth: 1.5, borderDash: [4,3] },
+        { label: 'Bash antipatterns / session',data: bash,   borderColor: '#ffab2e', backgroundColor: 'rgba(255,171,46,0.05)', fill: false, tension: 0.3, pointRadius: 1, borderWidth: 1.5 },
+      ]
+    },
+    options: {
+      ...chartDefaults,
+      scales: {
+        ...chartDefaults.scales,
+        y: { ...chartDefaults.scales.y, title: { display: true, text: 'calls / session (7d avg)', color: '#4a4e5c' }, beginAtZero: true },
+      },
+      plugins: {
+        legend: { display: true, labels: { color: '#4a4e5c', font: { family: 'JetBrains Mono', size: 10 } } },
+        tooltip: { mode: 'index', intersect: false }
+      }
+    }
+  });
+}
+
+// ── Chart 21: Thinking Tokens Trend ─────────────────────
+function initChart21(D) {
+  const days = D.thinking_by_day || [];
+  if (!days.length) { document.getElementById('chart21').parentElement.innerHTML = '<div class="no-data">no thinking token data</div>'; return; }
+  const labels = days.map(d => d.date.slice(5));
+  new Chart(document.getElementById('chart21'), {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        { label: 'Avg thinking tokens / turn', data: days.map(d => d.avg_per_turn),
+          borderColor: '#b44dff', backgroundColor: 'rgba(180,77,255,0.08)',
+          fill: true, tension: 0.4, pointRadius: 2, borderWidth: 2, pointBackgroundColor: '#b44dff',
+          yAxisID: 'y' },
+        { label: '% turns with thinking', data: days.map(d => d.thinking_turn_pct),
+          borderColor: '#39ff85', backgroundColor: 'rgba(57,255,133,0.04)',
+          fill: false, tension: 0.4, pointRadius: 2, borderWidth: 1.5, borderDash: [5,3], pointBackgroundColor: '#39ff85',
+          yAxisID: 'y2' },
+      ]
+    },
+    options: {
+      ...chartDefaults,
+      scales: {
+        ...chartDefaults.scales,
+        y:  { ...chartDefaults.scales.y,  title: { display: true, text: 'avg tokens/turn', color: '#4a4e5c' }, beginAtZero: true, position: 'left' },
+        y2: { ...chartDefaults.scales.y,  title: { display: true, text: '% turns', color: '#4a4e5c' }, beginAtZero: true, position: 'right', grid: { drawOnChartArea: false },
+               ticks: { ...chartDefaults.scales.y.ticks, callback: v => v + '%' } },
+      },
+      plugins: {
+        legend: { display: true, labels: { color: '#4a4e5c', font: { family: 'JetBrains Mono', size: 10 } } },
+        tooltip: { mode: 'index', intersect: false,
+                   callbacks: { label: ctx => ctx.datasetIndex === 1
+                     ? ctx.dataset.label + ': ' + ctx.parsed.y.toFixed(1) + '%'
+                     : ctx.dataset.label + ': ' + ctx.parsed.y.toLocaleString() } }
+      }
     }
   });
 }

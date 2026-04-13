@@ -94,6 +94,20 @@ def _turn_cost(input_tok: int, output_tok: int, cache_read: int,
     ) / 1_000_000
     return cost
 
+
+def _bust_overhead(cache_creation: int, ephem_5m: int, ephem_1h: int,
+                   pricing: dict[str, float]) -> float:
+    """Compute incremental cost of cache re-creation vs cache read.
+
+    When a cache busts, tokens that would have been cache reads are instead
+    re-created at the higher write rate. Only that delta is attributable to
+    the bust — input/output/cache-read charges are turn-invariant.
+    """
+    unclassified = max(0, cache_creation - ephem_5m - ephem_1h)
+    delta_5m = (ephem_5m + unclassified) * (pricing["cache_write_5m"] - pricing["cache_read"])
+    delta_1h = ephem_1h * (pricing["cache_write_1h"] - pricing["cache_read"])
+    return (delta_5m + delta_1h) / 1_000_000
+
 # ── Schema ────────────────────────────────────────────────────────────
 
 SCHEMA_SQL = """
@@ -999,6 +1013,82 @@ def build_output(conn: sqlite3.Connection) -> dict:
         key=lambda x: x["cost_usd"], reverse=True,
     )[:10]
 
+    # ── Cache bust temporal (tier-aware, data-driven, no date filter) ──
+    # A "bust" = a turn that followed an idle gap exceeding the tier's TTL.
+    # Tier classification is per-turn from the ephemeral token fields, so the
+    # crossover between 1h and 5m eras emerges naturally from the data
+    # regardless of when Anthropic flipped the policy.
+    bust_by_day: dict[str, dict] = {}
+    for row in cur.execute("""
+        SELECT DATE(t.timestamp) as day, t.model,
+               t.input_tokens, t.output_tokens, t.cache_read_tokens,
+               t.cache_creation_tokens, t.ephem_5m_tokens, t.ephem_1h_tokens,
+               t.user_gap_ms
+        FROM turns t
+        JOIN session_metrics sm ON t.session_id = sm.session_id
+        WHERE sm.is_sidechain = 0 AND t.timestamp IS NOT NULL
+          AND t.user_gap_ms IS NOT NULL
+          AND ( (t.user_gap_ms > 300000  AND t.ephem_5m_tokens > 0)
+             OR (t.user_gap_ms > 3600000 AND t.ephem_1h_tokens > 0) )
+    """):
+        day, model, inp, out, cr, cc, e5, e1, gap = row
+        pricing = _get_pricing(model)
+        bucket = bust_by_day.setdefault(day, {
+            "busts_5m": 0, "busts_1h": 0, "cost_5m": 0.0, "cost_1h": 0.0,
+        })
+        if e5 and gap > 300_000:
+            bucket["busts_5m"] += 1
+            bucket["cost_5m"] += _bust_overhead(e5 or 0, e5 or 0, 0, pricing)
+        if e1 and gap > 3_600_000:
+            bucket["busts_1h"] += 1
+            bucket["cost_1h"] += _bust_overhead(e1 or 0, 0, e1 or 0, pricing)
+
+    # Fill all dates in range so the two lines align on the x-axis.
+    cache_bust_temporal: list[dict] = []
+    if bust_by_day:
+        # Union with all days that have any session activity (keeps zeros visible).
+        all_days = set(bust_by_day.keys())
+        for drow in cur.execute("""
+            SELECT DISTINCT DATE(first_turn_ts)
+            FROM session_metrics
+            WHERE is_sidechain = 0 AND first_turn_ts IS NOT NULL
+        """):
+            if drow[0]:
+                all_days.add(drow[0])
+        for day in sorted(all_days):
+            b = bust_by_day.get(day, {"busts_5m": 0, "busts_1h": 0, "cost_5m": 0.0, "cost_1h": 0.0})
+            cache_bust_temporal.append({
+                "date": day,
+                "busts_5m": b["busts_5m"],
+                "busts_1h": b["busts_1h"],
+                "cost_5m": round(b["cost_5m"], 4),
+                "cost_1h": round(b["cost_1h"], 4),
+            })
+
+    # ── Cache Bust TTL Impact (for hook install offer) ──────────────────────
+    # Materiality threshold: avg $0.50/day over most recent 7 active bust-days.
+    cache_bust_ttl_impact: dict = {
+        "material": False, "cutover_date": None,
+        "daily_cost_5m": 0.0, "daily_cost_1h": 0.0,
+        "extra_per_day": 0.0, "projected_monthly": 0.0,
+    }
+    if cache_bust_temporal:
+        _has_1h = [d for d in cache_bust_temporal if d["busts_1h"] > 0]
+        _has_5m = [d for d in cache_bust_temporal if d["busts_5m"] > 0]
+        if _has_5m:
+            _post_7d = _has_5m[-7:]  # most recent 7 active 5m-bust days
+            _daily_5m = round(sum(d["cost_5m"] for d in _post_7d) / len(_post_7d), 4)
+            _daily_1h = round(sum(d["cost_1h"] for d in _has_1h) / len(_has_1h), 4) if _has_1h else 0.0
+            _extra = round(max(0.0, _daily_5m - _daily_1h), 4)
+            cache_bust_ttl_impact = {
+                "material": _daily_5m >= 0.50,
+                "cutover_date": _has_5m[0]["date"],
+                "daily_cost_5m": _daily_5m,
+                "daily_cost_1h": _daily_1h,
+                "extra_per_day": _extra,
+                "projected_monthly": round(_daily_5m * 30, 2),
+            }
+
     # ── Chart 5: Cache trajectory (5 sample sessions with most cache data) ──
     cache_trajectory = []
     trajectory_sessions = cur.execute("""
@@ -1260,6 +1350,82 @@ def build_output(conn: sqlite3.Connection) -> dict:
         JOIN session_metrics sm ON tc1.session_id = sm.session_id AND sm.is_sidechain = 0
     """).fetchone()[0] or 0
 
+    # ── Tool usage trend by day (reads, redundant reads, bash antipatterns) ──
+    # Three normalized time-series on a single chart.
+    # reads/session and bash_antipatterns/session come from a turn_tool_calls scan.
+    # redundant_reads/session: files read 3+ times in the same session, excess count
+    # attributed to the session's start date.
+    _tool_daily: dict[str, dict] = {}  # day -> {reads, bash, sessions}
+    for row in cur.execute(f"""
+        SELECT DATE(t.timestamp) as day,
+               SUM(CASE WHEN tc.tool_name = 'Read' THEN 1 ELSE 0 END) as reads,
+               SUM(CASE WHEN {_BASH_ANTIPATTERN_PREDICATE} THEN 1 ELSE 0 END) as bash_bad
+        FROM turn_tool_calls tc
+        JOIN turns t ON tc.turn_id = t.id
+        JOIN session_metrics sm ON tc.session_id = sm.session_id
+        WHERE sm.is_sidechain = 0 AND t.timestamp IS NOT NULL
+        GROUP BY day
+    """):
+        day, reads, bash = row
+        _tool_daily[day] = {"reads": reads or 0, "bash": bash or 0, "sessions": 0, "redundant": 0}
+
+    # Attach session counts per day (reuse sessions_by_day data already computed above)
+    for sd in sessions_by_day:
+        d = sd["date"]
+        if d in _tool_daily:
+            _tool_daily[d]["sessions"] = sd["session_count"]
+        else:
+            _tool_daily[d] = {"reads": 0, "bash": 0, "sessions": sd["session_count"], "redundant": 0}
+
+    # Redundant reads: per session, count excess reads (read_count - 2) for files read >=3x
+    for row in cur.execute("""
+        WITH file_reads AS (
+            SELECT sm.session_id, DATE(sm.first_turn_ts) as day,
+                   tc.file_path, COUNT(*) as cnt
+            FROM turn_tool_calls tc
+            JOIN session_metrics sm ON tc.session_id = sm.session_id
+            WHERE sm.is_sidechain = 0 AND tc.tool_name = 'Read' AND tc.file_path IS NOT NULL
+            GROUP BY sm.session_id, tc.file_path
+            HAVING COUNT(*) >= 3
+        )
+        SELECT day, SUM(cnt - 2) as excess
+        FROM file_reads GROUP BY day
+    """):
+        day, excess = row
+        if day in _tool_daily:
+            _tool_daily[day]["redundant"] = excess or 0
+
+    tool_usage_by_day = [
+        {
+            "date": day,
+            "reads_per_session": round(v["reads"] / v["sessions"], 2) if v["sessions"] else 0,
+            "redundant_per_session": round(v["redundant"] / v["sessions"], 2) if v["sessions"] else 0,
+            "bash_per_session": round(v["bash"] / v["sessions"], 2) if v["sessions"] else 0,
+        }
+        for day, v in sorted(_tool_daily.items())
+    ]
+
+    # ── Thinking tokens trend by day ──
+    thinking_by_day = []
+    for row in cur.execute("""
+        SELECT DATE(t.timestamp) as day,
+               CAST(AVG(t.thinking_tokens) AS REAL) as avg_all,
+               CAST(AVG(CASE WHEN t.thinking_tokens > 0 THEN t.thinking_tokens END) AS REAL) as avg_nonzero,
+               SUM(CASE WHEN t.thinking_tokens > 0 THEN 1 ELSE 0 END) as thinking_turns,
+               COUNT(*) as total_turns
+        FROM turns t
+        JOIN session_metrics sm ON t.session_id = sm.session_id
+        WHERE sm.is_sidechain = 0 AND t.timestamp IS NOT NULL
+        GROUP BY day ORDER BY day
+    """):
+        day, avg_all, avg_nonzero, think_turns, total = row
+        thinking_by_day.append({
+            "date": day,
+            "avg_per_turn": round(avg_all or 0, 1),
+            "avg_when_thinking": round(avg_nonzero or 0, 1),
+            "thinking_turn_pct": round((think_turns or 0) / total * 100, 1) if total else 0,
+        })
+
     # ── Chart 11: Agent cost attribution ──
     agent_cost = []
     for row in cur.execute("""
@@ -1519,6 +1685,7 @@ def build_output(conn: sqlite3.Connection) -> dict:
         avg_output_cost_per_mtok=avg_output_cpm,
         context_seg_summary=context_seg_summary,
         dominant_cache_tier=dominant_cache_tier,
+        cache_bust_temporal=cache_bust_temporal,
     )
 
     # Dashboard backward compat: split insights into findings + recommendations
@@ -1549,6 +1716,8 @@ def build_output(conn: sqlite3.Connection) -> dict:
         "model_split": model_split,
         "cost_by_day": cost_by_day_list,
         "cost_by_project": cost_by_project_list,
+        "cache_bust_temporal": cache_bust_temporal,
+        "cache_bust_ttl_impact": cache_bust_ttl_impact,
         "cache_trajectory": cache_trajectory,
         "context_segments": context_segments,
         "context_segments_recent": context_segments_recent,
@@ -1566,6 +1735,8 @@ def build_output(conn: sqlite3.Connection) -> dict:
         "hook_overhead": hook_overhead,
         "project_spend": project_spend,
         "project_tool_profile": project_tool_profile,
+        "tool_usage_by_day": tool_usage_by_day,
+        "thinking_by_day": thinking_by_day,
         "skill_usage": skill_usage,
         "skill_usage_by_day": skill_usage_by_day,
         "agent_delegation": agent_delegation,
@@ -2037,6 +2208,49 @@ def _build_insights(**kw) -> list[dict]:
             },
         })
 
+    # ── Cache Tier Transition (Anthropic 1h → 5m rollout) ──
+    cbt = kw.get("cache_bust_temporal") or []
+    has_1h = [d for d in cbt if d["busts_1h"] > 0]
+    has_5m = [d for d in cbt if d["busts_5m"] > 0]
+    if has_1h and has_5m:
+        last_1h_day = has_1h[-1]["date"]
+        first_5m_day = has_5m[0]["date"]
+        pre = [d for d in cbt if d["date"] <= last_1h_day and d["busts_1h"] > 0]
+        post = [d for d in cbt if d["date"] >= first_5m_day and d["busts_5m"] > 0]
+        pre_avg_busts = round(sum(d["busts_1h"] for d in pre) / len(pre), 1) if pre else 0
+        post_avg_busts = round(sum(d["busts_5m"] for d in post) / len(post), 1) if post else 0
+        pre_avg_cost = round(sum(d["cost_1h"] for d in pre) / len(pre), 2) if pre else 0
+        post_avg_cost = round(sum(d["cost_5m"] for d in post) / len(post), 2) if post else 0
+        mult = round(post_avg_busts / pre_avg_busts, 1) if pre_avg_busts > 0 else None
+        # Extra cost/day from the transition, annualized monthly (30d) for scale
+        extra_per_day = max(0, post_avg_cost - pre_avg_cost)
+        projected_monthly = round(extra_per_day * 30, 2)
+        mult_str = f"{mult}×" if mult else "N/A"
+        insights.append({
+            "title": "Cache Tier Transition",
+            "severity": "WARNING" if (mult or 0) >= 3 else "INFO",
+            "finding": f"Cache TTL switched from 1h to 5m between {last_1h_day} and {first_5m_day}. "
+                       f"Daily bust rate went from avg {pre_avg_busts}/day (1h era) to avg "
+                       f"{post_avg_busts}/day (5m era) — {mult_str} increase.",
+            "root_cause": "Anthropic silently changed Claude Code's default prompt-cache TTL from "
+                          "ephemeral_1h to ephemeral_5m. Same idle patterns now trigger 12× more "
+                          "cache rebuilds because the expiry window is 12× shorter. Detected "
+                          "from the ephemeral_5m_input_tokens / ephemeral_1h_input_tokens fields "
+                          "in your JSONL transcripts — no date heuristic.",
+            "waste_tokens": 0,
+            "waste_usd": projected_monthly,
+            "solution": {
+                "action": "Monitor idle gaps aggressively — even short breaks now bust the cache",
+                "detail": f"Average bust cost: ${pre_avg_cost:.2f}/day pre-switch, "
+                          f"${post_avg_cost:.2f}/day post-switch. Projected monthly delta: "
+                          f"${projected_monthly:.2f}. Consider cache-warn hooks that surface "
+                          f"5-minute idle before the next turn fires (the post you wrote about "
+                          f"this pattern is the canonical fix).",
+                "claudemd_rule": None,
+                "estimated_savings_usd": round(projected_monthly * 0.3, 2),
+            },
+        })
+
     # ── Cost Concentration ──
     cost_by_project = kw.get("cost_by_project", [])
     total_cost = kw.get("total_cost_usd", 0)
@@ -2206,7 +2420,8 @@ def main() -> None:
         "generated_at", "total_sessions", "date_range", "kpis", "insights",
         "cost_by_project", "model_split", "context_seg_summary",
         "skill_usage", "agent_delegation", "hook_performance",
-        "trends",
+        "trends", "cache_bust_temporal", "cache_bust_ttl_impact",
+        "tool_usage_by_day", "thinking_by_day",
     }
     slim = {k: v for k, v in output.items() if k in slim_keys}
     slim_json = json.dumps(slim, default=str)

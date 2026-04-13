@@ -1,6 +1,9 @@
 ---
 name: get-token-insights
-description: To analyze Claude token usage, see how you are spending on Claude, understand cache hit rates, review Claude Code workflow patterns, or get cost optimization recommendations.
+description: >
+  Use this skill when the user wants to analyze Claude token usage, understand
+  Claude API spending, check cache hit rates, review Claude Code workflow
+  patterns (skills, agents, hooks), or get cost optimization recommendations.
 allowed-tools:
   - Bash(python3:*)
   - Agent
@@ -54,6 +57,8 @@ For each insight from the `insights` array (sorted by waste_usd):
 4. State the estimated savings
 5. Include any relevant Claude Code feature suggestions from Step 1.5
 
+If `cache_bust_ttl_impact.material == true`, weave into the Priority Insights narrative: "Your 5-min cache-bust costs average $X.XX/day — a protective hook set can surface a warning before each rebuild fires (Step 4 at the end of this run will offer to install it)."
+
 ### Model Economics
 Compare cost across models. If one model dominates spend, call it out and estimate savings from switching routine tasks to a cheaper model.
 
@@ -100,4 +105,36 @@ Present the full analysis as markdown with the sections above. Ask the user if t
 python3 -c "import webbrowser, pathlib; webbrowser.open((pathlib.Path.home() / '.claude-memory' / 'dashboard.html').as_uri())"
 ```
 
-Note the dashboard is available for deeper exploration — Section 6 (Claude Code Ecosystem) has the new skill, agent, and hook charts.
+Note the dashboard is available for deeper exploration — Section 2 (Context Management) shows the cache-bust cost charts and an amber alert banner if costs are material. Section 6 (Claude Code Ecosystem) has the skill, agent, and hook charts.
+
+## Step 4: Cache-Bust Hook Install Offer
+
+Run this step **only if** `cache_bust_ttl_impact.material == true` in the JSON from Step 1.
+
+First run the status check:
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/skills/get-token-insights/scripts/install_cache_hooks.py --status
+```
+
+Then use AskUserQuestion with exactly three options:
+
+1. **Install** — copies 3 hook scripts to `~/.claude/hooks/` and wires them into `~/.claude/settings.json`. Backs up settings.json before any write.
+2. **Explain more first** — give the full explanation below, then re-ask this same question.
+3. **Skip** — exit cleanly, no changes.
+
+**Full explanation text (for option 2):**
+These hooks create a 3-step warning ladder when you go idle. When Claude stops responding, a timestamp is written. When you start a resumed session, a flag is set. When you next type a prompt after 5+ minutes of idle time, the prompt is blocked once with a cost warning — you see the message, your text stays in the box. From there:
+- Press ↑ to resend as-is (you accept the cache rebuild cost — the turn proceeds normally)
+- Run /compact to compress context first, then resend (smaller rebuild)
+- Run /clear to start a fresh session with zero rebuild cost
+
+One warning per idle gap. Not per prompt. After you confirm once, subsequent prompts in the same idle gap go through without interruption. There is no nag loop.
+
+**If user selects Install:**
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/skills/get-token-insights/scripts/install_cache_hooks.py
+```
+
+If the script reports "All hooks already installed", confirm that to the user and skip. If it installs, tell the user: "Restart Claude Code (quit + reopen) for the hooks to activate."
+
+If `cache_bust_ttl_impact.material == false`, skip Step 4 entirely and note: "Your cache-bust costs are below the $0.50/day threshold — hooks would be low value right now."

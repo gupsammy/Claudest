@@ -93,7 +93,6 @@ Phase 2 is complete when both agents return reports. If either returns empty or 
    - <old line>
    + <new line>
    ```
-   ```
 7. MEMORY.md line check — if over 170 lines, propose specific demotions to L3 or removals
 8. Layer 0 gate — if targeting `~/.claude/CLAUDE.md`, warn: "This modifies global instructions loaded in every session across all projects. Confirm?"
 9. AskUserQuestion: Approve all / Approve selectively / Reject

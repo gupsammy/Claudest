@@ -49,7 +49,7 @@ context: fork                       # Run in a subagent (isolates from conversat
 agent: Explore                      # Subagent type when context: fork (default: general-purpose)
 effort: high                        # Override session effort: low | medium | high | max (max: Opus 4.6 only)
 paths: "*.py,src/**/*.ts"           # Glob patterns limiting auto-activation to matching files
-shell: bash                         # Shell for !`cmd` blocks: bash (default) or powershell
+shell: bash                         # Shell for bang+backtick inline-command blocks: bash (default) or powershell
 
 # Behavior modifiers
 user-invocable: true                # Show in /command menu (default true)
@@ -89,7 +89,7 @@ context: fork                       # Run in a subagent (isolates from conversat
 agent: Explore                      # Subagent type when context: fork (default: general-purpose)
 effort: high                        # Override session effort: low | medium | high | max (max: Opus 4.6 only)
 paths: "*.py,src/**/*.ts"           # Glob patterns limiting auto-activation to matching files
-shell: bash                         # Shell for !`cmd` blocks: bash (default) or powershell
+shell: bash                         # Shell for bang+backtick inline-command blocks: bash (default) or powershell
 
 # Behavior modifiers (commands)
 disable-model-invocation: true      # Prevent programmatic invocation (commands only)
@@ -166,7 +166,7 @@ description: Deploy to staging environment
 
 For `hooks`, `context`, `effort`, and `paths` — see Advanced Field Reference below.
 
-- **`shell`** — Shell for `!`backtick`` and ` ```! ` blocks: bash (default) or powershell. Setting powershell runs inline shell commands via PowerShell on Windows. Requires `CLAUDE_CODE_USE_POWERSHELL_TOOL=1` env var for inline `!` commands to execute via PowerShell.
+- **`shell`** — Shell for inline !\`cmd\` blocks and ` ```! ` fenced blocks: bash (default) or powershell. Setting powershell runs inline shell commands via PowerShell on Windows. Requires `CLAUDE_CODE_USE_POWERSHELL_TOOL=1` env var for inline bang-prefix commands to execute via PowerShell.
 
 - **`disable-model-invocation: true`** — Commands only. Prevents Claude from auto-loading based on description. Has no effect on skills — use `user-invocable: false` instead.
 
@@ -186,7 +186,7 @@ These fields add execution control, lifecycle hooks, and platform-specific behav
 
 - **`paths`** — Glob patterns (comma-separated or YAML list) limiting auto-activation. When set, Claude loads the skill automatically only when working with files matching the patterns. Use for language-specific or framework-specific skills.
 
-- **`shell`** — Shell for `!`backtick`` and ` ```! ` blocks: bash (default) or powershell. Setting powershell runs inline shell commands via PowerShell on Windows. Requires `CLAUDE_CODE_USE_POWERSHELL_TOOL=1` env var for inline `!` commands to execute via PowerShell.
+- **`shell`** — Shell for inline !\`cmd\` blocks and ` ```! ` fenced blocks: bash (default) or powershell. Setting powershell runs inline shell commands via PowerShell on Windows. Requires `CLAUDE_CODE_USE_POWERSHELL_TOOL=1` env var for inline bang-prefix commands to execute via PowerShell.
 
 - **`disable-model-invocation: true`** — Commands only. Prevents Claude from auto-loading based on description. Has no effect on skills — use `user-invocable: false` instead for skills you want to hide from auto-triggering.
 

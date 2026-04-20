@@ -128,13 +128,14 @@ and tool selection framework.
   2. Run `git diff --name-only` using Bash
   3. Analyze the results...
   ```
-  **After (injected at invocation, zero tool calls):**
-  ```
-  - Recent commits: !`git log --oneline -5`
-  - Changed files: !`git diff --name-only`
+  **After (injected at invocation, zero tool calls).** Replace those Bash calls with:
 
-  Analyze the results...
-  ```
+  - Recent commits: !\`git log --oneline -5\`
+  - Changed files: !\`git diff --name-only\`
+
+  Then continue with prose like "Analyze the results..." (The backslashes escape
+  the backticks so this documentation doesn't execute — in a real skill, write
+  !\`cmd\` without the backslashes.)
 
 ---
 

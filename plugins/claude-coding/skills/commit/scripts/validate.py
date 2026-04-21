@@ -90,24 +90,44 @@ VALIDATORS = [
 
 
 def get_staged_files(root: Path) -> list[str]:
-    """Return staged file paths relative to root. Empty list if git unavailable."""
+    """Return staged file paths relative to root. Empty list if git unavailable.
+
+    Uses --diff-filter=ACMR so renamed+edited files (git mv) reach validators
+    under their new path; otherwise R entries silently skip validation.
+    """
     try:
         result = subprocess.run(
-            ["git", "diff", "--cached", "--name-only", "--diff-filter=ACM"],
+            ["git", "diff", "--cached", "--name-only", "--diff-filter=ACMR"],
             cwd=str(root),
             capture_output=True,
             text=True,
+            timeout=30,
         )
         if result.returncode != 0:
+            if result.stderr.strip():
+                print(f"git diff failed: {result.stderr.strip()}", file=sys.stderr)
             return []
         return [line.strip() for line in result.stdout.splitlines() if line.strip()]
-    except FileNotFoundError:
+    except (FileNotFoundError, subprocess.TimeoutExpired):
         return []
 
 
 def match_extension(path: str, extensions: list[str]) -> bool:
-    """True if path ends with any of the given suffixes (handles both '.py' and 'composer.json' forms)."""
-    return any(path.endswith(ext) for ext in extensions)
+    """True if path matches any extension entry.
+
+    Entries starting with '.' are treated as suffixes (e.g. '.py' matches any *.py).
+    Other entries are treated as exact basenames (e.g. 'composer.json' matches only
+    a file literally named composer.json, not vendor/mycomposer.json).
+    """
+    basename = os.path.basename(path)
+    for ext in extensions:
+        if ext.startswith("."):
+            if path.endswith(ext):
+                return True
+        else:
+            if basename == ext:
+                return True
+    return False
 
 
 def filter_by_extensions(files: list[str], extensions: list[str]) -> list[str]:
@@ -162,9 +182,10 @@ def build_fallback(validator: dict, staged: list[str]) -> list[str] | None:
         if not matched:
             return None
         return validator["fallback_prefix"] + matched
-    if "fallback_cmd" in validator and validator["fallback_cmd"]:
-        return validator["fallback_cmd"]
     return None
+
+
+COMMAND_TIMEOUT_SECONDS = 60
 
 
 def run_command(cmd: list[str], cwd: Path) -> tuple[bool, str]:
@@ -174,11 +195,14 @@ def run_command(cmd: list[str], cwd: Path) -> tuple[bool, str]:
             cwd=str(cwd),
             capture_output=True,
             text=True,
+            timeout=COMMAND_TIMEOUT_SECONDS,
         )
         output = (result.stdout + result.stderr).strip()
         return result.returncode == 0, output
     except FileNotFoundError:
         return False, f"Command not found: {cmd[0]}"
+    except subprocess.TimeoutExpired:
+        return False, f"{cmd[0]} timed out after {COMMAND_TIMEOUT_SECONDS}s"
 
 
 def emit(args, payload: dict, *, is_error: bool = False) -> None:

@@ -108,7 +108,10 @@ def get_staged_files(root: Path) -> list[str]:
                 print(f"git diff failed: {result.stderr.strip()}", file=sys.stderr)
             return []
         return [line.strip() for line in result.stdout.splitlines() if line.strip()]
-    except (FileNotFoundError, subprocess.TimeoutExpired):
+    except subprocess.TimeoutExpired:
+        print("git diff timed out after 30s", file=sys.stderr)
+        return []
+    except FileNotFoundError:
         return []
 
 

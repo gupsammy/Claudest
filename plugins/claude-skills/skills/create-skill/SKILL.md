@@ -110,7 +110,10 @@ Brief overview (1-2 sentences).
 
 Then add directives like "Summarize this pull request..."
 
-These commands run when the skill is invoked. (The backslashes above escape the backticks so this documentation doesn't execute — in a real skill, write !\`cmd\` without the backslashes.) The model sees only the output — no tool calls needed. Use this for infallible probes (git status, env vars, file trees, process output) where failure is rare and the output is informational. Do not use for commands that may fail or need exit-code branching — those require Bash tool calls so the model can handle errors.
+These commands run when the skill is invoked. The model sees only the output — no tool calls needed. Use this for infallible probes (git status, env vars, file trees, process output) where failure is rare and the output is informational. Do not use for commands that may fail or need exit-code branching — those require Bash tool calls so the model can handle errors.
+
+> **Note:** The backslashes above escape the backticks so this documentation
+> doesn't execute — in a real skill, write !\`cmd\` without the backslashes.
 
 ### Step 5 — Script opportunity scan
 

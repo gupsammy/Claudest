@@ -133,9 +133,10 @@ and tool selection framework.
   - Recent commits: !\`git log --oneline -5\`
   - Changed files: !\`git diff --name-only\`
 
-  Then continue with prose like "Analyze the results..." (The backslashes escape
-  the backticks so this documentation doesn't execute — in a real skill, write
-  !\`cmd\` without the backslashes.)
+  Then continue with prose like "Analyze the results..."
+
+  > **Note:** The backslashes escape the backticks so this documentation
+  > doesn't execute — in a real skill, write !\`cmd\` without the backslashes.
 
 ---
 

@@ -1,6 +1,8 @@
 ---
 name: commit
-description: This skill should be used when the user says "commit my changes", "commit this", "create a commit", "git commit", "save my work", or mentions committing code.
+description: >
+  This skill should be used when the user says "commit my changes", "commit this",
+  "create a commit", "git commit", "save my work", or mentions committing code.
 argument-hint: "[push]"
 allowed-tools:
   - Bash(git:*)
@@ -21,7 +23,11 @@ Current repo state (injected at invocation — no tool calls needed):
 - Status: !`git status --porcelain`
 - Diff stats: !`git diff --stat`
 
-If no changes, report "Nothing to commit" and stop. If not in a git repository, report and stop.
+Abort before staging if any apply:
+- Not a git repository.
+- No changes ("Nothing to commit").
+- Mid-merge / rebase / cherry-pick / revert — `git add -A` would stage conflict markers as content. Check `$(git rev-parse --git-dir)` for `MERGE_HEAD`, `CHERRY_PICK_HEAD`, `REVERT_HEAD`, `rebase-merge/`, or `rebase-apply/`. If any present, report the in-progress operation and stop.
+- Detached HEAD — `git symbolic-ref -q HEAD` is empty. Commit would land on an unreferenced commit and be lost on branch switch. Report and stop.
 
 ### 2. Stage Files
 
@@ -48,6 +54,7 @@ Each commit should represent one logical change because atomic commits enable `g
 **Signs of separate concerns:**
 - "Added X" AND "Fixed Y" (feature + bugfix)
 - Changes that could be reverted independently
+- Different conventional-commit types on related work — a fix and its tests go in separate `fix:` and `test:` commits so the fix can be reverted without losing the tests
 
 If multiple concerns: use `git reset HEAD` then `git add <specific-files>` for each group. Commit foundational changes first.
 
@@ -55,7 +62,7 @@ If multiple concerns: use `git reset HEAD` then `git add <specific-files>` for e
 
 Proceed when every changed file is assigned to exactly one commit group.
 
-### 4. Validate (if available)
+### 4. Validate
 
 Run the validation script after staging:
 
@@ -66,13 +73,13 @@ python3 ${CLAUDE_PLUGIN_ROOT}/skills/commit/scripts/validate.py . --output json
 Interpret the result:
 - Exit 0 → validation passed; proceed to Step 5
 - Exit 1 → validation failed; parse the `output` field, report the error to the user, and stop
-- Exit 2 → no validator found for this project; skip gracefully and proceed to Step 5
+- Exit 2 → validator skipped (no marker file, no staged files match the validator's extensions, or the tool isn't installed); proceed to Step 5. The `output` field names the reason.
 
 ### 5. Create Commit
 
 Check recent commit style:
 ```bash
-git log --oneline -10
+git log --no-merges --oneline -10
 ```
 
 Use conventional commit format:
@@ -82,11 +89,12 @@ Use conventional commit format:
 
 **Types:** feat, fix, docs, refactor, test, chore, perf
 
-**Rules:**
-- Lowercase, no period, imperative mood
+- Lowercase subject, no period, imperative mood
 - Max 72 chars for subject
-- NO Co-authored-by trailers, NO AI attribution — these pollute `git log` and break downstream tooling that greps commit metadata
-- NO emojis
+- Omit Co-authored-by trailers and AI attribution — these pollute `git log` and break downstream tooling that greps commit metadata
+- No emojis
+
+**If `git commit` fails due to a pre-commit hook:** the commit did NOT land. Check `git status` — the hook may have auto-fixed files (e.g. `auto-version.py` syncing `plugin.json`) and left them modified. Re-stage (`git add -A`) and retry the same `git commit` command with the same message. Do NOT use `--amend` (amends the PREVIOUS commit, not the failed one). Do NOT use `--no-verify` (skips the hook entirely, defeating its guard).
 
 Proceed when the commit message is drafted and matches the repo's existing style.
 

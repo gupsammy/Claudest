@@ -171,7 +171,7 @@ filter narrows scope, so the description should match that narrowed scope.
 
 ### `shell` (string)
 
-Shell for `!`backtick`` and ` ```! ` blocks: `bash` (default) or `powershell`. Only
+Shell for inline !\`cmd\` blocks and ` ```! ` fenced blocks: `bash` (default) or `powershell`. Only
 relevant for skills using inline shell execution.
 
 ---

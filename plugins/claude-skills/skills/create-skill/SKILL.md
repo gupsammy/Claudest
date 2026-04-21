@@ -102,17 +102,18 @@ Brief overview (1-2 sentences).
 | `${CLAUDE_SKILL_DIR}` | Path to the skill's own directory (use for referencing bundled scripts/files) |
 | `${CLAUDE_SESSION_ID}` | Current session ID (useful for logging or session-specific output files) |
 
-**Example — injecting live context:**
+**Example — injecting live context.** In a skill body, write lines like:
 
-```
-- Current branch: !`git branch --show-current`
-- Recent commits: !`git log --oneline -5`
-- Changed files: !`git diff --name-only`
+- Current branch: !\`git branch --show-current\`
+- Recent commits: !\`git log --oneline -5\`
+- Changed files: !\`git diff --name-only\`
 
-Summarize this pull request...
-```
+Then add directives like "Summarize this pull request..."
 
 These commands run when the skill is invoked. The model sees only the output — no tool calls needed. Use this for infallible probes (git status, env vars, file trees, process output) where failure is rare and the output is informational. Do not use for commands that may fail or need exit-code branching — those require Bash tool calls so the model can handle errors.
+
+> **Note:** The backslashes above escape the backticks so this documentation
+> doesn't execute — in a real skill, write !\`cmd\` without the backslashes.
 
 ### Step 5 — Script opportunity scan
 

@@ -2,49 +2,148 @@
 """Run project validation before committing.
 
 Detects project type from the root directory and runs the appropriate
-linter or build check. Returns structured pass/fail output.
+linter or build check scoped to the user's staged changes — not the
+whole project. Pre-existing issues in untouched files never block a
+commit whose diff is clean.
 
 Exit codes:
   0 — validation passed
   1 — validation failed (see output for details)
-  2 — no validator found for this project type
+  2 — no validator applies (no marker file, or no relevant staged files)
 
 Usage:
   validate.py <project-root> [--output text|json]
-
-Examples:
-  validate.py .
-  validate.py /path/to/project --output json
 """
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
 
 
+# scope semantics:
+#   "files"  — pass filtered staged file list after cmd_prefix
+#   "dirs"   — pass unique parent dirs of staged files (go-style packages)
+#   "gated"  — run project-scope cmd only if any staged file matches extensions
 VALIDATORS = [
     {
         "marker": "Cargo.toml",
         "tool": "cargo",
-        "cmd": ["cargo", "fmt", "--check"],
-        "fallback_cmd": ["cargo", "build"],
+        "scope": "files",
+        "extensions": [".rs"],
+        "cmd_prefix": ["cargo", "fmt", "--check", "--"],
     },
     {
         "marker": "package.json",
         "tool": "npm",
+        "scope": "gated",
+        "extensions": [".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"],
         "cmd": ["npm", "run", "lint", "--if-present"],
-        "fallback_cmd": None,
     },
     {
         "marker": "pyproject.toml",
         "tool": "ruff",
-        "cmd": ["ruff", "check", "."],
-        "fallback_cmd": None,
+        "scope": "files",
+        "extensions": [".py"],
+        "cmd_prefix": ["ruff", "check"],
+    },
+    {
+        "marker": "go.mod",
+        "tool": "go",
+        "scope": "dirs",
+        "extensions": [".go"],
+        "cmd_prefix": ["go", "vet"],
+    },
+    {
+        "marker": "Gemfile",
+        "tool": "rubocop",
+        "scope": "files",
+        "extensions": [".rb"],
+        "cmd_prefix": ["bundle", "exec", "rubocop", "--no-color"],
+        "fallback_prefix": ["rubocop", "--no-color"],
+    },
+    {
+        "marker": "pom.xml",
+        "tool": "maven",
+        "scope": "gated",
+        "extensions": [".java"],
+        "cmd": ["mvn", "validate", "-q"],
+    },
+    {
+        "marker": "mix.exs",
+        "tool": "mix",
+        "scope": "files",
+        "extensions": [".ex", ".exs"],
+        "cmd_prefix": ["mix", "format", "--check-formatted"],
+    },
+    {
+        "marker": "composer.json",
+        "tool": "composer",
+        "scope": "gated",
+        "extensions": ["composer.json", "composer.lock"],
+        "cmd": ["composer", "validate", "--strict"],
     },
 ]
+
+
+def get_staged_files(root: Path) -> list[str]:
+    """Return staged file paths relative to root. Empty list if git unavailable.
+
+    Uses --diff-filter=ACMR so renamed+edited files (git mv) reach validators
+    under their new path; otherwise R entries silently skip validation.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "diff", "--cached", "--name-only", "--diff-filter=ACMR"],
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if result.returncode != 0:
+            if result.stderr.strip():
+                print(f"git diff failed: {result.stderr.strip()}", file=sys.stderr)
+            return []
+        return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    except subprocess.TimeoutExpired:
+        print("git diff timed out after 30s", file=sys.stderr)
+        return []
+    except FileNotFoundError:
+        return []
+
+
+def match_extension(path: str, extensions: list[str]) -> bool:
+    """True if path matches any extension entry.
+
+    Entries starting with '.' are treated as suffixes (e.g. '.py' matches any *.py).
+    Other entries are treated as exact basenames (e.g. 'composer.json' matches only
+    a file literally named composer.json, not vendor/mycomposer.json).
+    """
+    basename = os.path.basename(path)
+    for ext in extensions:
+        if ext.startswith("."):
+            if path.endswith(ext):
+                return True
+        else:
+            if basename == ext:
+                return True
+    return False
+
+
+def filter_by_extensions(files: list[str], extensions: list[str]) -> list[str]:
+    return [f for f in files if match_extension(f, extensions)]
+
+
+def unique_package_dirs(files: list[str]) -> list[str]:
+    """Collapse a file list into './dir/' paths, one per unique parent directory."""
+    dirs = set()
+    for f in files:
+        parent = os.path.dirname(f)
+        dirs.add(f"./{parent}/" if parent else "./")
+    return sorted(dirs)
 
 
 def detect_validator(root: Path) -> dict | None:
@@ -54,6 +153,44 @@ def detect_validator(root: Path) -> dict | None:
     return None
 
 
+def build_command(validator: dict, staged: list[str]) -> list[str] | None:
+    """Build the command to run. Returns None if validator's scope criteria aren't met."""
+    scope = validator["scope"]
+    exts = validator.get("extensions", [])
+
+    if scope == "files":
+        matched = filter_by_extensions(staged, exts)
+        if not matched:
+            return None
+        return validator["cmd_prefix"] + matched
+
+    if scope == "dirs":
+        matched = filter_by_extensions(staged, exts)
+        if not matched:
+            return None
+        return validator["cmd_prefix"] + unique_package_dirs(matched)
+
+    if scope == "gated":
+        if not filter_by_extensions(staged, exts):
+            return None
+        return validator["cmd"]
+
+    return None
+
+
+def build_fallback(validator: dict, staged: list[str]) -> list[str] | None:
+    """Some validators have a fallback tool (e.g. rubocop without bundler). Same scope rules."""
+    if "fallback_prefix" in validator:
+        matched = filter_by_extensions(staged, validator.get("extensions", []))
+        if not matched:
+            return None
+        return validator["fallback_prefix"] + matched
+    return None
+
+
+COMMAND_TIMEOUT_SECONDS = 60
+
+
 def run_command(cmd: list[str], cwd: Path) -> tuple[bool, str]:
     try:
         result = subprocess.run(
@@ -61,11 +198,27 @@ def run_command(cmd: list[str], cwd: Path) -> tuple[bool, str]:
             cwd=str(cwd),
             capture_output=True,
             text=True,
+            timeout=COMMAND_TIMEOUT_SECONDS,
         )
         output = (result.stdout + result.stderr).strip()
         return result.returncode == 0, output
     except FileNotFoundError:
         return False, f"Command not found: {cmd[0]}"
+    except subprocess.TimeoutExpired:
+        return False, f"{cmd[0]} timed out after {COMMAND_TIMEOUT_SECONDS}s"
+
+
+def emit(args, payload: dict, *, is_error: bool = False) -> None:
+    if args.output == "json":
+        print(json.dumps(payload))
+    else:
+        msg = payload.get("output", "")
+        status = payload.get("status")
+        if status:
+            print(f"Validation {status} ({payload.get('tool', '?')})")
+        if msg:
+            stream = sys.stderr if is_error else sys.stdout
+            print(msg, file=stream)
 
 
 def main() -> None:
@@ -84,53 +237,49 @@ def main() -> None:
 
     root = Path(args.project_root).resolve()
     if not root.is_dir():
-        msg = f"Not a directory: {root}"
-        if args.output == "json":
-            print(json.dumps({"valid": False, "tool": None, "output": msg}))
-        else:
-            print(f"Error: {msg}", file=sys.stderr)
+        emit(args, {"valid": False, "tool": None, "output": f"Not a directory: {root}"}, is_error=True)
         sys.exit(1)
 
     validator = detect_validator(root)
     if validator is None:
-        msg = "No validator found (no Cargo.toml, package.json, or pyproject.toml)"
-        if args.output == "json":
-            print(json.dumps({"valid": False, "tool": None, "output": msg}))
-        else:
-            print(msg)
+        emit(args, {
+            "valid": False,
+            "tool": None,
+            "output": "No validator found (no known marker file in project root)",
+        })
+        sys.exit(2)
+
+    staged = get_staged_files(root)
+    cmd = build_command(validator, staged)
+    if cmd is None:
+        emit(args, {
+            "valid": False,
+            "tool": validator["tool"],
+            "output": f"{validator['tool']}: no staged files match {validator.get('extensions', [])} — skipping",
+        })
         sys.exit(2)
 
     tool = validator["tool"]
-    valid, output = run_command(validator["cmd"], root)
+    valid, output = run_command(cmd, root)
 
-    # If primary command not found, try fallback; if no fallback, treat as no validator
     if not valid and "not found" in output:
-        if validator.get("fallback_cmd"):
-            valid, output = run_command(validator["fallback_cmd"], root)
-            if not valid and "not found" in output:
-                # Fallback also missing — tool chain not installed
-                msg = f"{tool} not installed; skipping validation"
-                if args.output == "json":
-                    print(json.dumps({"valid": False, "tool": tool, "output": msg}))
-                else:
-                    print(msg)
-                sys.exit(2)
-        else:
-            msg = f"{tool} not installed; skipping validation"
-            if args.output == "json":
-                print(json.dumps({"valid": False, "tool": tool, "output": msg}))
-            else:
-                print(msg)
+        fallback = build_fallback(validator, staged)
+        if fallback is not None:
+            valid, output = run_command(fallback, root)
+        if not valid and "not found" in output:
+            emit(args, {
+                "valid": False,
+                "tool": tool,
+                "output": f"{tool} not installed; skipping validation",
+            })
             sys.exit(2)
 
-    if args.output == "json":
-        print(json.dumps({"valid": valid, "tool": tool, "output": output}))
-    else:
-        status = "passed" if valid else "failed"
-        print(f"Validation {status} ({tool})")
-        if output:
-            print(output)
-
+    emit(args, {
+        "valid": valid,
+        "tool": tool,
+        "output": output,
+        "status": "passed" if valid else "failed",
+    })
     sys.exit(0 if valid else 1)
 
 

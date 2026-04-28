@@ -122,7 +122,7 @@ A `skill-lint` agent runs automatically after `create-skill` and `improve-skill`
 
 <a id="claude-thinking"></a>
 
-### 🧠 claude-thinking &nbsp; ![v0.3.4](https://img.shields.io/badge/v0.3.4-blue?style=flat-square)
+### 🧠 claude-thinking &nbsp; ![v0.3.5](https://img.shields.io/badge/v0.3.5-blue?style=flat-square)
 
 Structured thinking and multi-perspective deliberation tools for Claude Code.
 

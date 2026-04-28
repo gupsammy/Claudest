@@ -1,12 +1,12 @@
 ---
 name: brainstorm
-description: |
-  This skill should be used when the user says "interview me about", "help me clarify", "stress-test my idea", "let's explore this concept", "challenge my assumptions about", "probe my assumptions", or needs structured questioning to refine and articulate their thinking.
+description: >
+  This skill should be used when the user says "interview me about", "help me clarify", "stress-test my idea", "let's explore this concept", "challenge my assumptions about", "grill me on", "drill into my plan", or needs structured questioning to refine and articulate their thinking.
 allowed-tools:
   - Read
   - Write
   - AskUserQuestion
-argument-hint: "[topic] - optional topic to interview about"
+argument-hint: "[topic] [--grill]"
 ---
 
 # Thinking Partner
@@ -21,6 +21,14 @@ Weave these into conversation at natural moments — after results land, when co
 - Adapts questioning intensity by domain: adversarial for strategy, gentle for personal decisions, Socratic for abstract ideas. Worth noting if the user seems surprised by the approach.
 - Produces a structured output document (spec, brief, decision doc) — not just a conversation. The interview is the process; the document is the deliverable.
 - Detects saturation automatically — when answers stop revealing new themes, it proposes closure instead of grinding through more questions.
+- Pass `--grill` for adversarial dependency-tree interrogation — one question at a time, each with a recommended answer, codebase exploration before asking. For stress-testing a concrete plan, not collaborative exploration.
+
+## Mode Selection
+
+Tokenize `$ARGUMENTS` on whitespace and check whether any token is exactly `--grill` (a substring like `--grilling` does not match). Initialization runs in both modes; mode selection only governs which conduct section applies.
+
+- **`--grill` token present** → activate grill mode. Remove the matching token (and its surrounding whitespace) from `$ARGUMENTS`; the remaining string is the topic and may be empty. An empty topic falls through to Initialization step 3 (no-argument path). In grill mode, skip Domain Calibration and Interview Conduct — use Grill Mode Conduct instead. Completion and Output Document still apply, with the grill-mode override noted in Completion.
+- **`--grill` token absent** → default mode. Proceed through every section below as written.
 
 ## Initialization
 
@@ -68,9 +76,23 @@ Rotate between forward-looking questions (edge cases, risks), backward-looking q
 
 Continue until saturation is detected (see Completion), then proceed to closure synthesis.
 
+## Grill Mode Conduct
+
+Active only when `--grill` was passed. Replaces Domain Calibration and Interview Conduct.
+
+- **Walk the dependency tree.** Treat the topic as a plan whose decisions branch into sub-decisions. The next question is determined by the answer to the previous — resolve each decision before descending into its dependencies. No rotation, no batching.
+- **One question at a time.** A single question, a single answer, then the next. Use `AskUserQuestion` with one question per call.
+- **Provide a recommended answer with each question.** State the recommendation and one line of reasoning. The user accepts or rebuts; rebuttal is the highest-signal data.
+- **Adversarial intensity by default.** The user opted into being grilled. Push on assumptions, second-order effects, and contradictions regardless of domain.
+- **Explore the codebase before asking.** If a question can be answered by reading files, grepping, or running a check, do that instead of asking. Reserve questions for things only the user knows.
+
+Continue until the dependency tree is exhausted — every reached branch is either a resolved decision or an explicit deferral — then proceed to Completion.
+
 ## Completion
 
 **Detect saturation** — after 4+ rounds where no new theme emerges, or when the user gives consecutively shorter answers across 3+ rounds, propose closure. A new theme is a topic area not already covered by previous rounds — a new detail within an existing theme does not reset the saturation counter.
+
+**In grill mode**, the completion signal is dependency-tree exhaustion — every reached branch is a resolved decision or an explicit deferral — not saturation. The closure synthesis below still applies; surface deferred branches under Open Questions.
 
 **Propose closure with synthesis:**
 

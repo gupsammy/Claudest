@@ -1,12 +1,6 @@
 ---
 name: recall-conversations
-description: >
-  This skill should be used when the user asks to recall, search, or continue
-  past conversations. Triggers on "what did we discuss", "continue where we
-  left off", "remember when", "as I mentioned", "you suggested", "we decided",
-  "search my conversations", "find the conversation where", "what did we work on".
-  Also triggers on implicit signals like past-tense references ("the bug we fixed"),
-  possessives without context ("my project"), or assumptive questions ("do you remember").
+description: This skill should be used when the user asks to recall, search, continue, OR analyze/reflect on past conversations. Triggers on recall phrases ("what did we discuss", "continue where we left off", "remember when", "as I mentioned", "you suggested", "we decided", "search my conversations") AND on retrospective phrases ("do a retro", "retrospective", "look back at this project", "review the project", "reflect on what we built", "lessons learned", "what went well", "what went wrong", "post-mortem", "find gaps in my knowledge", "extract decisions", "review my process", "find antipatterns"). Use this skill whenever the user wants to reflect on, retrospect, or extract insights from past work — even without explicitly saying "conversation" or "history". Also triggers on implicit signals: past-tense references ("the bug we fixed"), possessives without context ("my project"), assumptive questions ("do you remember").
 allowed-tools:
   - Read
   - Grep
@@ -27,47 +21,54 @@ Weave these into conversation at natural moments — after results land, when co
 
 ## Tools
 
-Two scripts retrieve data. For full option catalogs, load `references/tool-reference.md`.
+Two scripts retrieve data:
+- `recent_chats.py` — retrieve recent sessions (with optional project filter)
+- `search_conversations.py` — keyword search across sessions (with optional project filter)
 
-**recent_chats.py** — retrieve recent sessions:
+Path prefix for both (used in recipes below):
 ```bash
-python3 ${CLAUDE_PLUGIN_ROOT}/skills/recall-conversations/scripts/recent_chats.py --n 3
+PREFIX="python3 ${CLAUDE_PLUGIN_ROOT}/skills/recall-conversations/scripts"
 ```
 
-**search_conversations.py** — keyword search across all sessions:
-```bash
-python3 ${CLAUDE_PLUGIN_ROOT}/skills/recall-conversations/scripts/search_conversations.py --query "keyword"
-```
+For the full option catalog, load `references/tool-reference.md`.
 
 ---
 
 ## Workflow
 
-1. **Identify the lens** from user intent:
+### 1. Pick a lens and run its recipe
 
-| User Says | Lens |
-|-----------|------|
-| "where were we", "recap" | restore-context |
-| "what I learned", "reflect" | extract-learnings |
-| "gaps", "struggling" | find-gaps |
-| "mentor", "review process" | review-process |
-| "retro", "project review" | run-retro |
-| "decisions", "CLAUDE.md" | extract-decisions |
-| "bad habits", "antipatterns" | find-antipatterns |
+Each user intent maps to a lens with a full command recipe. Recipes default to the **current project** — the scripts auto-detect from CWD, so no `--project` flag is needed for the common case.
 
-   Load `references/lenses.md` for per-lens parameters, core questions, and supplementary search patterns.
+| User Says | Lens | Recipe (prepend `$PREFIX/`) |
+|-----------|------|--------|
+| "where were we", "recap", "continue" | restore-context | `recent_chats.py --limit 5 --verbose` |
+| "what I learned", "reflect on what I've learned" | extract-learnings | `recent_chats.py --limit 20` |
+| "gaps", "where I'm struggling" | find-gaps | `search_conversations.py --query "confused struggling help"` |
+| "mentor me", "review my process" | review-process | `recent_chats.py --limit 20 --verbose` |
+| "retro", "retrospective", "look back", "post-mortem" | run-retro | `recent_chats.py --limit 20 --verbose` |
+| "decisions", "CLAUDE.md-worthy rules" | extract-decisions | `search_conversations.py --query "decided chose trade-off because"` |
+| "antipatterns", "bad habits", "mistakes I repeat" | find-antipatterns | `search_conversations.py --query "again same mistake repeated forgot"` |
 
-2. **Gather context** using lens-appropriate tools:
-   - For recent context: `recent_chats.py --n N`
-   - For keyword search: `search_conversations.py --query "keywords"`
+**Scope overrides**: append `--project NAME` for a different project (e.g. `--project pkm`), or `--all-projects` to widen across everything. Multiple specific projects: `--project claudest,pkm`.
 
-3. **Apply lens questions** to analyze the retrieved conversations.
+Example expansion of the run-retro row:
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/skills/recall-conversations/scripts/recent_chats.py --limit 20 --verbose
+```
 
-4. **Deepen the search** if initial results are insufficient:
-   - Retrieve more sessions: `--n 20`
-   - Search for specific terms that surfaced
-   - Filter by project: `--project projectname`
-   - If 2 rounds of deepening yield no new relevant sessions, synthesize from available data.
+For per-lens questions, follow-ups, and supplementary search patterns, load `references/lenses.md`.
+
+### 2. Apply the lens's core question to the retrieved sessions
+
+The recipe gets you the data. The lens tells you what to *look for* — for instance, run-retro asks "how did the solution evolve, what worked, what was painful". Load `references/lenses.md` if you need the question for your chosen lens.
+
+### 3. Deepen if results are thin
+
+- Retrieve more sessions: bump `--limit` (1-50 for both scripts; default 5)
+- Search supplementary terms (per-lens patterns in `references/lenses.md`)
+- Widen scope: append `--all-projects` to look across projects
+- Two rounds of deepening with no new signal → synthesize from what you have rather than thrashing further
 
 ---
 
@@ -82,7 +83,7 @@ Search terms should be content-bearing words that discriminate between sessions 
 **Algorithm:**
 1. Extract substantive keywords from user request
 2. If 0 keywords, ask for clarification ("Which project specifically?")
-3. If 1+ specific terms, search with those terms; use `--project` to narrow scope
+3. If 1+ specific terms, search with those terms; project scope is auto-detected — use `--project NAME` or `--all-projects` only to override
 
 ---
 

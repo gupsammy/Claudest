@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """
-Search conversations using full-text search with FTS5/FTS4/LIKE fallback.
+Search conversation sessions using full-text search (FTS5/FTS4/LIKE cascade).
 
-Returns markdown by default (token-efficient), JSON with --format json.
+Defaults to the current project (auto-detected from CWD). Use --project NAME
+to target a specific project, or --all-projects to widen scope.
+
+Returns markdown by default (token-efficient), JSON with --json or --format json.
 """
 
 from __future__ import annotations
@@ -11,24 +14,46 @@ import argparse
 import json
 import sqlite3
 import sys
-from pathlib import Path
 
-# Local imports
-from memory_lib.db import DEFAULT_DB_PATH, detect_fts_support
+from memory_lib.cli_common import (
+    add_common_args,
+    emit_error,
+    open_db_or_exit,
+    resolve_format,
+    resolve_scope,
+    validate_limit,
+)
 from memory_lib.content import sanitize_fts_term
+from memory_lib.db import detect_fts_support
 from memory_lib.formatting import format_markdown_session, format_json_sessions
+
+
+EXAMPLES = """
+EXAMPLES
+  Find decisions in current project:
+    search_conversations.py -q "decided chose trade-off" --limit 10 --verbose
+
+  Find antipatterns across all projects:
+    search_conversations.py -q "again same mistake" --all-projects
+
+  JSON output for downstream tooling:
+    search_conversations.py -q "FTS5" --json | jq '.sessions[].uuid'
+
+  Override project (auto-detect doesn't apply):
+    search_conversations.py -q "auth" --project pkm
+"""
 
 
 def search_sessions(
     conn: sqlite3.Connection,
     query: str,
     fts_level: str | None,
-    max_results: int = 5,
-    projects: list[str] | None = None,
-    verbose: bool = False,
-    include_notifications: bool = False
+    limit: int,
+    projects: list[str] | None,
+    verbose: bool,
+    include_notifications: bool,
 ) -> list[dict]:
-    """Search for sessions using branch-level FTS with BM25 ranking, FTS4 MATCH, or LIKE fallback."""
+    """Search sessions via FTS5/FTS4 (BM25-ranked when available) or LIKE fallback."""
     cursor = conn.cursor()
 
     terms = query.split()
@@ -39,33 +64,21 @@ def search_sessions(
 
     if fts_level in ("fts5", "fts4"):
         sanitized_terms = [sanitize_fts_term(term) for term in terms]
-        sanitized_terms = [t for t in sanitized_terms if t]  # Remove empty terms
+        sanitized_terms = [t for t in sanitized_terms if t]
         if not sanitized_terms:
             return []
         fts_query = " OR ".join(f'"{term}"' for term in sanitized_terms)
 
-        if fts_level == "fts5":
-            sql = """
-                SELECT s.id, s.uuid, b.started_at, b.ended_at, b.files_modified,
-                       b.commits, s.git_branch, p.name as project, b.id as branch_db_id
-                FROM branches_fts
-                JOIN branches b ON branches_fts.rowid = b.id
-                JOIN sessions s ON b.session_id = s.id
-                JOIN projects p ON s.project_id = p.id
-                WHERE b.is_active = 1
-                  AND branches_fts MATCH ?
-            """
-        else:
-            sql = """
-                SELECT s.id, s.uuid, b.started_at, b.ended_at, b.files_modified,
-                       b.commits, s.git_branch, p.name as project, b.id as branch_db_id
-                FROM branches_fts
-                JOIN branches b ON branches_fts.rowid = b.id
-                JOIN sessions s ON b.session_id = s.id
-                JOIN projects p ON s.project_id = p.id
-                WHERE b.is_active = 1
-                  AND branches_fts MATCH ?
-            """
+        sql = """
+            SELECT s.id, s.uuid, b.started_at, b.ended_at, b.files_modified,
+                   b.commits, s.git_branch, p.name as project, b.id as branch_db_id
+            FROM branches_fts
+            JOIN branches b ON branches_fts.rowid = b.id
+            JOIN sessions s ON b.session_id = s.id
+            JOIN projects p ON s.project_id = p.id
+            WHERE b.is_active = 1
+              AND branches_fts MATCH ?
+        """
         params.append(fts_query)
 
         if projects:
@@ -77,13 +90,10 @@ def search_sessions(
             sql += " ORDER BY bm25(branches_fts) LIMIT ?"
         else:
             sql += " ORDER BY b.ended_at DESC LIMIT ?"
-        params.append(max_results)
+        params.append(limit)
 
     else:
-        # LIKE fallback: no FTS available
-        like_clauses = " AND ".join(
-            "b.aggregated_content LIKE ?" for _ in terms
-        )
+        like_clauses = " AND ".join("b.aggregated_content LIKE ?" for _ in terms)
         sql = f"""
             SELECT s.id, s.uuid, b.started_at, b.ended_at, b.files_modified,
                    b.commits, s.git_branch, p.name as project, b.id as branch_db_id
@@ -101,17 +111,15 @@ def search_sessions(
             params.extend(projects)
 
         sql += " ORDER BY b.ended_at DESC LIMIT ?"
-        params.append(max_results)
+        params.append(limit)
 
     cursor.execute(sql, params)
     sessions = cursor.fetchall()
 
     results = []
-
     for session in sessions:
         _session_id, uuid, started_at, ended_at, files_json, commits_json, git_branch, project, branch_db_id = session
 
-        # Get messages for active branch via branch_messages
         notif_clause = "" if include_notifications else "AND COALESCE(m.is_notification, 0) = 0"
         cursor.execute(f"""
             SELECT m.role, m.content, m.timestamp, COALESCE(m.is_notification, 0) as is_notification
@@ -143,61 +151,59 @@ def search_sessions(
 
 
 def format_markdown(sessions: list[dict], query: str, verbose: bool = False) -> str:
-    """Format sessions as markdown."""
     if not sessions:
         return f"No sessions found for query: {query}"
-
     lines = [f"# Search Results: \"{query}\" ({len(sessions)} sessions)\n"]
     for session in sessions:
         lines.append(format_markdown_session(session, verbose=verbose))
-
     return "\n".join(lines)
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Search conversation sessions")
-    parser.add_argument("--query", "-q", type=str, required=True, help="Search keywords")
-    parser.add_argument("--max-results", type=int, default=5, help="Max sessions (1-10, default: 5)")
-    parser.add_argument("--project", type=str, help="Filter by project name(s), comma-separated")
-    parser.add_argument("--format", choices=["markdown", "json"], default="markdown", help="Output format (default: markdown)")
-    parser.add_argument("--verbose", "-v", action="store_true", help="Include files_modified and commits")
-    parser.add_argument("--include-notifications", action="store_true", help="Include task notification messages (hidden by default)")
-    parser.add_argument("--db", type=Path, default=DEFAULT_DB_PATH, help="Database path")
+    parser = argparse.ArgumentParser(
+        description="Search conversation sessions by keyword (defaults to current project).",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=EXAMPLES,
+    )
+    parser.add_argument("--query", "-q", type=str, required=True,
+                        help="Search keywords (BM25-ranked when FTS5 is available).")
+    add_common_args(parser, default_limit=5)
 
     args = parser.parse_args()
-    max_results = max(1, min(10, args.max_results))
-    projects = [p.strip() for p in args.project.split(",")] if args.project else None
+    fmt = resolve_format(args)
+    limit = validate_limit(args, fmt)
 
-    if not args.db.exists():
-        if args.format == "json":
-            print(json.dumps({"error": "Database not found", "sessions": [], "query": args.query}))
-        else:
-            print("Error: Database not found. Run memory setup first.")
-        sys.exit(1)
-
+    conn = open_db_or_exit(args.db, fmt)
     try:
-        conn = sqlite3.connect(args.db)
-        conn.execute("PRAGMA journal_mode = WAL")
-        conn.execute("PRAGMA busy_timeout = 5000")
+        projects, auto_detected = resolve_scope(args, conn, fmt)
         fts_level = detect_fts_support(conn)
-
-        sessions = search_sessions(conn, query=args.query, fts_level=fts_level,
-                                   max_results=max_results, projects=projects,
-                                   verbose=args.verbose,
-                                   include_notifications=args.include_notifications)
+        sessions = search_sessions(
+            conn,
+            query=args.query,
+            fts_level=fts_level,
+            limit=limit,
+            projects=projects,
+            verbose=args.verbose,
+            include_notifications=args.include_notifications,
+        )
+    except Exception as e:
+        emit_error("query_failed", str(e), None, fmt)
+        sys.exit(1)
+    finally:
         conn.close()
 
-        if args.format == "json":
-            print(format_json_sessions(sessions, {"query": args.query}))
-        else:
-            print(format_markdown(sessions, args.query, verbose=args.verbose))
-
-    except Exception as e:
-        if args.format == "json":
-            print(json.dumps({"error": str(e), "sessions": [], "query": args.query}))
-        else:
-            print(f"Error: {e}")
-        sys.exit(1)
+    if fmt == "json":
+        meta = {
+            "query": args.query,
+            "scope": {
+                "projects": projects,
+                "auto_detected": auto_detected,
+            },
+            "has_more": len(sessions) == limit,
+        }
+        print(format_json_sessions(sessions, meta))
+    else:
+        print(format_markdown(sessions, args.query, verbose=args.verbose))
 
 
 if __name__ == "__main__":

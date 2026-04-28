@@ -2,7 +2,10 @@
 """
 Retrieve recent conversation sessions from the memory database.
 
-Returns markdown by default (token-efficient), JSON with --format json.
+Defaults to the current project (auto-detected from CWD). Use --project NAME
+to target a specific project, or --all-projects to widen scope.
+
+Returns markdown by default (token-efficient), JSON with --json or --format json.
 """
 
 from __future__ import annotations
@@ -11,27 +14,53 @@ import argparse
 import json
 import sqlite3
 import sys
-from pathlib import Path
 
-# Local imports
-from memory_lib.db import DEFAULT_DB_PATH
+from memory_lib.cli_common import (
+    add_common_args,
+    emit_error,
+    open_db_or_exit,
+    resolve_format,
+    resolve_scope,
+    validate_limit,
+)
 from memory_lib.formatting import format_markdown_session, format_json_sessions
+
+
+EXAMPLES = """
+EXAMPLES
+  Last 5 sessions in current project (auto-detected):
+    recent_chats.py --limit 5 --verbose
+
+  Run-retro on current project:
+    recent_chats.py --limit 20 --verbose
+
+  Cross-project recap:
+    recent_chats.py --limit 10 --all-projects
+
+  Time-bounded retrieval:
+    recent_chats.py --after 2026-04-01 --before 2026-04-15
+
+  JSON output for downstream tooling:
+    recent_chats.py --limit 20 --json | jq '.sessions[].project'
+
+  Override project (auto-detect doesn't apply):
+    recent_chats.py --project claudest,pkm
+"""
 
 
 def get_recent_sessions(
     conn: sqlite3.Connection,
-    n: int = 3,
-    sort_order: str = "desc",
-    before: str | None = None,
-    after: str | None = None,
-    projects: list[str] | None = None,
-    verbose: bool = False,
-    include_notifications: bool = False
+    limit: int,
+    sort_order: str,
+    before: str | None,
+    after: str | None,
+    projects: list[str] | None,
+    verbose: bool,
+    include_notifications: bool,
 ) -> list[dict]:
-    """Get n most recent sessions with all their messages."""
+    """Get recent sessions with their messages."""
     cursor = conn.cursor()
 
-    # Check if tool_counts column exists (may not on pre-migration DBs)
     cursor.execute("PRAGMA table_info(branches)")
     branch_columns = {row[1] for row in cursor.fetchall()}
     has_tool_counts = "tool_counts" in branch_columns
@@ -47,16 +76,14 @@ def get_recent_sessions(
         JOIN projects p ON s.project_id = p.id
         WHERE 1=1
     """
-    params = []
+    params: list = []
 
     if before:
         sql += " AND b.started_at < ?"
         params.append(before)
-
     if after:
         sql += " AND b.started_at > ?"
         params.append(after)
-
     if projects:
         placeholders = ",".join("?" * len(projects))
         sql += f" AND p.name IN ({placeholders})"
@@ -64,13 +91,12 @@ def get_recent_sessions(
 
     order = "DESC" if sort_order == "desc" else "ASC"
     sql += f" ORDER BY b.ended_at {order} LIMIT ?"
-    params.append(n)
+    params.append(limit)
 
     cursor.execute(sql, params)
     sessions = cursor.fetchall()
 
     results = []
-
     for session in sessions:
         if has_tool_counts:
             (_session_id, uuid, started_at, ended_at, _exchange_count,
@@ -114,61 +140,62 @@ def get_recent_sessions(
 
 
 def format_markdown(sessions: list[dict], verbose: bool = False) -> str:
-    """Format sessions as markdown."""
     if not sessions:
         return "No sessions found."
-
     lines = [f"# Recent Conversations ({len(sessions)} sessions)\n"]
     for session in sessions:
         lines.append(format_markdown_session(session, verbose=verbose))
-
     return "\n".join(lines)
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Get recent conversation sessions")
-    parser.add_argument("--n", "-n", type=int, default=3, help="Number of sessions (1-20, default: 3)")
-    parser.add_argument("--sort-order", choices=["desc", "asc"], default="desc", help="Sort order (default: desc)")
-    parser.add_argument("--before", type=str, help="Sessions before this datetime (ISO)")
-    parser.add_argument("--after", type=str, help="Sessions after this datetime (ISO)")
-    parser.add_argument("--project", type=str, help="Filter by project name(s), comma-separated")
-    parser.add_argument("--format", choices=["markdown", "json"], default="markdown", help="Output format (default: markdown)")
-    parser.add_argument("--verbose", "-v", action="store_true", help="Include files_modified and commits")
-    parser.add_argument("--include-notifications", action="store_true", help="Include task notification messages (hidden by default)")
-    parser.add_argument("--db", type=Path, default=DEFAULT_DB_PATH, help="Database path")
+    parser = argparse.ArgumentParser(
+        description="Retrieve recent conversation sessions (defaults to current project).",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=EXAMPLES,
+    )
+    add_common_args(parser, default_limit=5)
+    parser.add_argument("--sort-order", choices=["desc", "asc"], default="desc",
+                        help="Sort order (default: desc).")
+    parser.add_argument("--before", type=str,
+                        help="Sessions before this datetime (ISO).")
+    parser.add_argument("--after", type=str,
+                        help="Sessions after this datetime (ISO).")
 
     args = parser.parse_args()
-    n = max(1, min(20, args.n))
-    projects = [p.strip() for p in args.project.split(",")] if args.project else None
+    fmt = resolve_format(args)
+    limit = validate_limit(args, fmt)
 
-    if not args.db.exists():
-        if args.format == "json":
-            print(json.dumps({"error": "Database not found", "sessions": [], "total_sessions": 0}))
-        else:
-            print("Error: Database not found. Run memory setup first.")
-        sys.exit(1)
-
+    conn = open_db_or_exit(args.db, fmt)
     try:
-        conn = sqlite3.connect(args.db)
-        conn.execute("PRAGMA journal_mode = WAL")
-        conn.execute("PRAGMA busy_timeout = 5000")
-        sessions = get_recent_sessions(conn, n=n, sort_order=args.sort_order,
-                                        before=args.before, after=args.after,
-                                        projects=projects, verbose=args.verbose,
-                                        include_notifications=args.include_notifications)
+        projects, auto_detected = resolve_scope(args, conn, fmt)
+        sessions = get_recent_sessions(
+            conn,
+            limit=limit,
+            sort_order=args.sort_order,
+            before=args.before,
+            after=args.after,
+            projects=projects,
+            verbose=args.verbose,
+            include_notifications=args.include_notifications,
+        )
+    except Exception as e:
+        emit_error("query_failed", str(e), None, fmt)
+        sys.exit(1)
+    finally:
         conn.close()
 
-        if args.format == "json":
-            print(format_json_sessions(sessions))
-        else:
-            print(format_markdown(sessions, verbose=args.verbose))
-
-    except Exception as e:
-        if args.format == "json":
-            print(json.dumps({"error": str(e), "sessions": [], "total_sessions": 0}))
-        else:
-            print(f"Error: {e}")
-        sys.exit(1)
+    if fmt == "json":
+        meta = {
+            "scope": {
+                "projects": projects,
+                "auto_detected": auto_detected,
+            },
+            "has_more": len(sessions) == limit,
+        }
+        print(format_json_sessions(sessions, meta))
+    else:
+        print(format_markdown(sessions, verbose=args.verbose))
 
 
 if __name__ == "__main__":

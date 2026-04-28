@@ -1,38 +1,49 @@
-# Lenses Reference
+# Lens Reference: Questions and Deepening
 
-## Parameters
-
-| Lens | Tool | Options | Also Gather |
-|------|------|---------|-------------|
-| restore-context | recent_chats | `--n 5 --verbose` | `git status`, `git log -10` |
-| extract-learnings | recent_chats | `--n 20` | — |
-| find-gaps | search_conversations | `--query "confused struggling"` | — |
-| review-process | recent_chats | `--n 20 --verbose` | recent git log |
-| run-retro | recent_chats | `--n 20 --project NAME --verbose` | full git history |
-| extract-decisions | search_conversations | `--query "decided chose trade-off"` | — |
-| find-antipatterns | search_conversations | `--query "again same mistake repeated"` | — |
+Command recipes for each lens live in `SKILL.md`. This file holds the *analytical* questions to apply to retrieved sessions and the supplementary searches to run when the primary recipe surfaces too little signal.
 
 ## Core Questions
 
+After retrieving sessions with the lens recipe, look for these specifically:
+
 | Lens | Ask |
 |------|-----|
-| restore-context | What's unfinished? What were the next steps? |
-| extract-learnings | Where did understanding shift? What mistakes became lessons? |
-| find-gaps | What topics recur? Where is guidance needed repeatedly? |
-| review-process | Is there planning before coding? Is debugging systematic? |
-| run-retro | How did the solution evolve? What worked? What was painful? |
-| extract-decisions | What trade-offs were discussed? What was rejected and why? |
-| find-antipatterns | What mistakes repeat? What confusions persist? |
+| restore-context | What's unfinished? What were the next steps? What context would a fresh session need to pick up? |
+| extract-learnings | Where did understanding shift? What mistakes became lessons? What is a small/medium/big lesson learned? |
+| find-gaps | What topics recur? Where is guidance needed repeatedly? Where does the user keep getting stuck? |
+| review-process | Is there planning before coding? Is debugging systematic? Where does the workflow leak time? |
+| run-retro | How did the solution evolve? What worked? What was painful? What would the user do differently? |
+| extract-decisions | What trade-offs were discussed? What was rejected and why? Which decisions deserve a CLAUDE.md rule? |
+| find-antipatterns | What mistakes repeat? What confusions persist across sessions? What corrections does the user issue more than once? |
 
-**Follow-ups**: find-gaps suggests `learn-anything`. extract-decisions suggests `/update-claudemd`.
+## Follow-up Suggestions
 
-## Supplementary Search Patterns
+After running a lens, suggest the natural next step:
 
-When recent retrieval doesn't surface enough, use targeted searches:
+- **find-gaps** → recommend `learn-anything` skill (if available) for targeted instruction on the gap topic
+- **extract-decisions** → recommend `/update-claudemd` to persist surfaced decisions as project rules
+- **find-antipatterns** → propose CLAUDE.md additions documenting the antipattern explicitly so future sessions avoid it
 
-| Lens | Query |
-|------|-------|
-| extract-learnings | `--query "learned realized understand clicked"` |
-| find-gaps | `--query "confused struggling help don't understand"` |
-| extract-decisions | `--query "decided chose instead trade-off because"` |
-| find-antipatterns | `--query "again same mistake repeated forgot"` |
+## Supplementary Searches
+
+When the primary recipe's retrieval is thin, layer a targeted search on top of it. These complement (not replace) the recipe in SKILL.md.
+
+| Lens | Supplementary Query |
+|------|---------------------|
+| extract-learnings | `"learned realized understand clicked finally"` |
+| find-gaps | `"confused struggling help don't understand stuck"` |
+| extract-decisions | `"decided chose instead trade-off because rather"` |
+| find-antipatterns | `"again same mistake repeated forgot keeps happening"` |
+
+Run these via `search_conversations.py --query "..." --project <PROJECT>`. Combine results with the primary retrieval before synthesizing.
+
+## When to Drop --project
+
+The recipes default to project-scoped because retros and reflective lenses usually concern the current codebase. Widen scope when the user's intent is genuinely cross-cutting:
+
+- "what mistakes do I keep making *everywhere*"
+- "patterns across *all* my projects"
+- "general lessons" (without a project context)
+- find-antipatterns specifically — antipatterns are often person-level habits, not project-bound
+
+In those cases, omit `--project` from the recipe.

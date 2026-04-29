@@ -1,6 +1,7 @@
 .DS_Store
 __pycache__/
 .hypothesis/
+*-workspace/
 SECURITY_AUDIT.md
 /agents/
 claude-code-analytics.html

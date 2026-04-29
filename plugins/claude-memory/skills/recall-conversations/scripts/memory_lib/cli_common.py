@@ -72,6 +72,8 @@ def add_common_args(parser: argparse.ArgumentParser, default_limit: int = 5) -> 
         "--limit", "-n", type=int, default=default_limit,
         help=f"Number of sessions ({LIMIT_MIN}-{LIMIT_MAX}, default: {default_limit})"
     )
+    parser.add_argument("--n", type=int, dest="limit", help=argparse.SUPPRESS)
+    parser.add_argument("--max-results", type=int, dest="limit", help=argparse.SUPPRESS)
 
     scope = parser.add_mutually_exclusive_group()
     scope.add_argument(
@@ -117,7 +119,7 @@ def validate_limit(args: argparse.Namespace, fmt: str) -> int:
         emit_error(
             "invalid_limit",
             f"--limit must be in [{LIMIT_MIN},{LIMIT_MAX}], got {args.limit}",
-            f"--limit {LIMIT_MAX}",
+            f"--limit 20  (any value in {LIMIT_MIN}-{LIMIT_MAX})",
             fmt,
         )
         sys.exit(2)

@@ -35,15 +35,15 @@ When the primary recipe's retrieval is thin, layer a targeted search on top of i
 | extract-decisions | `"decided chose instead trade-off because rather"` |
 | find-antipatterns | `"again same mistake repeated forgot keeps happening"` |
 
-Run these via `search_conversations.py --query "..." --project <PROJECT>`. Combine results with the primary retrieval before synthesizing.
+Run these via `search_conversations.py --query "..."` (auto-detects current project; pass `--project NAME` to override or `--all-projects` to widen). Combine results with the primary retrieval before synthesizing.
 
-## When to Drop --project
+## When to Add --all-projects
 
-The recipes default to project-scoped because retros and reflective lenses usually concern the current codebase. Widen scope when the user's intent is genuinely cross-cutting:
+Recipes default to project-scoped because retros and reflective lenses usually concern the current codebase. Widen scope when the user's intent is genuinely cross-cutting:
 
 - "what mistakes do I keep making *everywhere*"
 - "patterns across *all* my projects"
 - "general lessons" (without a project context)
 - find-antipatterns specifically — antipatterns are often person-level habits, not project-bound
 
-In those cases, omit `--project` from the recipe.
+In those cases, add `--all-projects` to the recipe.

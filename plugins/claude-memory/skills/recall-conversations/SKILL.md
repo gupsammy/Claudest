@@ -1,6 +1,11 @@
 ---
 name: recall-conversations
-description: This skill should be used when the user asks to recall, search, continue, OR analyze/reflect on past conversations. Triggers on recall phrases ("what did we discuss", "continue where we left off", "remember when", "as I mentioned", "you suggested", "we decided", "search my conversations") AND on retrospective phrases ("do a retro", "retrospective", "look back at this project", "review the project", "reflect on what we built", "lessons learned", "what went well", "what went wrong", "post-mortem", "find gaps in my knowledge", "extract decisions", "review my process", "find antipatterns"). Use this skill whenever the user wants to reflect on, retrospect, or extract insights from past work — even without explicitly saying "conversation" or "history". Also triggers on implicit signals: past-tense references ("the bug we fixed"), possessives without context ("my project"), assumptive questions ("do you remember").
+description: >
+  Recall, search, continue, or analyze past conversations. Triggers on recall phrases
+  ("what did we discuss", "continue where we left off", "we decided"), retrospective
+  phrases ("do a retro", "post-mortem", "what went well", "lessons learned",
+  "find antipatterns"), and implicit signals (past-tense references, possessives
+  without context, assumptive questions like "do you remember").
 allowed-tools:
   - Read
   - Grep

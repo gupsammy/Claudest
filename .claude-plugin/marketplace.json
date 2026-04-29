@@ -38,7 +38,7 @@
     {
       "name": "claude-thinking",
       "description": "Structured thinking and multi-perspective deliberation tools",
-      "version": "0.3.5",
+      "version": "0.3.6",
       "source": "./plugins/claude-thinking"
     },
     {

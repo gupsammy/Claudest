@@ -6,6 +6,9 @@ allowed-tools:
   - Read
   - Write
   - AskUserQuestion
+  - Bash
+  - Glob
+  - Grep
 argument-hint: "[topic] [--grill]"
 ---
 

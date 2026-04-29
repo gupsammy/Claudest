@@ -178,7 +178,7 @@ def emit_warning(message: str, fmt: str) -> None:
 
 
 def open_db_or_exit(db_path: Path, fmt: str) -> sqlite3.Connection:
-    """Open the DB. If it doesn't exist, emit structured error and exit."""
+    """Open the DB. If it doesn't exist or fails to open, emit structured error and exit."""
     if not db_path.exists():
         emit_error(
             "db_not_found",
@@ -187,7 +187,11 @@ def open_db_or_exit(db_path: Path, fmt: str) -> sqlite3.Connection:
             fmt,
         )
         sys.exit(1)
-    conn = sqlite3.connect(db_path)
-    conn.execute("PRAGMA journal_mode = WAL")
-    conn.execute("PRAGMA busy_timeout = 5000")
-    return conn
+    try:
+        conn = sqlite3.connect(db_path)
+        conn.execute("PRAGMA journal_mode = WAL")
+        conn.execute("PRAGMA busy_timeout = 5000")
+        return conn
+    except sqlite3.OperationalError as e:
+        emit_error("db_open_failed", str(e), None, fmt)
+        sys.exit(1)

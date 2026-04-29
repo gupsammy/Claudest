@@ -84,7 +84,7 @@ Single envelope object:
 ```
 
 - `scope.auto_detected: true` means the project was inferred from CWD; `false` means it was explicitly passed (or scope is unfiltered).
-- `has_more: true` indicates the result set hit the limit and more sessions exist.
+- `has_more: true` indicates the result set hit the limit; more sessions may exist.
 
 ## Error contract
 

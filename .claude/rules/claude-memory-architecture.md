@@ -22,14 +22,14 @@ Settings hardcoded in `memory_lib/db.py:DEFAULT_SETTINGS` — PyYAML removed int
 ## Development Commands
 
 ```bash
-# Re-import all conversations from scratch:
-# 1. Back up first: cp ~/.claude-memory/conversations.db ~/.claude-memory/conversations.db.backup-$(date +%Y%m%d-%H%M%S)
-# 2. Delete: trash ~/.claude-memory/conversations.db
-# 3. Reimport:
+# Incremental import (append-only — safe to run anytime):
 python3 plugins/claude-memory/hooks/import_conversations.py
 
 # Import with stats
 python3 plugins/claude-memory/hooks/import_conversations.py --stats
+
+# Testing: always duplicate first, never touch the live DB
+cp ~/.claude-memory/conversations.db ~/.claude-memory/conversations-test.db
 
 # Test context injection
 echo '{"source":"startup","session_id":"test","cwd":"/some/path"}' | python3 plugins/claude-memory/hooks/memory-context.py

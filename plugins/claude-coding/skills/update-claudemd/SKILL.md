@@ -17,9 +17,9 @@ allowed-tools:
 
 # Update and Optimize CLAUDE.md
 
-Reconcile project CLAUDE.md and its topic files against codebase reality and git history since each file's last commit. Enforce progressive disclosure: CLAUDE.md is a top-level index of project identity, universal invariants, and pointers to topic files at `.claude/claudemd-topics/*.md`.
+Reconcile project CLAUDE.md and its topic files against codebase reality and git history since each file's last commit. Enforce progressive disclosure: CLAUDE.md is a top-level index of project identity, universal invariants, and pointers to topic files at `.claude/rules/*.md`.
 
-Reconciliation scope includes every file in `.claude/claudemd-topics/`. Topic files are first-class content — they share the same staleness, accuracy, and duplication risks as CLAUDE.md itself and must be audited, reconciled, and (when warranted) edited during every run. They are not appendices.
+Reconciliation scope includes every file in `.claude/rules/`. Topic files are first-class content — they share the same staleness, accuracy, and duplication risks as CLAUDE.md itself and must be audited, reconciled, and (when warranted) edited during every run. They are not appendices.
 
 Scope boundary: project CLAUDE.md (L1) and its topic files only. User-global `~/.claude/CLAUDE.md` (L0) is out of scope unless the user explicitly asks.
 
@@ -60,7 +60,7 @@ Compute N for each column independently. Take the max. Cap at 4. When N > 1, par
 
 Glob for `CLAUDE.md` at the project root. If missing, inform the user that creation is out of scope for this skill and stop.
 
-Record current `CLAUDE.md` line count with `wc -l`. List `.claude/claudemd-topics/*.md` if the directory exists and record each topic file's line count AND last-commit date via `git log -1 --format="%ai" -- <path>`. The per-file dates are required in Phase 2 so Agent B can anchor each file's staleness window independently — using CLAUDE.md's date for every file produces wrong windows when cadences differ.
+Record current `CLAUDE.md` line count with `wc -l`. List `.claude/rules/*.md` if the directory exists and record each topic file's line count AND last-commit date via `git log -1 --format="%ai" -- <path>`. The per-file dates are required in Phase 2 so Agent B can anchor each file's staleness window independently — using CLAUDE.md's date for every file produces wrong windows when cadences differ.
 
 Run cheap git probes in two steps.
 
@@ -84,7 +84,7 @@ Launch `3 + N` Explore agents in a single message. All use `subagent_type: Explo
 
 **Agent A — CLAUDE.md and Topic Files Audit** (`subagent_type: Explore`)
 
-Read the project's CLAUDE.md and every file in `.claude/claudemd-topics/` if present. Apply the same H1/H2/H3 classification pass to CLAUDE.md AND to every topic file — topic files are first-class content, not inventory.
+Read the project's CLAUDE.md and every file in `.claude/rules/` if present. Apply the same H1/H2/H3 classification pass to CLAUDE.md AND to every topic file — topic files are first-class content, not inventory.
 
 For each H1/H2/H3 section in either source, record: `source` (CLAUDE.md path or topic file path), `name`, `line_count`, and `classification_hint` (project identity, universal invariant, subsystem-scoped detail, conditional guidance, or derivable from file inspection). For topic-file sections, also flag any that have become universal invariants — content that now changes how Claude acts across almost every task in the project, not just within one subsystem — these are promote-back candidates.
 
@@ -187,7 +187,7 @@ Exit condition: user has explicitly approved an action set.
 Execute in this order so topic-file pointers resolve:
 
 1. Run `cp CLAUDE.md CLAUDE.md.bak` via Bash to create a backup before any writes
-2. Create `.claude/claudemd-topics/` with `mkdir -p` if missing
+2. Create `.claude/rules/` with `mkdir -p` if missing
 3. Apply topic file actions in this sub-order: delete orphaned topic files the user approved for removal, then write new topic files, then edit existing topic files (applying keep/update/delete/promoted-out/moved-in actions). Promoted-out sections are removed from the topic file in this step; they reappear in CLAUDE.md in step 4
 4. Write CLAUDE.md with a regenerated `## Topic Files` section at the end, excluding pointers to deleted topic files. Promoted-in sections from step 3 are written as new H2 sections in the CLAUDE.md body (not inside the `## Topic Files` index block)
 
@@ -198,8 +198,8 @@ The `## Topic Files` section is regenerated from actual disk state after step 2,
 
 Read on demand — do not load preemptively.
 
-- `.claude/claudemd-topics/testing.md` — before writing or modifying tests
-- `.claude/claudemd-topics/hooks.md` — before editing anything in plugins/*/hooks/
+- `.claude/rules/testing.md` — before writing or modifying tests
+- `.claude/rules/hooks.md` — before editing anything in plugins/*/hooks/
 ```
 
 The load-trigger phrase is generated from the topic file's subject, not copied from a heading.

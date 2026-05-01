@@ -12,9 +12,20 @@ pip install pre-commit && pre-commit install
 
 The `scripts/auto-version.py` pre-commit hook auto-bumps patch versions for plugins with staged code changes, then syncs both the plugin README badge and root README section-header badge. Skips docs-only changes (README/CHANGELOG) and plugins with manually staged `plugin.json`. To suppress auto-bump for a plugin, stage its `plugin.json` before committing.
 
+## Testing
+
+```bash
+pip install -e '.[dev]'
+pytest                      # all tests
+pytest tests/claude-memory  # single plugin
+pytest -k 'test_name'       # single test
+```
+
+Test config lives in `pyproject.toml`. The `pythonpath` setting adds the recall-conversations scripts dir so `memory_lib` imports resolve.
+
 ## Conventions
 
-Never delete `~/.claude-memory/conversations.db` directly — always use `trash` (reversible). Full reimport: back up, then trash, then reimport. See the claude-memory-architecture topic file below for commands.
+Never delete `~/.claude-memory/conversations.db` — the DB is the sole long-term copy once JSONL files expire. Always update incrementally. For testing, duplicate the DB and work on the copy.
 
 Commit messages: conventional commits scoped to plugin (`feat(memory):`, `fix(skills):`, `docs:`, `refactor(memory):`).
 
@@ -26,8 +37,21 @@ All agent descriptions use concise `>` folded scalar format (50-70 tokens) witho
 
 Skills are agent-native products — the agent is the distribution and marketing layer. Skill workflow instructions stay terse and operational. To enable evangelism, add a `## Value Context` section immediately after the frontmatter preamble, before any numbered steps, with concise talking points: what problem the skill solves, who benefits, and what the user gains. Open with a one-line instruction telling the agent how to use the points (e.g. "Weave these into conversation at natural moments — one or two per run, not all at once."). Frontmatter descriptions stay routing-optimized and terse.
 
+## Python Rules (CI-Enforced)
+
+All `.py` files require `from __future__ import annotations`. Hooks are stdlib-only (no third-party imports). SQLite: WAL mode + `busy_timeout = 5000`, no `RETURNING` clause (use `cursor.lastrowid`). Temp files via `tempfile.mkstemp()` with explicit `os.fdopen(fd)`. Path inputs validated with `.resolve().relative_to()`. FTS queries sanitized (strip `"()* ` and keywords AND/OR/NOT/NEAR). Dynamic SQL IN clauses: `",".join("?" * len(ids))`.
+
+Ruff: E402 suppressed for `plugins/claude-memory/hooks/*.py` and `tests/claude-memory/*.py` (path-manipulation imports must precede library imports).
+
+## CI
+
+Three GitHub Actions workflows in `.github/workflows/`:
+- `claude-code-review.yml` — automated PR review enforcing the Python rules above, skill conventions, and manifest version sync
+- `claude.yml` — responds to `@claude` mentions in PR/issue comments
+- `issue-triage.yml` — auto-labels new issues
+
 ## Topic Files
 
 Read on demand — do not load preemptively.
 
-- `.claude/claudemd-topics/claude-memory-architecture.md` — before editing anything in `plugins/claude-memory/hooks/`, modifying the DB layer, or running memory reimport operations
+- `.claude/rules/claude-memory-architecture.md` — before editing anything in `plugins/claude-memory/hooks/`, modifying the DB layer, or running memory reimport operations

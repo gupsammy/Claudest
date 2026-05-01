@@ -1,11 +1,8 @@
 ---
 name: skill-lint
-description: >
-  Use this agent when a skill needs structural linting after creation or improvement.
-  Trigger PROACTIVELY after create-skill or improve-skill completes. Audits SKILL.md
-  against the 7-dimension quality standard; auto-applies critical and major fixes.
-  Not for agent files — those have a different contract.
-model: inherit
+description: |
+  Use this agent when a skill needs structural linting after creation or improvement. Trigger PROACTIVELY after create-skill or improve-skill completes. Audits SKILL.md against the 7-dimension quality standard; auto-applies critical and major fixes. Not for agent files — those have a different contract.
+model: sonnet
 color: yellow
 memory: project
 tools:

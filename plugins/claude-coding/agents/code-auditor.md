@@ -1,12 +1,8 @@
 ---
 name: code-auditor
-description: >
-  Use this agent when you need code quality review — readability, correctness, dead code, naming,
-  and consistency. Use PROACTIVELY after implementing features, fixing bugs, or refactoring.
-  Focuses on changed code and its immediate context. Not for security (use security-auditor),
-  performance (use performance-auditor), architectural patterns (use architecture-auditor),
-  or test generation (use test-engineer).
-model: inherit
+description: |
+  Use this agent when you need code quality review — readability, correctness, dead code, naming, and consistency. Use PROACTIVELY after implementing features, fixing bugs, or refactoring. Focuses on changed code and its immediate context. Not for security (use security-auditor), performance (use performance-auditor), architectural patterns (use architecture-auditor), or test generation (use test-engineer).
+model: sonnet
 color: yellow
 memory: project
 tools:

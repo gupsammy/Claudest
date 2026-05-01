@@ -1,12 +1,8 @@
 ---
 name: test-engineer
-description: >
-  Use this agent when you need tests for implemented features or when test coverage
-  analysis is needed. Recommended PROACTIVELY after implementing features, fixing bugs,
-  or adding new modules. Focuses on critical business logic testing, not coverage metrics.
-  Not for code quality review (use code-auditor) or performance benchmarking (use
-  performance-auditor).
-model: inherit
+description: |
+  Use this agent when you need tests for implemented features or when test coverage analysis is needed. Recommended PROACTIVELY after implementing features, fixing bugs, or adding new modules. Focuses on critical business logic testing, not coverage metrics. Not for code quality review (use code-auditor) or performance benchmarking (use performance-auditor).
+model: sonnet
 effort: medium
 maxTurns: 25
 color: green

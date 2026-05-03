@@ -43,7 +43,7 @@ from memory_lib.parsing import (
 )
 from memory_lib.formatting import get_project_key, normalize_cwd, normalize_project_key, parse_project_key, extract_project_name
 from memory_lib.summarizer import compute_context_summary
-from sync_current import parse_codex_session, sync_entries, validate_session_id
+from sync_current import parse_codex_session, sync_entries, validate_codex_thread_id
 from memory_lib.db import CODEX_UNKNOWN_PROJECT_PATH
 
 
@@ -484,37 +484,6 @@ def import_project(
     return sessions_imported, messages_imported, sessions_skipped
 
 
-def _get_or_create_project(conn: sqlite3.Connection, project_path: str) -> int | None:
-    """Get or create a project row by normalized cwd."""
-    if not project_path:
-        return None
-
-    cursor = conn.cursor()
-    normalized_path = normalize_cwd(project_path)
-    project_key = get_project_key(normalized_path)
-    project_name = extract_project_name(normalized_path)
-
-    cursor.execute("SELECT id, path FROM projects WHERE key = ?", (project_key,))
-    existing = cursor.fetchone()
-    if existing:
-        project_id = existing[0]
-        if normalized_path != existing[1]:
-            cursor.execute(
-                "UPDATE projects SET path = ?, name = ? WHERE id = ?",
-                (normalized_path, project_name, project_id),
-            )
-        return project_id
-
-    cursor.execute(
-        "INSERT INTO projects (path, key, name) VALUES (?, ?, ?)"
-        " ON CONFLICT(path) DO UPDATE SET key = excluded.key, name = excluded.name",
-        (normalized_path, project_key, project_name),
-    )
-    cursor.execute("SELECT id FROM projects WHERE key = ?", (project_key,))
-    row = cursor.fetchone()
-    return row[0] if row else None
-
-
 def import_codex_session(conn: sqlite3.Connection, filepath: Path) -> tuple[int, int]:
     """
     Import one Codex Desktop JSONL transcript using the minimal visible-message adapter.
@@ -532,7 +501,7 @@ def import_codex_session(conn: sqlite3.Connection, filepath: Path) -> tuple[int,
         return -1, 0
 
     session_uuid, all_entries, messages, cwd = parse_codex_session(filepath)
-    if not validate_session_id(session_uuid) or not all_entries or not messages:
+    if not validate_codex_thread_id(session_uuid) or not all_entries or not messages:
         return -1, 0
 
     fallback_project_path = cwd or CODEX_UNKNOWN_PROJECT_PATH

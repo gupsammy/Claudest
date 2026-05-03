@@ -344,6 +344,30 @@ class TestImportCodexSessions:
         assert skipped == 0
         assert sentinel.exists()
 
+    def test_bulk_import_accepts_openai_style_thread_id(self, memory_db):
+        """Bulk import path must use validate_codex_thread_id, not validate_session_id.
+
+        Regression: import_codex_session previously gated on validate_session_id
+        (UUID-only) while sync_codex_session used validate_codex_thread_id. A
+        Codex session with an OpenAI-style 'thread_<random>' ID would import
+        live (Stop hook) but be silently skipped by bulk re-import — a real
+        cross-path inconsistency. Both Claude bot and Codex bot flagged this.
+        """
+        fixture_file = FIXTURE_DIR / "codex_thread_id.codexlog"
+
+        branches_imported, total_messages = import_codex_session(memory_db, fixture_file)
+
+        assert branches_imported == 1, (
+            "thread_* IDs must import via the bulk path — got skipped (-1) "
+            "which means validate_session_id is still wrongly used"
+        )
+        assert total_messages == 2
+
+        cursor = memory_db.cursor()
+        cursor.execute("SELECT uuid FROM sessions")
+        rows = [r[0] for r in cursor.fetchall()]
+        assert "thread_abc123XYZ_test" in rows
+
     def test_sentinel_does_not_advance_on_commit_failure(self, memory_db, tmp_path, monkeypatch):
         """If conn.commit() raises, the sentinel must not be written.
 

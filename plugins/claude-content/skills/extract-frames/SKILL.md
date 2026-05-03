@@ -8,6 +8,8 @@ description: >
 allowed-tools:
   - Bash(ffprobe:*)
   - Bash(ffmpeg:*)
+  - Bash(awk:*)
+  - Bash(tr:*)
   - Bash(mkdir:*)
   - Bash(wc:*)
   - Bash(cat:*)
@@ -45,7 +47,7 @@ ffprobe -v error -show_entries format=duration -show_entries stream=r_frame_rate
 
 Dump per-frame scene scores for the entire video:
 ```bash
-ffmpeg -i "$INPUT" -vf "select='gte(scene,0)',metadata=print:file=$OUTPUT_DIR/scores.txt" -vsync vfr -f null - 2>&1
+ffmpeg -i "$INPUT" -vf "select='gte(scene,0)',metadata=print:file=$OUTPUT_DIR/scores.txt" -fps_mode vfr -f null - 2>&1
 ```
 
 This is the expensive step. The output file `scores.txt` contains blocks like:
@@ -81,19 +83,25 @@ END {
 }' "$OUTPUT_DIR/scores.txt"
 ```
 
-**Step 2a — Startup artifact filter:** Discard any above-threshold frames in the first 0.5s of the video. Fade-ins from black or codec initialization commonly produce score=1.0 spikes at t=0.03-0.08s that are not real cuts. After discarding these, recompute max score from the remaining frames.
+**Step 2a — Startup artifact filter:** Discard any frames in the first 0.5s where `score > 0.05` (a fixed preliminary value — the final user-confirmed threshold is not known yet). Fade-ins from black or codec initialization commonly produce score=1.0 spikes at t=0.03-0.08s that are not real cuts. After discarding these, recompute max score from the remaining frames.
 
 **Step 2b — Branch on max score.** If max score (after startup filter) < 0.05, the video has no cuts:
 - Report: "No shot boundaries detected — single continuous shot."
 - Extract only frame at t=0 (or t=1.0s if t=0 is a black frame — check file size, <50KB indicates black).
 - Skip threshold confirmation.
 
-**Step 2c — Run-based dedup.** If max score >= 0.05, identify cut points using run-based dedup:
+**Step 2c — Gap analysis and threshold.** If max score >= 0.05, use the raw candidates (all frames with score > 0.05, after startup filter) to find the noise ceiling and the lowest-scoring candidate. Place the proposed threshold at the midpoint of the gap. Present to user via AskUserQuestion:
+- Score distribution summary
+- Gap analysis (noise ceiling → lowest cut, gap width)
+- Proposed threshold and resulting shot count
+- Options: Accept proposed (Recommended), Lower threshold, Higher threshold, Custom value
 
-A "run" is a sequence of consecutive frames where every frame scores above threshold. The principle: an aftershock immediately follows its parent cut (consecutive frames both above threshold), while a real cut always rises from the noise floor (preceded by at least one below-threshold frame).
+If `--threshold` was provided, skip confirmation and set `$THRESHOLD_VALUE` directly. Otherwise set `$THRESHOLD_VALUE` to the user-confirmed value before proceeding.
+
+**Step 2d — Run-based dedup.** Using `$THRESHOLD_VALUE` from Step 2c, identify cut points. A "run" is a sequence of consecutive frames where every frame scores above threshold. The principle: an aftershock immediately follows its parent cut (consecutive frames both above threshold), while a real cut always rises from the noise floor (preceded by at least one below-threshold frame).
 
 ```bash
-awk '
+awk -v THRESHOLD="$THRESHOLD_VALUE" '
 /pts_time/ { split($0, a, "pts_time:"); ts=a[2]+0 }
 /scene_score/ { split($0, a, "="); score=a[2]+0;
   if (score > THRESHOLD) {
@@ -111,14 +119,6 @@ This keeps the peak frame of each run and discards aftershocks within the same r
 - **Standard cuts**: isolated spikes → each kept (run length 1)
 - **Cuts with aftershocks**: 2-3 consecutive high frames → peak kept, echoes discarded
 - **Rapid montages**: each cut separated by noise frames → all kept, even at 0.12s intervals
-
-**Step 2d — Gap analysis and threshold.** Find noise ceiling and lowest cut from the deduped list. Place threshold at midpoint of the gap. Present to user via AskUserQuestion:
-- Score distribution summary
-- Gap analysis (noise ceiling → lowest cut, gap width)
-- Proposed threshold and resulting shot count
-- Options: Accept proposed (Recommended), Lower threshold, Higher threshold, Custom value
-
-If `--threshold` was provided, skip confirmation. Still apply run-based dedup.
 
 ### Phase 3: Frame Extraction
 
@@ -167,8 +167,8 @@ done
 ## Edge Cases
 
 - **Single continuous shots:** Handled by step 2b. Common in fashion videos with rack-focus reveals, slow wardrobe progression, or single-take lifestyle shots.
-- **Startup artifacts:** Fade-ins from black produce score=1.0 at t=0.03-0.08s. Step 2a discards above-threshold frames in the first 0.5s. If t=0 itself is a black frame (PNG < 50KB), extract at t=1.0s instead.
-- **Aftershock spikes:** Consecutive above-threshold frames (a cut + its echo). Run-based dedup in step 2c keeps only the peak of each run — no temporal window needed.
+- **Startup artifacts:** Fade-ins from black produce score=1.0 at t=0.03-0.08s. Step 2a discards frames with score > 0.05 in the first 0.5s. If t=0 itself is a black frame (PNG < 50KB), extract at t=1.0s instead.
+- **Aftershock spikes:** Consecutive above-threshold frames (a cut + its echo). Run-based dedup in step 2d keeps only the peak of each run — no temporal window needed.
 - **Rapid montages:** Videos where shots are 2-4 frames long (0.08-0.16s). Each cut rises from the noise floor with 1-2 noise frames between spikes. Run-based dedup correctly preserves every cut because no two spikes are frame-adjacent. Report montage segments to the user: "Detected rapid montage from Xs-Ys with N shots."
 - **Dissolves/fades:** Score gradually ramps over multiple frames — forms a single run. Run-based dedup takes the peak frame as the cut point.
 - **Empty file on seek:** If ffmpeg produces a 0-byte PNG (common near video end), back off by one frame interval and retry.

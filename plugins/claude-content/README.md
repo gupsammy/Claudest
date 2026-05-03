@@ -1,6 +1,6 @@
-# claude-content ![v0.4.7](https://img.shields.io/badge/v0.4.7-blue?style=flat-square)
+# claude-content ![v0.4.8](https://img.shields.io/badge/v0.4.8-blue?style=flat-square)
 
-Content creation and processing tools for Claude Code. Six skills covering image generation, video manipulation, social media formatting, and audio extraction.
+Content creation and processing tools for Claude Code. Seven skills covering image generation, video manipulation, social media formatting, audio extraction, and shot frame extraction.
 
 ## Why
 
@@ -35,9 +35,9 @@ Triggers on: "compress this video", "reduce file size", "make this video smaller
 
 ### convert-video
 
-General-purpose video manipulation: format conversion, trim, speed adjustment, slow motion, timelapse, frame extraction, resize, rotate, flip, remux. Multi-operation requests are chained into a single ffmpeg invocation — no intermediate files, no quality loss from multiple encode passes.
+General-purpose video manipulation: format conversion, trim, speed adjustment, slow motion, timelapse, resize, rotate, flip, remux. Multi-operation requests are chained into a single ffmpeg invocation — no intermediate files, no quality loss from multiple encode passes.
 
-Triggers on: "convert this video", "change format to mp4", "trim from X to Y", "cut the first X seconds", "speed up this video", "slow motion", "timelapse", "extract frames", "resize video", "rotate video", "flip video".
+Triggers on: "convert this video", "change format to mp4", "trim from X to Y", "cut the first X seconds", "speed up this video", "slow motion", "timelapse", "resize video", "rotate video", "flip video".
 
 ### make-gif
 
@@ -56,6 +56,12 @@ Triggers on: "optimize for Instagram", "YouTube Shorts format", "make it 9:16", 
 Rip the audio track from any video file, with format selection based on use case: FLAC for lossless archival, MP3 VBR for transparent compression at small file sizes, MP3 128k CBR for podcasts and voice, AAC for mobile and streaming compatibility, WAV for DAW editing, or stream copy when the source is already in the target format. Warns before lossy-to-lossy transcoding. Handles multi-stream files by prompting for stream selection.
 
 Triggers on: "extract audio", "get the mp3", "strip audio from video", "rip audio", "save audio from video", "get the soundtrack", "pull the audio track", "export audio".
+
+### extract-frames
+
+Detect shot boundaries in a video using adaptive scene scoring and extract the first and/or last frame of each shot. Dumps per-frame scene scores once, then reuses them across re-runs so threshold iteration is instant. Auto-detects a threshold from gap analysis between noise and signal, presents the distribution and proposed value for confirmation, then applies run-based deduplication to eliminate aftershock spikes while preserving rapid-montage cuts.
+
+Triggers on: "extract frames", "get shot frames", "pull frames", "shot breakdown", "scene detect", "first frame of each shot", "last frame of each shot", "extract shots from video".
 
 ## Roadmap
 

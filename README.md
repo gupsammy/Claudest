@@ -137,16 +137,17 @@ Structured thinking and multi-perspective deliberation tools for Claude Code.
 
 <a id="claude-content"></a>
 
-### 🎬 claude-content &nbsp; ![v0.4.7](https://img.shields.io/badge/v0.4.7-blue?style=flat-square)
+### 🎬 claude-content &nbsp; ![v0.4.8](https://img.shields.io/badge/v0.4.8-blue?style=flat-square)
 
 Content creation and processing tools for Claude Code. Image generation and the full video/audio manipulation workflow.
 
 - **`generate-image`** — Gemini API for text-to-image, image-to-image editing, and multi-reference composition. Two tiers: Nano Banana (fast, extended aspect ratios, thinking mode) and Nano Banana Pro (2K resolution).
 - **`compress-video`** — quality-based (CRF) or size-based (2-pass) encoding. Profiles the source first, then applies the right strategy.
-- **`convert-video`** — general-purpose manipulation: format conversion, trim, speed, slow motion, timelapse, frame extraction, resize, rotate, flip, remux. Multi-operation requests chain into a single ffmpeg invocation.
+- **`convert-video`** — general-purpose manipulation: format conversion, trim, speed, slow motion, timelapse, resize, rotate, flip, remux. Multi-operation requests chain into a single ffmpeg invocation.
 - **`make-gif`** — mandatory 2-pass palette workflow for correct color reproduction. No banding artifacts.
 - **`share-social`** — platform-specific video prep. Presets for Instagram, YouTube Shorts, TikTok, Twitter, Facebook, and LinkedIn.
 - **`extract-audio`** — rips audio from video with format selection: FLAC, MP3 VBR, or AAC.
+- **`extract-frames`** — adaptive scene detection to extract first/last frames at every shot boundary. Auto-detects threshold from gap analysis; re-runs are instant once scores are cached.
 
 Requires `ffmpeg` and `ffprobe`. Image generation additionally requires `GEMINI_API_KEY` and `uv`.
 

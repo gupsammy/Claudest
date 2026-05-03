@@ -2,7 +2,7 @@
 name: extract-frames
 description: >
   Extracts first and/or last frames of every shot from a video using adaptive scene detection.
-  Use when the user says "extract frames", "get shot frames", "pull frames", "shot breakdown",
+  Use this skill when the user says "extract frames", "get shot frames", "pull frames", "shot breakdown",
   "scene detect", "first frame of each shot", "last frame of each shot", "extract shots from video",
   or wants to extract key frames at shot cut points from a video file.
 allowed-tools:
@@ -11,11 +11,9 @@ allowed-tools:
   - Bash(awk:*)
   - Bash(tr:*)
   - Bash(mkdir:*)
-  - Bash(wc:*)
-  - Bash(cat:*)
   - AskUserQuestion
   - Read
-argument-hint: "<video-path> [--last] [--all] [--shots N,N] [--threshold X]"
+argument-hint: "<video-path> [--first] [--last] [--all] [--shots N,N] [--threshold X]"
 ---
 
 # Extract Frames

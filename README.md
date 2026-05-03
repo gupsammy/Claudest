@@ -137,7 +137,7 @@ Structured thinking and multi-perspective deliberation tools for Claude Code.
 
 <a id="claude-content"></a>
 
-### 🎬 claude-content &nbsp; ![v0.4.8](https://img.shields.io/badge/v0.4.8-blue?style=flat-square)
+### 🎬 claude-content &nbsp; ![v0.4.9](https://img.shields.io/badge/v0.4.9-blue?style=flat-square)
 
 Content creation and processing tools for Claude Code. Image generation and the full video/audio manipulation workflow.
 

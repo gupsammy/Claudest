@@ -26,6 +26,7 @@ sys.path.insert(0, str(SCRIPT_DIR.parent / "skills" / "recall-conversations" / "
 from memory_lib.db import (
     BACKUP_RETENTION,
     CODEX_IMPORT_SENTINEL,
+    CODEX_UNKNOWN_PROJECT_PATH,
     DEFAULT_CODEX_SESSIONS_DIR,
     DEFAULT_DB_PATH,
     DEFAULT_PROJECTS_DIR,
@@ -44,7 +45,6 @@ from memory_lib.parsing import (
 from memory_lib.formatting import get_project_key, normalize_cwd, normalize_project_key, parse_project_key, extract_project_name
 from memory_lib.summarizer import compute_context_summary
 from sync_current import parse_codex_session, sync_entries, validate_codex_thread_id
-from memory_lib.db import CODEX_UNKNOWN_PROJECT_PATH
 
 
 def _process_alive(pid: int) -> bool:
@@ -135,6 +135,7 @@ def backup_database(db_path: Path, retention: int = BACKUP_RETENTION) -> Path | 
     backup_path = backup_dir / f"{db_path.stem}-{stamp}{db_path.suffix}"
 
     src = sqlite3.connect(str(db_path))
+    src.execute("PRAGMA busy_timeout = 5000")
     dst = sqlite3.connect(str(backup_path))
     try:
         src.backup(dst)

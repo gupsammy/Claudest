@@ -14,9 +14,21 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 
 
 def main():
+    is_codex = False
     try:
         # Read hook input from stdin
         hook_input = sys.stdin.read()
+        codex_thread_id = os.environ.get("CODEX_THREAD_ID")
+        try:
+            parsed_input = json.loads(hook_input) if hook_input else {}
+        except json.JSONDecodeError:
+            parsed_input = {}
+        transcript_path = str(parsed_input.get("transcript_path") or "")
+        session_id = parsed_input.get("session_id")
+        is_codex = bool(
+            (codex_thread_id and (not session_id or session_id == codex_thread_id))
+            or "/.codex/sessions/" in transcript_path
+        )
 
         # Write to temp file (cross-platform stdin piping to detached process is unreliable)
         # Use os.fdopen on the fd directly to avoid TOCTOU race; mkstemp already sets 0o600
@@ -47,7 +59,7 @@ def main():
     except Exception:
         pass
 
-    print(json.dumps({"continue": True}))
+    print(json.dumps({} if is_codex else {"continue": True}))
 
 
 if __name__ == "__main__":

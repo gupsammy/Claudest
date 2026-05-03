@@ -11,10 +11,15 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR.parent / "skills" / "recall-conversations" / "scripts"))
 
-from memory_lib.db import DEFAULT_DB_PATH, get_db_connection
+from memory_lib.db import (
+    CODEX_IMPORT_SENTINEL,
+    DEFAULT_CODEX_SESSIONS_DIR,
+    DEFAULT_DB_PATH,
+    get_db_connection,
+)
 
 
-def _spawn_background(script_name: str) -> None:
+def _spawn_background(script_name: str, *args: str) -> None:
     """Spawn a script as a detached background process."""
     kwargs = {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
     if sys.platform == "win32":
@@ -24,7 +29,7 @@ def _spawn_background(script_name: str) -> None:
     else:
         kwargs["start_new_session"] = True
     subprocess.Popen(
-        [sys.executable, str(SCRIPT_DIR / script_name)],
+        [sys.executable, str(SCRIPT_DIR / script_name), *args],
         **kwargs
     )
 
@@ -78,6 +83,24 @@ def _needs_backfill() -> bool:
         return False
 
 
+def _codex_sessions_newer_than_sentinel() -> bool:
+    """Return True when Codex has transcripts not covered by the last bulk import.
+
+    Short-circuits on the first transcript newer than the sentinel — important
+    when ~/.codex/sessions has hundreds of files and only one is new.
+    """
+    try:
+        if not DEFAULT_CODEX_SESSIONS_DIR.exists():
+            return False
+        sentinel_mtime = CODEX_IMPORT_SENTINEL.stat().st_mtime if CODEX_IMPORT_SENTINEL.exists() else 0.0
+        return any(
+            f.is_file() and f.stat().st_mtime > sentinel_mtime
+            for f in DEFAULT_CODEX_SESSIONS_DIR.rglob("*.jsonl")
+        )
+    except Exception:
+        return False
+
+
 def main():
     try:
         # Create directory
@@ -85,13 +108,15 @@ def main():
 
         # Run initial import in background if DB doesn't exist
         if not DEFAULT_DB_PATH.exists():
-            _spawn_background("import_conversations.py")
+            _spawn_background("import_conversations.py", "--include-codex", "--backup-on-import")
         else:
             _ensure_schema()
             # v3 migration nullifies file_hash for sessions with channel messages;
             # trigger reimport to re-process those sessions with the new parser
             if _needs_reimport():
-                _spawn_background("import_conversations.py")
+                _spawn_background("import_conversations.py", "--include-codex", "--backup-on-import")
+            elif _codex_sessions_newer_than_sentinel():
+                _spawn_background("import_conversations.py", "--include-codex", "--backup-on-import")
 
         if _needs_backfill():
             _spawn_background("backfill_summaries.py")

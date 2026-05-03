@@ -19,6 +19,16 @@ Shared utility package: `plugins/claude-memory/skills/recall-conversations/scrip
 
 Settings hardcoded in `memory_lib/db.py:DEFAULT_SETTINGS` — PyYAML removed intentionally (not stdlib). Do not introduce non-stdlib dependencies in plugin runtime code.
 
+## Codex Desktop Integration
+
+Codex sessions land in the same `conversations.db` via a minimal adapter. `parse_codex_session` normalizes Codex JSONL events into Claude-shaped message dicts, then routes through the shared `sync_entries()`. Origin column is set to `codex`; deterministic synthetic UUIDs (`uuid5(NAMESPACE_URL, "codex:<sid>:<kind>:<ord>")`) keep re-imports idempotent.
+
+The adapter is intentionally minimal. It imports only `event_msg.user_message` and `response_item.message phase=final_answer`. Commentary, tool calls, function-call results, and reasoning content are skipped. **Recall-quality consequence**: a Codex session where the meaningful work happened across `phase=commentary` updates and tool calls will surface in recall as just the question and final answer — thinner than a Claude session with comparable activity. Don't blame the FTS ranker for missing intermediate context; the omission is by design.
+
+`SessionStart` triggers a bulk Codex import via `import_conversations.py --include-codex --backup-on-import` when (a) the DB is missing, (b) any `import_log.file_hash` is NULL, or (c) any transcript under `~/.codex/sessions` is newer than `~/.claude-memory/.last-codex-import`. The bulk path is gated by a PID-based lockfile at `~/.claude-memory/import.lock` so racing SessionStart hooks don't double-import. Backups in `~/.claude-memory/backups/` rotate to keep the last 10.
+
+Codex sessions without `session_meta.cwd` route to a single sentinel project at `(unknown-codex)` rather than fabricating a project per Codex date directory.
+
 ## Development Commands
 
 ```bash

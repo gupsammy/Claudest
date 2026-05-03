@@ -7,13 +7,25 @@ import sqlite3
 import sys
 import tempfile
 from pathlib import Path
+import shutil
 
 import pytest
 
 # Add hooks dir to sys.path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "plugins" / "claude-memory" / "hooks"))
 
-from import_conversations import import_session, import_project
+import os
+
+import import_conversations as import_module
+from import_conversations import (
+    acquire_import_lock,
+    backup_database,
+    import_codex_session,
+    import_codex_sessions_dir,
+    import_session,
+    import_project,
+    release_import_lock,
+)
 from memory_lib.db import SCHEMA, _migrate_columns
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures"
@@ -277,6 +289,202 @@ class TestImportLogTracking:
         second_row = cursor.fetchone()
         assert second_row[0] == first_hash, "Hash should be restored to real value"
         assert second_row[1] == first_msg_count, "Message count should match"
+
+
+class TestImportCodexSessions:
+    """Test historical Codex Desktop import path."""
+
+    def test_import_codex_session_tracks_import_log(self, memory_db):
+        fixture_file = FIXTURE_DIR / "codex_minimal.codexlog"
+
+        branches_imported, total_messages = import_codex_session(memory_db, fixture_file)
+        memory_db.commit()
+        skipped_branches, skipped_messages = import_codex_session(memory_db, fixture_file)
+
+        assert branches_imported == 1
+        assert total_messages == 2
+        assert skipped_branches == -1
+        assert skipped_messages == 0
+
+        cursor = memory_db.cursor()
+        cursor.execute("SELECT path, key, name FROM projects")
+        assert cursor.fetchone() == (
+            "/Users/samarthgupta/repos/myrepos/claudest",
+            "-Users-samarthgupta-repos-myrepos-claudest",
+            "claudest",
+        )
+
+        cursor.execute("SELECT role, content, origin FROM messages ORDER BY timestamp")
+        assert cursor.fetchall() == [
+            ("user", "please remember this codex session", "codex"),
+            ("assistant", "Recorded from Codex.", "codex"),
+        ]
+
+        cursor.execute(
+            "SELECT file_hash, messages_imported FROM import_log WHERE file_path = ?",
+            (str(fixture_file),)
+        )
+        row = cursor.fetchone()
+        assert row is not None
+        assert row[0]
+        assert row[1] == 2
+
+    def test_import_codex_sessions_dir_updates_sentinel(self, memory_db, tmp_path, monkeypatch):
+        sessions_dir = tmp_path / "sessions"
+        nested = sessions_dir / "2026" / "05" / "03"
+        nested.mkdir(parents=True)
+        shutil.copy(FIXTURE_DIR / "codex_minimal.codexlog", nested / "rollout-test.jsonl")
+        sentinel = tmp_path / ".last-codex-import"
+        monkeypatch.setattr(import_module, "CODEX_IMPORT_SENTINEL", sentinel)
+
+        branches_imported, messages_imported, skipped = import_codex_sessions_dir(memory_db, sessions_dir)
+
+        assert branches_imported == 1
+        assert messages_imported == 2
+        assert skipped == 0
+        assert sentinel.exists()
+
+    def test_sentinel_does_not_advance_on_commit_failure(self, memory_db, tmp_path, monkeypatch):
+        """If conn.commit() raises, the sentinel must not be written.
+
+        Pins the data-loss-race fix: sentinel only advances for work that's
+        actually durable on disk.
+        """
+        sessions_dir = tmp_path / "sessions"
+        sessions_dir.mkdir()
+        shutil.copy(FIXTURE_DIR / "codex_minimal.codexlog", sessions_dir / "rollout-test.jsonl")
+        sentinel = tmp_path / ".last-codex-import"
+        monkeypatch.setattr(import_module, "CODEX_IMPORT_SENTINEL", sentinel)
+
+        # sqlite3.Connection attributes are read-only, so wrap it.
+        class CommitFailingConn:
+            def __init__(self, real):
+                self._real = real
+
+            def __getattr__(self, name):
+                return getattr(self._real, name)
+
+            def commit(self):
+                raise sqlite3.OperationalError("simulated commit failure")
+
+        wrapped = CommitFailingConn(memory_db)
+
+        with pytest.raises(sqlite3.OperationalError):
+            import_codex_sessions_dir(wrapped, sessions_dir)
+
+        assert not sentinel.exists(), (
+            "Sentinel must not advance when commit fails — otherwise the next "
+            "SessionStart skips re-importing data that was never actually persisted."
+        )
+
+
+class TestImportLock:
+    """Test the cross-platform PID-based import lock."""
+
+    def test_acquire_succeeds_when_unheld(self, tmp_path):
+        lock_path = tmp_path / "import.lock"
+        pid = acquire_import_lock(lock_path)
+        try:
+            assert pid == os.getpid()
+            assert lock_path.exists()
+            assert lock_path.read_text() == str(os.getpid())
+        finally:
+            release_import_lock(lock_path)
+
+    def test_acquire_fails_when_held_by_live_process(self, tmp_path):
+        lock_path = tmp_path / "import.lock"
+        # Plant a lockfile with the current PID — current process is alive.
+        lock_path.write_text(str(os.getpid()))
+        try:
+            assert acquire_import_lock(lock_path) is None
+        finally:
+            lock_path.unlink(missing_ok=True)
+
+    def test_acquire_steals_stale_lock(self, tmp_path):
+        """Lock held by a non-existent PID is stale — should be stolen."""
+        lock_path = tmp_path / "import.lock"
+        # PID 1 is init/launchd; we plant a fake PID that's almost certainly dead.
+        # Use a high PID unlikely to be in use.
+        lock_path.write_text("999999")
+        pid = acquire_import_lock(lock_path)
+        try:
+            assert pid == os.getpid(), "Should steal stale lock"
+            assert lock_path.read_text() == str(os.getpid())
+        finally:
+            release_import_lock(lock_path)
+
+    def test_release_only_removes_own_lock(self, tmp_path):
+        """release_import_lock must not delete a lock held by another process."""
+        lock_path = tmp_path / "import.lock"
+        lock_path.write_text("999999")  # Foreign PID
+        release_import_lock(lock_path)
+        assert lock_path.exists(), "Foreign lock must not be released"
+        lock_path.unlink()
+
+    def test_acquire_handles_corrupt_lockfile(self, tmp_path):
+        """Lock file with non-integer content should be treated as stale."""
+        lock_path = tmp_path / "import.lock"
+        lock_path.write_text("not-a-pid")
+        pid = acquire_import_lock(lock_path)
+        try:
+            assert pid == os.getpid()
+        finally:
+            release_import_lock(lock_path)
+
+
+class TestImportBackup:
+    """Test SQLite backup helper used before bulk imports."""
+
+    def test_backup_database_uses_sqlite_backup(self, tmp_path):
+        db_path = tmp_path / "conversations.db"
+        conn = sqlite3.connect(db_path)
+        conn.execute("CREATE TABLE sample (value TEXT)")
+        conn.execute("INSERT INTO sample (value) VALUES ('kept')")
+        conn.commit()
+        conn.close()
+
+        backup_path = backup_database(db_path)
+
+        assert backup_path is not None
+        assert backup_path.exists()
+        backup_conn = sqlite3.connect(backup_path)
+        try:
+            value = backup_conn.execute("SELECT value FROM sample").fetchone()[0]
+        finally:
+            backup_conn.close()
+        assert value == "kept"
+
+    def test_backup_rotation_keeps_only_last_n(self, tmp_path):
+        """After more than `retention` backups, only the newest N must remain."""
+        db_path = tmp_path / "conversations.db"
+        conn = sqlite3.connect(db_path)
+        conn.execute("CREATE TABLE sample (value TEXT)")
+        conn.execute("INSERT INTO sample (value) VALUES ('kept')")
+        conn.commit()
+        conn.close()
+
+        # Microsecond-resolution timestamps make every backup uniquely named.
+        for _ in range(5):
+            backup_database(db_path, retention=3)
+
+        backups = sorted((db_path.parent / "backups").glob(f"{db_path.stem}-*.db"))
+        assert len(backups) == 3, (
+            f"Backup rotation should keep last 3, got {len(backups)}: {[b.name for b in backups]}"
+        )
+
+    def test_backup_microsecond_filenames_are_unique(self, tmp_path):
+        """Two rapid backups must produce two distinct files (microsecond suffix)."""
+        db_path = tmp_path / "conversations.db"
+        conn = sqlite3.connect(db_path)
+        conn.execute("CREATE TABLE sample (value TEXT)")
+        conn.commit()
+        conn.close()
+
+        first = backup_database(db_path)
+        second = backup_database(db_path)
+
+        assert first is not None and second is not None
+        assert first != second, "Backups in the same second must still get distinct filenames"
 
 
 class TestFKSafeReimport:

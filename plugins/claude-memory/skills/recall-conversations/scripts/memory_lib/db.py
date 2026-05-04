@@ -19,6 +19,18 @@ DEFAULT_PROJECTS_DIR = Path.home() / ".claude" / "projects"
 DEFAULT_LOG_PATH = Path.home() / ".claude-memory" / "memory.log"
 CONFIG_PATH = Path.home() / ".claude-memory" / "config.json"
 
+# Codex Desktop integration paths (consolidated here per single-home rule).
+DEFAULT_CODEX_SESSIONS_DIR = Path.home() / ".codex" / "sessions"
+CODEX_IMPORT_SENTINEL = Path.home() / ".claude-memory" / ".last-codex-import"
+# Sentinel project path for Codex sessions where session_meta.cwd is missing.
+# Without this, missing-cwd sessions create a project per Codex date directory
+# (e.g. ".../2026/05/03" → project named "03").
+CODEX_UNKNOWN_PROJECT_PATH = "/(unknown-codex)"
+
+# Bulk-import coordination
+IMPORT_LOCK_PATH = Path.home() / ".claude-memory" / "import.lock"
+BACKUP_RETENTION = 10
+
 # Default settings
 DEFAULT_SETTINGS = {
     "db_path": str(DEFAULT_DB_PATH),

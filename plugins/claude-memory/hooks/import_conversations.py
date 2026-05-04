@@ -13,8 +13,10 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import sqlite3
 import sys
+from datetime import datetime
 from pathlib import Path
 
 # Add path to shared utils
@@ -22,16 +24,87 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR.parent / "skills" / "recall-conversations" / "scripts"))
 
 from memory_lib.db import (
-    DEFAULT_DB_PATH, DEFAULT_PROJECTS_DIR, get_db_path,
-    get_db_connection, load_settings, setup_logging, detect_fts_support,
+    BACKUP_RETENTION,
+    CODEX_IMPORT_SENTINEL,
+    CODEX_UNKNOWN_PROJECT_PATH,
+    DEFAULT_CODEX_SESSIONS_DIR,
+    DEFAULT_DB_PATH,
+    DEFAULT_PROJECTS_DIR,
+    IMPORT_LOCK_PATH,
+    detect_fts_support,
+    get_db_connection,
+    get_db_path,
+    load_settings,
+    setup_logging,
 )
 from memory_lib.content import extract_text_content, is_task_notification, is_teammate_message, is_tool_result, sanitize_fts_term, parse_origin
 from memory_lib.parsing import (
     parse_jsonl_file, parse_all_with_uuids, extract_session_metadata,
     find_all_branches, compute_branch_metadata, aggregate_branch_content,
 )
-from memory_lib.formatting import normalize_cwd, normalize_project_key, parse_project_key, extract_project_name
+from memory_lib.formatting import get_project_key, normalize_cwd, normalize_project_key, parse_project_key, extract_project_name
 from memory_lib.summarizer import compute_context_summary
+from sync_current import parse_codex_session, sync_entries, validate_codex_thread_id
+
+
+def _process_alive(pid: int) -> bool:
+    """Return True if a process with the given PID exists and we can signal it.
+
+    Uses os.kill(pid, 0) which raises ProcessLookupError if the PID is not in
+    use, OSError(EPERM) if it exists but we can't signal it. EPERM still
+    counts as alive — different user, but the process is real.
+    """
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+
+
+def acquire_import_lock(lock_path: Path = IMPORT_LOCK_PATH) -> int | None:
+    """Acquire the bulk-import lock or return None if another import is live.
+
+    Strategy: O_CREAT|O_EXCL to atomically create the lockfile with our PID.
+    If it already exists, read the PID inside; if that process is dead, steal
+    the stale lock. Otherwise return None — caller exits silently.
+    """
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    for _ in range(2):  # Two attempts: one to try, one after stale-cleanup.
+        try:
+            fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        except FileExistsError:
+            try:
+                holder = lock_path.read_text(encoding="utf-8").strip()
+                holder_pid = int(holder)
+            except (OSError, ValueError):
+                holder_pid = -1
+            if _process_alive(holder_pid):
+                return None
+            try:
+                lock_path.unlink()
+            except FileNotFoundError:
+                pass
+            continue
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(str(os.getpid()))
+        return os.getpid()
+    return None
+
+
+def release_import_lock(lock_path: Path = IMPORT_LOCK_PATH) -> None:
+    """Release the lock if we still hold it (lock contains our PID)."""
+    try:
+        holder = lock_path.read_text(encoding="utf-8").strip()
+        if holder == str(os.getpid()):
+            lock_path.unlink()
+    except (OSError, ValueError):
+        pass
 
 
 def get_file_hash(filepath: Path) -> str:
@@ -41,6 +114,46 @@ def get_file_hash(filepath: Path) -> str:
         for chunk in iter(lambda: f.read(8192), b""):
             h.update(chunk)
     return h.hexdigest()
+
+
+def backup_database(db_path: Path, retention: int = BACKUP_RETENTION) -> Path | None:
+    """Create a consistent SQLite backup before bulk import.
+
+    Filenames use microsecond resolution so concurrent runs (rare, gated by
+    the import lock — but still possible if a stale lock was just stolen)
+    don't collide on the same path.
+
+    After writing the new backup, prune older ones for the same DB stem,
+    keeping only the most recent `retention` files.
+    """
+    if not db_path.exists():
+        return None
+
+    backup_dir = db_path.parent / "backups"
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+    backup_path = backup_dir / f"{db_path.stem}-{stamp}{db_path.suffix}"
+
+    src = sqlite3.connect(str(db_path))
+    src.execute("PRAGMA busy_timeout = 5000")
+    dst = sqlite3.connect(str(backup_path))
+    try:
+        src.backup(dst)
+    finally:
+        dst.close()
+        src.close()
+
+    # Prune oldest backups for this DB stem. Sorted ascending by name → name
+    # contains timestamp → ascending name = ascending time. Keep the newest N.
+    backups = sorted(backup_dir.glob(f"{db_path.stem}-*{db_path.suffix}"))
+    if len(backups) > retention:
+        for old in backups[:-retention]:
+            try:
+                old.unlink()
+            except OSError:
+                pass
+
+    return backup_path
 
 
 def import_session(
@@ -372,6 +485,97 @@ def import_project(
     return sessions_imported, messages_imported, sessions_skipped
 
 
+def import_codex_session(conn: sqlite3.Connection, filepath: Path) -> tuple[int, int]:
+    """
+    Import one Codex Desktop JSONL transcript using the minimal visible-message adapter.
+    Returns: (branches_imported, total_message_count)
+    """
+    cursor = conn.cursor()
+
+    file_hash = get_file_hash(filepath)
+    cursor.execute(
+        "SELECT id, file_hash FROM import_log WHERE file_path = ?",
+        (str(filepath),)
+    )
+    log_row = cursor.fetchone()
+    if log_row and log_row[1] == file_hash:
+        return -1, 0
+
+    session_uuid, all_entries, messages, cwd = parse_codex_session(filepath)
+    if not validate_codex_thread_id(session_uuid) or not all_entries or not messages:
+        return -1, 0
+
+    fallback_project_path = cwd or CODEX_UNKNOWN_PROJECT_PATH
+    project_key = get_project_key(fallback_project_path)
+    sync_entries(conn, session_uuid, all_entries, messages, project_key, fallback_project_path)
+
+    cursor.execute("SELECT id FROM sessions WHERE uuid = ?", (session_uuid,))
+    session_row = cursor.fetchone()
+    if not session_row:
+        return -1, 0
+    session_id = session_row[0]
+
+    cursor.execute("SELECT COUNT(*) FROM messages WHERE session_id = ?", (session_id,))
+    total_messages = cursor.fetchone()[0]
+    if total_messages == 0:
+        return -1, 0
+
+    cursor.execute("SELECT COUNT(*) FROM branches WHERE session_id = ?", (session_id,))
+    branches_imported = cursor.fetchone()[0]
+    if branches_imported == 0:
+        return -1, 0
+
+    if log_row:
+        cursor.execute(
+            "UPDATE import_log SET file_hash = ?, imported_at = CURRENT_TIMESTAMP, messages_imported = ? WHERE file_path = ?",
+            (file_hash, total_messages, str(filepath))
+        )
+    else:
+        cursor.execute(
+            "INSERT INTO import_log (file_path, file_hash, messages_imported) VALUES (?, ?, ?)",
+            (str(filepath), file_hash, total_messages)
+        )
+
+    return branches_imported, total_messages
+
+
+def import_codex_sessions_dir(conn: sqlite3.Connection, sessions_dir: Path) -> tuple[int, int, int]:
+    """
+    Import all Codex Desktop JSONL transcripts under ~/.codex/sessions.
+
+    Owns its transaction: commits the imported rows before advancing the
+    sentinel, so a commit failure leaves the sentinel untouched and the
+    next SessionStart re-runs the import.
+
+    Returns: (sessions_imported, messages_imported, sessions_skipped)
+    """
+    if not sessions_dir.exists():
+        return 0, 0, 0
+
+    sessions_imported = 0
+    messages_imported = 0
+    sessions_skipped = 0
+
+    for jsonl_file in sorted(sessions_dir.rglob("*.jsonl")):
+        if jsonl_file.name.startswith("."):
+            continue
+        branches_count, msg_count = import_codex_session(conn, jsonl_file)
+        if branches_count == -1:
+            sessions_skipped += 1
+        else:
+            sessions_imported += branches_count
+            messages_imported += msg_count
+
+    # Commit before advancing the sentinel — sentinel must only move forward
+    # for work that's actually durable on disk.
+    conn.commit()
+
+    CODEX_IMPORT_SENTINEL.parent.mkdir(parents=True, exist_ok=True)
+    CODEX_IMPORT_SENTINEL.write_text(datetime.now().isoformat(), encoding="utf-8")
+
+    return sessions_imported, messages_imported, sessions_skipped
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Import Claude Code conversations into SQLite"
@@ -409,6 +613,22 @@ def main():
         action="store_true",
         help="Show database statistics"
     )
+    parser.add_argument(
+        "--include-codex",
+        action="store_true",
+        help=f"Also import Codex Desktop sessions from {DEFAULT_CODEX_SESSIONS_DIR}"
+    )
+    parser.add_argument(
+        "--codex-sessions-dir",
+        type=Path,
+        default=DEFAULT_CODEX_SESSIONS_DIR,
+        help=f"Codex sessions directory (default: {DEFAULT_CODEX_SESSIONS_DIR})"
+    )
+    parser.add_argument(
+        "--backup-on-import",
+        action="store_true",
+        help="Create a SQLite backup before bulk import"
+    )
 
     args = parser.parse_args()
 
@@ -420,8 +640,36 @@ def main():
     db_path = get_db_path(settings)
     exclude_projects = settings.get("exclude_projects", [])
 
-    # Use get_db_connection which handles migration
-    conn = get_db_connection(settings)
+    is_import_mode = not (args.stats or args.search)
+
+    # Gate concurrent bulk imports (multiple SessionStart hooks racing).
+    # Stats/search are read-only and skip the lock.
+    if is_import_mode:
+        if acquire_import_lock() is None:
+            logger.info("Another import is already running; exiting")
+            return
+
+    try:
+        if args.backup_on_import and is_import_mode:
+            try:
+                backup_path = backup_database(db_path)
+                if backup_path:
+                    print(f"Backup created: {backup_path}")
+            except Exception as e:
+                print(f"Backup failed; refusing to import: {e}", file=sys.stderr)
+                sys.exit(1)
+
+        # Use get_db_connection which handles migration
+        conn = get_db_connection(settings)
+        _run_main(args, conn, db_path, exclude_projects, logger)
+    finally:
+        if is_import_mode:
+            release_import_lock()
+
+
+def _run_main(args, conn, db_path, exclude_projects, logger):
+    """Body of main() after lock acquisition. Split out so the lock try/finally
+    in main() can wrap the whole import flow without a deep indent."""
 
     if args.stats:
         cursor = conn.cursor()
@@ -570,6 +818,15 @@ def main():
 
             if sessions > 0 or messages > 0:
                 print(f"Imported {project_dir.name}: {sessions} branches, {messages} messages")
+
+    if args.include_codex:
+        # import_codex_sessions_dir owns its commit + sentinel update.
+        sessions, messages, skipped = import_codex_sessions_dir(conn, args.codex_sessions_dir)
+        total_sessions += sessions
+        total_messages += messages
+        total_skipped += skipped
+        if sessions > 0 or messages > 0:
+            print(f"Imported Codex sessions: {sessions} branches, {messages} messages")
 
     conn.close()
 

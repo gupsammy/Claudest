@@ -12,6 +12,7 @@ v3 schema: messages stored once per session, branches as a separate index.
 from __future__ import annotations
 
 import argparse
+import uuid as uuidlib
 import json
 import os
 import re
@@ -20,24 +21,43 @@ import sys
 from pathlib import Path
 
 _UUID_RE = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', re.IGNORECASE)
+# Codex thread IDs are UUIDs today (Codex Desktop emits UUIDv7), but OpenAI's
+# Assistants API uses `thread_<random>` strings. Keep this looser to survive
+# an upstream ID-format change, while still blocking path traversal: no
+# slashes, no dots, no NULs, bounded length.
+_CODEX_ID_RE = re.compile(r'^[A-Za-z0-9_-]{8,128}$')
 
 
 def validate_session_id(session_id: str) -> bool:
     """Validate that session_id is a proper UUID to prevent path traversal."""
     return bool(session_id and _UUID_RE.match(session_id))
 
+
+def validate_codex_thread_id(thread_id: str) -> bool:
+    """Validate a Codex thread ID. Accepts UUIDs and OpenAI-style identifiers
+    (thread_<random>), still rejects path traversal characters."""
+    return bool(thread_id and _CODEX_ID_RE.match(thread_id))
+
 # Add path to shared utils
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR.parent / "skills" / "recall-conversations" / "scripts"))
 
-from memory_lib.db import DEFAULT_PROJECTS_DIR, get_db_connection, load_settings, setup_logging
+from memory_lib.db import (
+    CODEX_UNKNOWN_PROJECT_PATH,
+    DEFAULT_CODEX_SESSIONS_DIR,
+    DEFAULT_PROJECTS_DIR,
+    get_db_connection,
+    load_settings,
+    setup_logging,
+)
 from memory_lib.content import extract_text_content, is_task_notification, is_teammate_message, is_tool_result, parse_origin
 from memory_lib.parsing import (
     parse_jsonl_file, parse_all_with_uuids, extract_session_metadata,
     find_all_branches, compute_branch_metadata, aggregate_branch_content,
 )
-from memory_lib.formatting import normalize_cwd, normalize_project_key, parse_project_key
+from memory_lib.formatting import get_project_key, normalize_cwd, normalize_project_key, parse_project_key
 from memory_lib.summarizer import compute_context_summary
+
 
 
 def _is_under(path: Path, base: Path) -> bool:
@@ -75,7 +95,118 @@ def get_session_file(projects_dir: Path, session_id: str) -> Path | None:
     return None
 
 
-def sync_session(conn: sqlite3.Connection, filepath: Path, project_dir: Path) -> int:
+def get_codex_session_file(sessions_dir: Path, session_id: str) -> Path | None:
+    """Find a Codex JSONL transcript by session/thread ID."""
+    if not sessions_dir.exists():
+        return None
+    for f in sessions_dir.rglob(f"*{session_id}*.jsonl"):
+        if _is_under(f, sessions_dir):
+            return f
+    return None
+
+
+def _extract_codex_text(payload: dict) -> str:
+    """Extract visible text from a Codex message payload."""
+    content = payload.get("content")
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        texts = []
+        for item in content:
+            if not isinstance(item, dict):
+                continue
+            if item.get("type") in ("input_text", "output_text", "text"):
+                text = item.get("text")
+                if text:
+                    texts.append(text)
+        return "\n".join(texts).strip()
+    return ""
+
+
+def _codex_message_uuid(session_id: str, raw_kind: str, ordinal: int) -> str:
+    """Create a stable synthetic UUID for a Codex message row."""
+    return str(uuidlib.uuid5(uuidlib.NAMESPACE_URL, f"codex:{session_id}:{raw_kind}:{ordinal}"))
+
+
+def parse_codex_session(filepath: Path) -> tuple[str, list[dict], list[dict], str]:
+    """
+    Convert a Codex event-stream JSONL into Claude-shaped message entries.
+
+    Minimal adapter: import only visible user/final assistant messages. Commentary,
+    tool calls, tool outputs, developer/system context, and reasoning are left for a
+    fuller adapter.
+    """
+    session_meta: dict = {}
+    raw_messages: list[tuple[str, str, str, str]] = []
+
+    with filepath.open("r", encoding="utf-8", errors="replace") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+
+            timestamp = obj.get("timestamp")
+            obj_type = obj.get("type")
+            payload = obj.get("payload") or {}
+
+            if obj_type == "session_meta":
+                session_meta = payload
+                continue
+
+            if obj_type == "event_msg":
+                event_type = payload.get("type")
+                if event_type == "user_message":
+                    text = (payload.get("message") or "").strip()
+                    if text:
+                        raw_messages.append(("user", "event_msg.user_message", timestamp, text))
+                continue
+
+            if obj_type == "response_item":
+                if payload.get("type") != "message":
+                    continue
+                if payload.get("role") != "assistant":
+                    continue
+                if payload.get("phase") != "final_answer":
+                    continue
+                text = _extract_codex_text(payload)
+                if text:
+                    raw_messages.append(("assistant", "response_item.message.final_answer", timestamp, text))
+
+    session_id = session_meta.get("id") or filepath.stem
+    cwd = session_meta.get("cwd")
+    parent_uuid = None
+    entries = []
+
+    for ordinal, (role, raw_kind, timestamp, text) in enumerate(raw_messages):
+        msg_uuid = _codex_message_uuid(session_id, raw_kind, ordinal)
+        entry = {
+            "uuid": msg_uuid,
+            "parentUuid": parent_uuid,
+            "type": role,
+            "timestamp": timestamp,
+            "cwd": cwd,
+            "gitBranch": None,
+            "message": {"role": role, "content": text},
+            "origin": {"kind": "channel", "server": "plugin:codex:codex"},
+        }
+        entries.append(entry)
+        parent_uuid = msg_uuid
+
+    return session_id, entries, entries, cwd or ""
+
+
+def sync_entries(
+    conn: sqlite3.Connection,
+    session_uuid: str,
+    all_entries: list[dict],
+    messages: list[dict],
+    project_key: str,
+    fallback_project_path: str,
+) -> int:
     """
     Sync a single session file using v3 schema.
     Messages stored once, branches tracked via branch_messages mapping.
@@ -83,13 +214,6 @@ def sync_session(conn: sqlite3.Connection, filepath: Path, project_dir: Path) ->
     """
     cursor = conn.cursor()
 
-    # Get session UUID
-    session_uuid = filepath.stem
-    if session_uuid.startswith("agent-"):
-        session_uuid = session_uuid[6:]
-
-    # Parse all entries with UUIDs for branch detection
-    all_entries = list(parse_all_with_uuids(filepath))
     if not all_entries:
         return 0
 
@@ -98,8 +222,6 @@ def sync_session(conn: sqlite3.Connection, filepath: Path, project_dir: Path) ->
     if not branches:
         return 0
 
-    # Parse user/assistant messages for import
-    messages = list(parse_jsonl_file(filepath))
     if not messages:
         return 0
 
@@ -107,8 +229,8 @@ def sync_session(conn: sqlite3.Connection, filepath: Path, project_dir: Path) ->
     meta = extract_session_metadata(all_entries)
 
     # Get or create project
-    project_key = normalize_project_key(project_dir.name)
-    raw_path = meta["cwd"] if meta.get("cwd") else parse_project_key(project_key)
+    project_key = normalize_project_key(project_key)
+    raw_path = meta["cwd"] if meta.get("cwd") else fallback_project_path
     project_path = normalize_cwd(raw_path)
     project_name = Path(project_path).name
 
@@ -333,6 +455,35 @@ def sync_session(conn: sqlite3.Connection, filepath: Path, project_dir: Path) ->
     return new_count
 
 
+def sync_session(conn: sqlite3.Connection, filepath: Path, project_dir: Path) -> int:
+    """
+    Sync a single Claude Code session file using v3 schema.
+    Messages stored once, branches tracked via branch_messages mapping.
+    Returns total number of new messages added.
+    """
+    session_uuid = filepath.stem
+    if session_uuid.startswith("agent-"):
+        session_uuid = session_uuid[6:]
+
+    all_entries = list(parse_all_with_uuids(filepath))
+    messages = list(parse_jsonl_file(filepath))
+    project_key = project_dir.name
+    fallback_project_path = parse_project_key(project_key)
+    return sync_entries(conn, session_uuid, all_entries, messages, project_key, fallback_project_path)
+
+
+def sync_codex_session(conn: sqlite3.Connection, filepath: Path) -> int:
+    """
+    Sync a Codex Desktop session file using the minimal visible transcript adapter.
+    """
+    session_uuid, all_entries, messages, cwd = parse_codex_session(filepath)
+    if not validate_codex_thread_id(session_uuid):
+        return 0
+    fallback_project_path = cwd or CODEX_UNKNOWN_PROJECT_PATH
+    project_key = get_project_key(fallback_project_path)
+    return sync_entries(conn, session_uuid, all_entries, messages, project_key, fallback_project_path)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Sync current session to memory database")
     parser.add_argument(
@@ -370,15 +521,36 @@ def main():
         except (json.JSONDecodeError, EOFError):
             hook_input = {}
 
-    session_id = hook_input.get("session_id")
+    session_id = hook_input.get("session_id") or os.environ.get("CODEX_THREAD_ID")
+    transcript_path = str(hook_input.get("transcript_path") or "")
+    codex_thread_id = os.environ.get("CODEX_THREAD_ID")
 
-    if not session_id or not validate_session_id(session_id):
+    # Mirror memory-sync.py:28 detection — env var OR transcript path. Env-only
+    # silently misroutes manual reruns of this script (no inherited env) to the
+    # Claude path, where the rglob finds nothing and the import zeros out.
+    is_codex = bool(
+        (codex_thread_id and (not session_id or session_id == codex_thread_id))
+        or "/.codex/sessions/" in transcript_path
+    )
+
+    # Validate against the appropriate ID format. Claude sessions are
+    # guaranteed UUID; Codex thread IDs are UUID today but may shift to
+    # OpenAI-style thread_* in the future.
+    if is_codex:
+        valid = bool(session_id and validate_codex_thread_id(session_id))
+    else:
+        valid = bool(session_id and validate_session_id(session_id))
+
+    if not valid:
         # No session ID or invalid format — exit silently
         print(json.dumps({"continue": True}))
         return
 
     # Find session file
-    session_file = get_session_file(DEFAULT_PROJECTS_DIR, session_id)
+    if is_codex:
+        session_file = get_codex_session_file(DEFAULT_CODEX_SESSIONS_DIR, session_id)
+    else:
+        session_file = get_session_file(DEFAULT_PROJECTS_DIR, session_id)
 
     if not session_file:
         print(json.dumps({"continue": True}))
@@ -387,13 +559,16 @@ def main():
     # Sync
     try:
         conn = get_db_connection(settings)
-        project_dir = session_file.parent
+        if is_codex:
+            new_messages = sync_codex_session(conn, session_file)
+        else:
+            project_dir = session_file.parent
 
-        # Handle subagent paths
-        if project_dir.name == "subagents":
-            project_dir = project_dir.parent.parent
+            # Handle subagent paths
+            if project_dir.name == "subagents":
+                project_dir = project_dir.parent.parent
 
-        new_messages = sync_session(conn, session_file, project_dir)
+            new_messages = sync_session(conn, session_file, project_dir)
         conn.commit()
         conn.close()
 

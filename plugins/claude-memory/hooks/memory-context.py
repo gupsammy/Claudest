@@ -366,8 +366,8 @@ def _build_fallback_context(session: dict) -> str:
         footer_parts.append(f"({', '.join(short_files)})")
     footer = " ".join(footer_parts)
     lines.append(
-        f"[{footer} — proactively use /recall-conversations "
-        "to retrieve relevant context from past conversations when the user references "
+        f"[{footer} — proactively invoke the `claude-memory:recall-conversations` skill "
+        "via the Skill tool to retrieve relevant context from past conversations when the user references "
         "prior work, asks about decisions made earlier, or when you sense useful context "
         "from previous sessions would improve your response.]"
     )
@@ -524,8 +524,8 @@ def main():
             "- If this hook's output was truncated inline and a persisted file path "
             "is referenced, Read that file before answering any message that references "
             "prior work — the last exchanges of the previous session may live only there.\n"
-            "- For anything beyond the sessions shown here, use the "
-            "`recall-conversations` skill rather than guessing."
+            "- For anything beyond the sessions shown here, invoke the "
+            "`claude-memory:recall-conversations` skill via the Skill tool rather than guessing."
         )
 
         # Wrap in directive + origin block + session content

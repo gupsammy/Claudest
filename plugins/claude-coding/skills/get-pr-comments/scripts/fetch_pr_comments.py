@@ -115,7 +115,6 @@ def fetch_inline_comments(pr_number: int, repo: str | None) -> list[dict]:
             "commit_id": c.get("commit_id", ""),
         }
         for c in items
-        if c.get("position") is not None
     ]
 
 
@@ -138,9 +137,12 @@ INLINE_SEVERITY_PATTERNS = [
     (re.compile(r"!\[P1[^\]]*\]", re.IGNORECASE), "must_fix"),
     (re.compile(r"\*\*P1\*\*", re.IGNORECASE), "must_fix"),
     (re.compile(r"\bmust[- ]fix\b|\bblocking\b|\bcritical\b|\brequired\b", re.IGNORECASE), "must_fix"),
+    (re.compile(r"🔴|🟠"), "must_fix"),
     (re.compile(r"!\[P2[^\]]*\]", re.IGNORECASE), "optional"),
     (re.compile(r"\*\*P2\*\*", re.IGNORECASE), "optional"),
     (re.compile(r"\boptional\b|\bsuggestion\b|\bnit\b|\bminor\b|\bnon-blocking\b", re.IGNORECASE), "optional"),
+    (re.compile(r"🟡\s*STILL OPEN", re.IGNORECASE), "optional"),
+    (re.compile(r"🟢"), "optional"),
 ]
 
 
@@ -164,6 +166,68 @@ def _extract_section_key(section: str) -> str:
         if line and not line.startswith("#"):
             return _normalize_key(line[:80])
     return _normalize_key(section[:80])
+
+
+# Emoji markers used by claude[bot] and similar review bots.
+_EMOJI_MUST_FIX = re.compile(r"^(🔴|🟠)", re.MULTILINE)
+_EMOJI_OPTIONAL_OPEN = re.compile(r"^🟡\s*STILL OPEN", re.MULTILINE | re.IGNORECASE)
+_EMOJI_OPTIONAL_NEW = re.compile(r"^🟢", re.MULTILINE)
+_EMOJI_RESOLVED = re.compile(r"^✅\s*RESOLVED", re.MULTILINE | re.IGNORECASE)
+# Any emoji marker line (used to detect the boundary of the current item)
+_EMOJI_MARKER = re.compile(r"^(🔴|🟠|🟡|🟢|✅)", re.MULTILINE)
+# Section header or horizontal rule — also terminates an emoji item
+_SECTION_BREAK = re.compile(r"^(#{1,3}\s|---+\s*$)", re.MULTILINE)
+
+
+def _extract_emoji_items(body: str) -> dict:
+    """Extract actionable items denoted by leading emoji markers.
+
+    Scans line-by-line for lines beginning with a recognised emoji prefix.
+    Accumulates subsequent lines as the item body until the next emoji marker
+    or a section break (header / horizontal rule). Returns a dict with
+    ``must_fix`` and ``optional`` lists; resolved items (✅) are skipped.
+    """
+    items: dict[str, list[str]] = {"must_fix": [], "optional": []}
+
+    lines = body.splitlines()
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        stripped = line.strip()
+
+        # Determine severity from the opening emoji
+        if _EMOJI_MUST_FIX.match(stripped):
+            severity = "must_fix"
+        elif _EMOJI_OPTIONAL_OPEN.match(stripped) or _EMOJI_OPTIONAL_NEW.match(stripped):
+            severity = "optional"
+        elif _EMOJI_RESOLVED.match(stripped):
+            # Skip resolved items — advance past their body
+            i += 1
+            while i < len(lines):
+                next_stripped = lines[i].strip()
+                if _EMOJI_MARKER.match(next_stripped) or _SECTION_BREAK.match(next_stripped):
+                    break
+                i += 1
+            continue
+        else:
+            i += 1
+            continue
+
+        # Collect the marker line plus continuation lines
+        item_lines = [stripped]
+        i += 1
+        while i < len(lines):
+            next_stripped = lines[i].strip()
+            if _EMOJI_MARKER.match(next_stripped) or _SECTION_BREAK.match(next_stripped):
+                break
+            item_lines.append(next_stripped)
+            i += 1
+
+        item_text = "\n".join(ln for ln in item_lines if ln)
+        if item_text:
+            items[severity].append(item_text)
+
+    return items
 
 
 def extract_sections(body: str) -> dict:
@@ -195,6 +259,11 @@ def extract_sections(body: str) -> dict:
             sections["must_fix"].append(part_stripped)
         elif is_optional:
             sections["optional"].append(part_stripped)
+
+    # Also extract emoji-prefixed items (e.g. from claude[bot] structured reviews)
+    emoji_items = _extract_emoji_items(body)
+    sections["must_fix"].extend(emoji_items["must_fix"])
+    sections["optional"].extend(emoji_items["optional"])
 
     return sections
 
@@ -349,7 +418,7 @@ def build_result(pr_number: int, repo: str | None) -> dict:
     }
 
 
-BOT_BODY_LIMIT = 300  # max chars for bot comment bodies
+BOT_BODY_LIMIT = 3000  # max chars for bot comment bodies
 
 
 def _short_date(ts: str) -> str:

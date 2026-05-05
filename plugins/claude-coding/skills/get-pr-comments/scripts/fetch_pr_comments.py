@@ -169,14 +169,14 @@ def _extract_section_key(section: str) -> str:
 
 
 # Emoji markers used by claude[bot] and similar review bots.
-_EMOJI_MUST_FIX = re.compile(r"^(🔴|🟠)", re.MULTILINE)
-_EMOJI_OPTIONAL_OPEN = re.compile(r"^🟡\s*STILL OPEN", re.MULTILINE | re.IGNORECASE)
-_EMOJI_OPTIONAL_NEW = re.compile(r"^🟢", re.MULTILINE)
-_EMOJI_RESOLVED = re.compile(r"^✅\s*RESOLVED", re.MULTILINE | re.IGNORECASE)
+_EMOJI_MUST_FIX = re.compile(r"^(🔴|🟠)")
+_EMOJI_OPTIONAL_OPEN = re.compile(r"^🟡\s*STILL OPEN", re.IGNORECASE)
+_EMOJI_OPTIONAL_NEW = re.compile(r"^🟢")
+_EMOJI_RESOLVED = re.compile(r"^✅\s*RESOLVED", re.IGNORECASE)
 # Any emoji marker line (used to detect the boundary of the current item)
-_EMOJI_MARKER = re.compile(r"^(🔴|🟠|🟡|🟢|✅)", re.MULTILINE)
+_EMOJI_MARKER = re.compile(r"^(🔴|🟠|🟡|🟢|✅)")
 # Section header or horizontal rule — also terminates an emoji item
-_SECTION_BREAK = re.compile(r"^(#{1,3}\s|---+\s*$)", re.MULTILINE)
+_SECTION_BREAK = re.compile(r"^(#{1,3}\s|---+\s*$)")
 
 
 def _extract_emoji_items(body: str) -> dict:

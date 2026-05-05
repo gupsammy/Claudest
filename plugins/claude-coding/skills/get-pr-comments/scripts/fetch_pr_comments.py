@@ -180,13 +180,8 @@ _SECTION_BREAK = re.compile(r"^(#{1,3}\s|---+\s*$)", re.MULTILINE)
 
 
 def _extract_emoji_items(body: str) -> dict:
-    """Extract actionable items denoted by leading emoji markers.
-
-    Scans line-by-line for lines beginning with a recognised emoji prefix.
-    Accumulates subsequent lines as the item body until the next emoji marker
-    or a section break (header / horizontal rule). Returns a dict with
-    ``must_fix`` and ``optional`` lists; resolved items (✅) are skipped.
-    """
+def _extract_emoji_items(body: str) -> dict[str, list[str]]:
+    """Extract must_fix/optional items from leading emoji markers; skips ✅ RESOLVED."""
     items: dict[str, list[str]] = {"must_fix": [], "optional": []}
 
     lines = body.splitlines()

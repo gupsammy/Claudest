@@ -133,17 +133,18 @@ Do not proceed past this point until the user has run `/install-github-app`.
 
 For each `.yml` found, classify:
 - **Broken default**: Uses `anthropics/claude-code-action@v1`, all permissions are `read`, no `prompt` or `claude_args` configured — this is the vanilla skeleton installed by `/install-github-app`. Flag it prominently.
-- **Upgradeable**: An existing Claude Code workflow that works but uses outdated patterns (checkout@v4, generic prompt, missing `track_progress`, permissions too broad or too narrow, missing `Install Claude Code` step before `anthropics/claude-code-action@v1`). Note what needs updating. **Missing the install step is a required fix** — without it the action will break on any runner using the new `claude-agent-sdk`-based action architecture.
+- **Broken**: Uses `anthropics/claude-code-action@v1` but either (a) has no `Install Claude Code` step before the action, or (b) has the step but the `run` line is `npm install -g @anthropic-ai/claude-code` without `mkdir -p ~/.local/bin &&` as a prefix. Either condition means the workflow silently fails on every run — the action hardcodes `~/.local/bin/claude` as the binary location, and that directory is absent on fresh runners. Flag as critical and require a fix.
+- **Upgradeable**: An existing Claude Code workflow that works but uses outdated patterns (checkout@v4, generic prompt, missing `track_progress`, permissions too broad or too narrow). Note what needs updating.
 - **Existing Claude Code workflow**: Already correctly configured for a specific purpose. Note what it covers and its filename.
 - **Other CI**: Present but unrelated to Claude Code. Note as present, no action needed.
 
 ### Step 2 — Present Adaptive Menu
 
 Tell the user:
-1. What was found (existing workflows, broken defaults, upgradeable workflows)
+1. What was found (existing workflows, broken defaults, broken workflows, upgradeable workflows)
 2. What Claude Code workflow types are missing
 
-If a broken default is detected, surface it first — it is the highest priority fix.
+If a broken default or broken workflow is detected, surface it first — these are the highest priority fixes and must be resolved before the workflow can run.
 If upgradeable workflows are detected, surface them second with a summary of what would change.
 
 Use AskUserQuestion (multiSelect) to let the user pick which workflows to set up. Offer only what is NOT already correctly configured:
@@ -199,7 +200,7 @@ jobs:
           fetch-depth: <1 for read-only workflows, 0 for workflows that create branches or need full history>
 
       - name: Install Claude Code
-        run: npm install -g @anthropic-ai/claude-code
+        run: mkdir -p ~/.local/bin && npm install -g @anthropic-ai/claude-code
 
       - name: <Action Name>
         uses: anthropics/claude-code-action@v1
@@ -251,7 +252,7 @@ jobs:
             return { failedJobs: failedJobs.map(j => j.name), logs };
 
       - name: Install Claude Code
-        run: npm install -g @anthropic-ai/claude-code
+        run: mkdir -p ~/.local/bin && npm install -g @anthropic-ai/claude-code
 
       - name: Fix CI failures with Claude
         uses: anthropics/claude-code-action@v1

@@ -24,7 +24,7 @@ jobs:
           fetch-depth: 1
 
       - name: Install Claude Code
-        run: npm install -g @anthropic-ai/claude-code
+        run: mkdir -p ~/.local/bin && npm install -g @anthropic-ai/claude-code
 
       - name: Run Claude Code Review
         id: claude-review

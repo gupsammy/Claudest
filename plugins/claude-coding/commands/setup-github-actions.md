@@ -134,7 +134,7 @@ Do not proceed past this point until the user has run `/install-github-app`.
 For each `.yml` found, classify:
 - **Broken default**: Uses `anthropics/claude-code-action@v1`, all permissions are `read`, no `prompt` or `claude_args` configured — this is the vanilla skeleton installed by `/install-github-app`. Flag it prominently.
 - **Broken**: Uses `anthropics/claude-code-action@v1` but either (a) has no `Install Claude Code` step before the action, or (b) has the step but the `run` line is `npm install -g @anthropic-ai/claude-code` without `mkdir -p ~/.local/bin &&` as a prefix. Either condition means the workflow silently fails on every run — the action hardcodes `~/.local/bin/claude` as the binary location, and that directory is absent on fresh runners. Flag as critical and require a fix.
-- **Upgradeable**: An existing Claude Code workflow that works but uses outdated patterns (checkout@v4, generic prompt, missing `track_progress`, permissions too broad or too narrow). Note what needs updating.
+- **Upgradeable**: An existing Claude Code workflow that works but uses outdated patterns (checkout@v4, generic prompt, missing `track_progress`, permissions too broad or too narrow, no `--model` in `claude_args`). Note what needs updating. Missing `--model` means the action uses its own default, which may change across releases — add `--model sonnet` to pin the family (resolves to latest Sonnet).
 - **Existing Claude Code workflow**: Already correctly configured for a specific purpose. Note what it covers and its filename.
 - **Other CI**: Present but unrelated to Claude Code. Note as present, no action needed.
 
@@ -210,6 +210,7 @@ jobs:
           prompt: |
             <prompt — use project-customized 4-phase structure for review workflows>
           claude_args: |
+            --model sonnet
             --allowedTools "<minimum capability-scoped tools>"
 ```
 
@@ -264,6 +265,9 @@ jobs:
             Failed jobs: ${{ join(fromJSON(steps.failure_details.outputs.result).failedJobs, ', ') }}
             Error logs: ${{ toJSON(fromJSON(steps.failure_details.outputs.result).logs) }}
             <...project-specific fix instructions...>
+          claude_args: |
+            --model sonnet
+            --allowedTools "<minimum capability-scoped tools>"
 ```
 
 **Test failure analysis** — Instruct Claude to output a classification keyword on its own line for simple conditional branching:

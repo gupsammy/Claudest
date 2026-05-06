@@ -37,4 +37,5 @@ jobs:
                triage comment categorizing the issue and noting what additional information would help
                resolve it. Do not create new labels.
           claude_args: |
+            --model sonnet
             --allowedTools "Bash(gh issue view:*),Bash(gh issue list:*),Bash(gh issue edit:*),Bash(gh label:*),Read,Glob"

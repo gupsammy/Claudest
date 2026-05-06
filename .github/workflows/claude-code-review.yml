@@ -76,4 +76,5 @@ jobs:
             Post inline comments on specific lines where issues are found. End with a top-level PR comment
             summarizing: what looks good, what must be fixed before merge, and any optional suggestions.
           claude_args: |
+            --model sonnet
             --allowedTools "Read,Glob,Grep,Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr comment:*),mcp__github_inline_comment__create_inline_comment"

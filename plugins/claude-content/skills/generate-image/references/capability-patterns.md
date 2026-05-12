@@ -123,8 +123,8 @@ The base image matters as much as the prompt. Choose bases where:
 Use the reference block to label the image's role. Do not describe the garment's color, cut, or texture in the directive — those come from the reference image. The directive should only specify: what to change, what to keep, and the relationship between images.
 
 ```
-Image 2: Reference shirt - women's linen blouse
 Image 1: Base scene - storefront with mannequin to preserve
+Image 2: Reference shirt - women's linen blouse
 
 Replace only the shirt on the mannequin with the blouse from the reference.
 Preserve the authentic linen texture with natural drape.

@@ -34,17 +34,17 @@ Good: "Replace the clothing with the white linen button-up shirt and camel
 Start multi-image edit prompts with a reference block that explicitly labels what each image represents. This disambiguates image roles before the directive.
 
 ```
-Image 3: [role/description]
-Image 2: [role/description]
-Image 1: [role/description]
+Image 1: [base — canvas being edited]
+Image 2: [reference role/description]
+Image 3: [reference role/description]
 
 [Main directive]
 ```
 
 Example:
 ```
-Image 2: Reference outfit - white linen shirt and camel trousers
 Image 1: Base scene - woman on street to preserve
+Image 2: Reference outfit - white linen shirt and camel trousers
 
 Replace only the clothing with the white linen shirt and camel trousers.
 Keep her exact pose, facial features, and the street background unchanged.
@@ -72,13 +72,15 @@ Sentence order affects spatial placement. The element mentioned last in a spatia
 
 ## Image Ordering & Numbering
 
-Base image (the canvas being edited) goes last in the `--input` list. Gemini numbers images in reverse from input order:
+Base image (the canvas being edited) goes **first** in the `--input` list — it becomes Image 1 in the prompt, the most natural labeling. Reference images follow in order:
 
 ```
---input ref_a.jpg    -> image 3 in prompt
---input ref_b.jpg    -> image 2 in prompt
---input base.jpg     -> image 1 in prompt
+--input base.jpg     -> Image 1 in prompt
+--input ref_a.jpg    -> Image 2 in prompt
+--input ref_b.jpg    -> Image 3 in prompt
 ```
+
+Aspect-ratio auto-detection reads from the first input (the base), so the output matches your canvas without needing `--aspect`. Label your reference block to match input order exactly — mismatched labels cause role confusion and character drift even when the directive is otherwise correct.
 
 ---
 

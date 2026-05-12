@@ -76,7 +76,7 @@ Load the relevant reference during prompt crafting (workflow step 2):
 
 ### Key Principles
 
-Editing prompts direct changes rather than describing scenes. Point to what the model can see; describe only what it cannot. Base image goes last in `--input`; Gemini numbers images in reverse order.
+Editing prompts direct changes rather than describing scenes. Point to what the model can see; describe only what it cannot. Base image goes first in `--input` — it becomes Image 1 in the prompt. Gemini numbers images sequentially from input order. Reference block labels must match input order exactly.
 
 Names invoke aesthetics directly — referencing "shot on Kodak Portra 400" produces its characteristic look more reliably than describing warm skin tones and pastel highlights.
 
@@ -109,7 +109,7 @@ Default to Nano Banana for most requests. Use Nano Banana Pro when the user expl
 - **2K** (~2048px) — high quality
 - **4K** (~4096px) — maximum detail
 
-**Defaults**: 1K resolution, batch 1, aspect ratio auto-detected from last reference image (or 1:1 if no images). Use 0.5K for quick previews and iteration (Nano Banana only). Use 2K for higher quality requests, 4K only when high detail is explicitly needed.
+**Defaults**: 1K resolution, batch 1, aspect ratio auto-detected from base image (first input, or 1:1 if no images). Use 0.5K for quick previews and iteration (Nano Banana only). Use 2K for higher quality requests, 4K only when high detail is explicitly needed.
 
 ### Thinking Mode (Nano Banana only)
 
@@ -180,7 +180,8 @@ The script auto-detects resolution and aspect ratio from input images when flags
 - [ ] Reference block at start of prompt labeling each image's role?
 - [ ] Prompt directs rather than describes?
 - [ ] Each directive (replace/match/keep) is its own sentence?
-- [ ] Base image is last in `--input` list?
+- [ ] Base image is first in `--input` list (Image 1)?
+- [ ] Prompt image labels match input order? (base = Image 1 = first input, references numbered after — mislabeled roles cause character drift)
 - [ ] When extracting/transferring elements: explicitly named each element rather than generic "outfit/object from image X"?
 - [ ] No color labels competing with reference image? (color words override visual reference — see editing-guide)
 - [ ] Base image has minimal accessories that could contaminate? (bags, hats, sunglasses bleed into output)

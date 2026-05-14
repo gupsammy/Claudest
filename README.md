@@ -77,7 +77,7 @@ brew install bird            # X / Twitter
 
 <a id="claude-coding"></a>
 
-### 💻 claude-coding &nbsp; ![v0.2.51](https://img.shields.io/badge/v0.2.51-blue?style=flat-square)
+### 💻 claude-coding &nbsp; ![v0.2.52](https://img.shields.io/badge/v0.2.52-blue?style=flat-square)
 
 Coding workflow skills for Claude Code. Nine skills and two agents covering the commit loop, project maintenance, documentation, and code quality.
 
@@ -137,7 +137,7 @@ Structured thinking and multi-perspective deliberation tools for Claude Code.
 
 <a id="claude-content"></a>
 
-### 🎬 claude-content &nbsp; ![v0.4.9](https://img.shields.io/badge/v0.4.9-blue?style=flat-square)
+### 🎬 claude-content &nbsp; ![v0.4.12](https://img.shields.io/badge/v0.4.12-blue?style=flat-square)
 
 Content creation and processing tools for Claude Code. Image generation and the full video/audio manipulation workflow.
 

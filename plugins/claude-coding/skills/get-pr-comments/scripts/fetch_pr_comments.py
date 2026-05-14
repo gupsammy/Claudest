@@ -179,7 +179,6 @@ _EMOJI_MARKER = re.compile(r"^(🔴|🟠|🟡|🟢|✅)")
 _SECTION_BREAK = re.compile(r"^(#{1,3}\s|---+\s*$)")
 
 
-def _extract_emoji_items(body: str) -> dict:
 def _extract_emoji_items(body: str) -> dict[str, list[str]]:
     """Extract must_fix/optional items from leading emoji markers; skips ✅ RESOLVED."""
     items: dict[str, list[str]] = {"must_fix": [], "optional": []}

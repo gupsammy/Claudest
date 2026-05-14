@@ -59,6 +59,8 @@ Exit codes:
     2 - Environment error (missing API key)
 """
 
+from __future__ import annotations
+
 import argparse
 import asyncio
 import json
@@ -639,15 +641,15 @@ def main():
                 print(f"Error loading {img_path}: {e}", file=sys.stderr)
                 sys.exit(1)
 
-    # Auto-detect aspect ratio from last reference image if not specified
+    # Auto-detect aspect ratio from base image (first input) if not specified
     if args.aspect:
         if not args.quiet:
             print(f"Aspect ratio: {args.aspect}")
     elif input_images:
-        last_img = input_images[-1]
-        args.aspect = get_closest_aspect_ratio(last_img.width, last_img.height, model=args.model)
+        base_img = input_images[0]
+        args.aspect = get_closest_aspect_ratio(base_img.width, base_img.height, model=args.model)
         if not args.quiet:
-            print(f"Auto aspect ratio: {args.aspect} (from last reference image)")
+            print(f"Auto aspect ratio: {args.aspect} (from base image)")
     else:
         args.aspect = "1:1"
         if not args.quiet:

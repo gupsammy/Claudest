@@ -59,6 +59,8 @@ Exit codes:
     2 - Environment error (missing API key)
 """
 
+from __future__ import annotations
+
 import argparse
 import asyncio
 import json

@@ -6,10 +6,7 @@ description: >
   these images", "make a sticker", "product mockup", "use nano banana",
   or any image creation/manipulation request. Covers t2i, i2i, and
   multi-reference composition. Not for HTML/CSS mockups, data
-  visualizations, diagrams, or coded UI components. Make sure to use
-  this skill whenever the user mentions images, pictures, logos, mockups,
-  illustrations, or visual content — even if they don't explicitly say
-  "generate" or "generate-image".
+  visualizations, diagrams, or coded UI components.
 allowed-tools:
   - Bash(uv:*)
   - Read

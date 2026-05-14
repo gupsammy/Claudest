@@ -120,15 +120,13 @@ The base image matters as much as the prompt. Choose bases where:
 
 ### Garment Swap Prompts
 
-Use the reference block to label the image's role. Do not describe the garment's color, cut, or texture in the directive — those come from the reference image. The directive should only specify: what to change, what to keep, and the relationship between images.
+Use the reference block to label the image's role. Do not describe the garment's color, cut, or texture in the directive — those come from the reference image.
 
 ```
-Image 1: Base scene - storefront with mannequin to preserve
-Image 2: Reference shirt - women's linen blouse
+Image 1: Base scene
+Image 2: Reference shirt
 
-Replace only the shirt on the mannequin with the blouse from the reference.
-Preserve the authentic linen texture with natural drape.
-Keep the mannequin, store interior, and everything else exactly the same.
+Replace only the shirt on the mannequin with the blouse from Image 2. Do not change anything else.
 ```
 
 ### Texture and Fabric

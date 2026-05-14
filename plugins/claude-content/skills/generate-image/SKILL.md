@@ -6,7 +6,10 @@ description: >
   these images", "make a sticker", "product mockup", "use nano banana",
   or any image creation/manipulation request. Covers t2i, i2i, and
   multi-reference composition. Not for HTML/CSS mockups, data
-  visualizations, diagrams, or coded UI components.
+  visualizations, diagrams, or coded UI components. Make sure to use
+  this skill whenever the user mentions images, pictures, logos, mockups,
+  illustrations, or visual content — even if they don't explicitly say
+  "generate" or "generate-image".
 allowed-tools:
   - Bash(uv:*)
   - Read
@@ -66,6 +69,16 @@ Editing with reference images follows different principles — see [references/e
 
 ---
 
+## Key Editing Principles
+
+Editing prompts direct changes rather than describing scenes. Point to what the model can see; describe only what it cannot. Specify intentionally — every adjective, color word, or preservation clause beyond the minimum competes with the reference image and degrades fidelity. The reliable shape is a reference block, one Replace directive, and "Do not change anything else." — details in editing-guide.md.
+
+Base image goes first in `--input` — it becomes Image 1 in the prompt. Gemini numbers images sequentially from input order. Reference block labels must match input order exactly.
+
+Names invoke aesthetics directly — referencing "shot on Kodak Portra 400" produces its characteristic look more reliably than describing warm skin tones and pastel highlights.
+
+---
+
 ## References
 
 Load the relevant reference during prompt crafting (workflow step 2):
@@ -73,12 +86,6 @@ Load the relevant reference during prompt crafting (workflow step 2):
 - [references/capability-patterns.md](references/capability-patterns.md) — mode-specific tips for photorealistic scenes, product photography, logos, stylized illustration, text rendering, and grounding
 - [references/editing-guide.md](references/editing-guide.md) — edit grammar, reference blocks, directive structure, image ordering, semantic masking, character consistency
 - [references/style-reference.md](references/style-reference.md) — named aesthetics lexicon (film stocks, cameras, studios, artists, movements)
-
-### Key Principles
-
-Editing prompts direct changes rather than describing scenes. Point to what the model can see; describe only what it cannot. Base image goes first in `--input` — it becomes Image 1 in the prompt. Gemini numbers images sequentially from input order. Reference block labels must match input order exactly.
-
-Names invoke aesthetics directly — referencing "shot on Kodak Portra 400" produces its characteristic look more reliably than describing warm skin tones and pastel highlights.
 
 ---
 
@@ -151,7 +158,7 @@ uv run ${CLAUDE_PLUGIN_ROOT}/skills/generate-image/scripts/generate.py --prompt 
 | `--output` | `-o` | Output file path (required) |
 | `--input` | `-i` | Input image(s) for editing/composition (repeatable, up to 14) |
 | `--model` | `-m` | Model: nano-banana (default) or pro |
-| `--aspect` | `-a` | Aspect ratio (auto-detects from last reference image, or 1:1) |
+| `--aspect` | `-a` | Aspect ratio (auto-detects from base image / first input, or 1:1) |
 | `--resolution` | `-r` | Output resolution: 0.5K, 1K, 2K, or 4K (default: auto-detect or 1K) |
 | `--grounding` | `-g` | Enable Google Search web grounding |
 | `--image-grounding` | | Enable image search grounding (Nano Banana only, use with --grounding) |
@@ -179,7 +186,7 @@ The script auto-detects resolution and aspect ratio from input images when flags
 **Before editing (i2i / multi-reference):**
 - [ ] Reference block at start of prompt labeling each image's role?
 - [ ] Prompt directs rather than describes?
-- [ ] Each directive (replace/match/keep) is its own sentence?
+- [ ] Minimal directive pattern? (Reference block + one Replace directive + "Do not change anything else." — no decorative preservation clauses)
 - [ ] Base image is first in `--input` list (Image 1)?
 - [ ] Prompt image labels match input order? (base = Image 1 = first input, references numbered after — mislabeled roles cause character drift)
 - [ ] When extracting/transferring elements: explicitly named each element rather than generic "outfit/object from image X"?

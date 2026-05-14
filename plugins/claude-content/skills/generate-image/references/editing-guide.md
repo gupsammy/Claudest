@@ -20,10 +20,11 @@ Good: "Replace the front figure with the woman from image 3"
 Point to reference images for elements that will be used whole (a face, a background, a scene). Explicitly name elements when extracting or transferring parts from a reference to a different context, because generic references like "outfit from image 2" don't tell the model which visual elements to isolate from surrounding context.
 
 ```
-Bad:  "Replace the clothing with the outfit from image 2"
-Good: "Replace the clothing with the white linen button-up shirt and camel
-       brown wide-leg trousers"
+Bad:    "Replace the clothing with the outfit from image 2"
+Better: "Replace the clothing with the linen button-up shirt and wide-leg trousers from image 2"
 ```
+
+Name structural attributes (garment type, cut, fabric) when extracting parts from a reference — but never colors. Structural names tell the model which elements to isolate from the reference's surrounding context; colors belong to the reference image's pixels (see *Color Labels Override Visual References* below).
 
 ---
 
@@ -41,32 +42,38 @@ Image 3: [reference role/description]
 [Main directive]
 ```
 
+Roles stay short — one phrase. Don't enumerate what the reference image contains in the label ("Image 2: Reference outfit — white linen blouse and camel trousers"). That re-describes what the pixels already show; the redundancy creates competing signals against the reference.
+
+### Minimal Directive Pattern
+
+The whole pattern:
+
+```
+[Reference block]
+
+Replace [scope] with [pointer to reference]. Do not change anything else.
+```
+
+One directive that points to the change. One stop clause that protects everything else.
+
 Example:
+
 ```
-Image 1: Base scene - woman on street to preserve
-Image 2: Reference outfit - white linen shirt and camel trousers
+Image 1: Base photograph to edit
+Image 2: Character and wardrobe reference
 
-Replace only the clothing with the white linen shirt and camel trousers.
-Keep her exact pose, facial features, and the street background unchanged.
+Replace the person in Image 1 with the woman from Image 2, wearing her exact outfit from Image 2. Do not change anything else.
 ```
 
-### Three-Sentence Directive Structure
+The directive's job is to **connect the dots** between images — name what's being swapped, point to where the replacement comes from. "Do not change anything else" carries the preservation work for everything not explicitly named. Add clauses beyond this only when the model is observably dropping a specific element you need to keep; in that case name only that single element, then stop.
 
-Each sentence has one job. Compounding directives into a single sentence dilutes each one's weight.
+**Why minimal beats verbose.** Every adjective, color word, or preservation enumeration is a degree of freedom the model reconciles against the reference image pixels. Text-vs-image conflicts get resolved by blending both signals — the result matches neither. Over-specifying what the reference already shows actively degrades fidelity. Add detail only when the model cannot infer it from the references and you have a specific outcome in mind for it.
 
-1. **Replace** (scope) — what changes
-2. **Match** (constraint) — how new elements behave
-3. **Keep** (preservation) — what stays
+**Verb choice.**
+- **Replace** anchors to the base scene (model edits in place). Use this for in-place edits.
+- **Change** allows full recomposition — use only when you want the model to consider discarding the scene.
 
-### Language Patterns
-
-Use directive verbs ("replace", "match", "keep") not passive phrasing ("should be", "could be"). Directives produce stronger adherence.
-
-"Replace" anchors to the base scene (model edits in-place). "Change" allows full recomposition (model may discard the scene). Always prefer "replace" for in-place edits.
-
-"Only" after the verb constrains scope: "replace only the front figure" is tighter than "replace the front figure."
-
-Sentence order affects spatial placement. The element mentioned last in a spatial assignment tends to get placed in the more prominent position.
+"Only" after the verb tightens scope: "replace only the front figure" beats "replace the front figure." Sentence order affects spatial placement — the element mentioned last in a spatial assignment tends to land in the more prominent position.
 
 ---
 
@@ -105,11 +112,10 @@ No manual masking needed. Language creates the edit boundary — name the elemen
 
 ```
 "Using the provided image of a living room, change only the blue sofa
-to be a vintage, brown leather chesterfield sofa. Keep the rest of the room,
-including the pillows on the sofa and the lighting, unchanged."
+to a vintage brown leather chesterfield. Do not change anything else."
 ```
 
-"Only" defines scope. The element name ("the blue sofa") defines the mask region. The preservation clause ("keep the rest...unchanged") protects everything else.
+"Only" defines scope. The element name ("the blue sofa") defines the mask region. "Do not change anything else" protects everything else.
 
 ---
 
@@ -137,7 +143,7 @@ Always edit on a base image that already has the target angle, framing, and comp
 
 ### Multi-Pass Editing
 
-The three-sentence directive structure (replace / match / keep) works for a single change. When a prompt has two competing changes — garment swap plus sign text, outfit plus accessories, subject plus background — the model compromises on one.
+The minimal directive pattern (one Replace + "Do not change anything else.") works for a single change. When a prompt has two competing changes — garment swap plus sign text, outfit plus accessories, subject plus background — the model compromises on one.
 
 Split into sequential passes: one change per generation call. Pattern for element replacement with correct proportions:
 

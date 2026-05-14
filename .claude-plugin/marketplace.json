@@ -44,7 +44,7 @@
     {
       "name": "claude-content",
       "description": "Content creation skills: image generation, video compression, conversion, GIF creation, social media formatting, and audio extraction",
-      "version": "0.4.10",
+      "version": "0.4.11",
       "source": "./plugins/claude-content"
     },
     {

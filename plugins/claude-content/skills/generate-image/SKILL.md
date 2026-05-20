@@ -1,13 +1,9 @@
 ---
 name: generate-image
 description: >
-  This skill should be used when the user asks to "generate an image",
-  "create a picture", "make me a logo", "edit this image", "combine
-  these images", "make a sticker", "product mockup", "use nano banana",
-  or any image creation/manipulation request. Covers t2i, i2i, and
-  multi-reference composition end-to-end via the generate.py script.
-  Not for HTML/CSS mockups, data visualizations, diagrams, or coded
-  UI components.
+  Use for any image creation or editing request — logo, sticker, product
+  mockup, nano banana, t2i, i2i, multi-reference compositing via generate.py.
+  Not for HTML/CSS mockups, diagrams, or coded UI.
 allowed-tools:
   - Bash(uv:*)
   - Read
@@ -19,7 +15,7 @@ Requires `GEMINI_API_KEY` environment variable and `uv` package manager.
 ## Workflow
 
 1. **Understand** — Determine mode (t2i, i2i, multi-reference), gather parameters (model, aspect ratio, resolution, output path). If the prompt requires precise execution (specific pose, asymmetric framing, exact crop), default to `--batch 3` or `--batch 4` and surface this to the user — image generation is stochastic and precise directives hit ~50% per seed. Exit: mode, parameters, and batch size are clear.
-2. **Craft prompt** — Apply the prompting principles below to write the prompt. For t2i, use narrative prose. For i2i/multi-reference, use directive grammar with reference blocks. Exit: prompt is written and follows the relevant checklist.
+2. **Craft prompt** — Default to the minimal prompt that can carry the intent: t2i uses narrative prose; i2i/multi-reference uses a reference block plus the minimal directive. Apply the **Core** checklist (always, for the matching mode). Reach into the **Escalation toolkit** only on a known-hard signature — a detail/geometry-fidelity shot — or after a batch shows drift; then add only the specific lock for the attribute that is drifting, not the whole kit. Over-constraining a simple edit degrades it as surely as under-specifying a complex one. Exit: prompt written, Core items satisfied, escalation tools added only where a signature or observed drift justifies them.
 3. **Confirm** — Show the user the exact prompt, input images (if any), model, resolution, aspect ratio, and batch size. Ask for confirmation. Exit: user approves.
 4. **Generate** — Run the script with confirmed parameters. Exit: images are saved and displayed.
 5. **Iterate** — Present results and evaluate against intent before offering refinements. Evaluation order by mode: **t2i** — subject correctness, composition, style fidelity. **i2i edit** — the changed element looks right, nothing else changed. **Multi-reference composition** — the primary transferred attribute matches its source reference FIRST (for a detail shot, the construction geometry — width, edge shape, count, angle), secondary consistency (identity, environment) holds SECOND, staging (lighting, composition, framing) THIRD. Decide what's primary per task. Cherry-pick the winning frame from the batch rather than re-prompting for consistency past ~75%. Exit: user is satisfied or moves on.
@@ -188,32 +184,35 @@ The script auto-detects resolution and aspect ratio from input images when flags
 
 ## Pre-Generation Checklist
 
-**Before generating (t2i):**
+Core items are the floor — apply them to every prompt of the matching mode. The Escalation toolkit is opt-in: skip it entirely for simple t2i and single-element edits. Reach in only on a known-hard signature (a detail/geometry-fidelity shot) or after a batch shows drift — and then add only the lock for the attribute that is actually drifting. Each added constraint costs fidelity on everything else, so escalation scales with how many independent things can drift, not with how ambitious the prompt is.
+
+### Core — t2i (always)
 - [ ] Narrative description (not keyword list)?
 - [ ] Positive framing throughout — no "no X" / "not X" / "do not X" clauses anywhere in the prompt?
 - [ ] Camera/lighting details for photorealism?
-- [ ] Text in quotes, font style described?
+- [ ] Text in quotes, font style described? (if the image has text)
 - [ ] Aspect ratio appropriate for use case?
 - [ ] Model choice appropriate? (Nano Banana default; Nano Banana Pro for max quality)
 - [ ] Thinking level set for complex prompts? (Nano Banana only)
 - [ ] Batch size matches precision needs? (`--batch 3` or `--batch 4` for precise pose / framing / asymmetric directives)
 
-**Before editing (i2i / multi-reference):**
+### Core — i2i / multi-reference (always)
 - [ ] Reference block at start of prompt labeling each image's role?
-- [ ] Prompt directs rather than describes?
+- [ ] Reference roles positive-only — lists what to USE from each ref, never what to ignore? (see editing-guide.md "Reference Block")
 - [ ] Minimal directive pattern? (Reference block + one Replace directive — no "do not change anything else" stop clause, no decorative preservation clauses)
-- [ ] Reference role scoping is positive-only? (lists what to USE from each ref, never what to ignore — see editing-guide.md "Reference Block")
-- [ ] Positive framing throughout the directive? (no negation in critical sections, geometry locks, or composition locks)
-- [ ] For 3+ references, using per-reference role assignment? (one sentence assigning each image its contribution — see editing-guide.md "Per-Reference Role Assignment")
-- [ ] For Nano Banana + thinking high with 3+ references, included the inventory preamble? ("Silently inventory the design-critical details: ...")
-- [ ] Base image is first in `--input` list (Image 1)?
-- [ ] Prompt image labels match input order? (base = Image 1 = first input, references numbered after — mislabeled roles cause character drift)
+- [ ] Positive framing throughout the directive? (no negation anywhere, including locks and composition clauses)
+- [ ] Base image first in `--input` (Image 1), and prompt labels match input order? (mislabeled roles cause character drift)
+- [ ] Only one change per prompt? (split competing directives into sequential passes)
 - [ ] When extracting/transferring elements: explicitly named each element rather than generic "outfit/object from image X"?
 - [ ] No color labels competing with reference image? (color words override visual reference — see editing-guide)
 - [ ] Base image has minimal accessories that could contaminate? (bags, hats, sunglasses bleed into output)
-- [ ] Only one change per prompt? (split competing directives into sequential passes)
 - [ ] Reference count within model limits? (Nano Banana: 14, Nano Banana Pro: 11)
-- [ ] For complex/multi-reference shots: locked each *drifting* attribute in its own `## CRITICAL —` section (identity, skin & finish, lighting/color, geometry, orientation), without over-constraining the stable ones? (see editing-guide.md "Constraint Locking with CRITICAL Sections")
-- [ ] For photorealistic human shots: skin & finish locked? (generative skin drifts to plastic/retouched — a near-universal lock)
-- [ ] For detail shots: geometry locked via per-attribute enumeration, not generic "match exactly"? (see capability-patterns.md "Geometry Lock for Detail Shots")
-- [ ] For follow-up shots from the same set: continuity assertion included? ("from the same set as Image N: same subject, same setting, same light" — see editing-guide.md "Continuity Assertion")
+- [ ] For 3+ references: per-reference role-assignment sentence? (one sentence assigning each image its contribution — see editing-guide.md "Per-Reference Role Assignment")
+- [ ] For photorealistic human shots: skin & finish locked? (the one near-universal CRITICAL section — generative skin drifts to plastic/retouched)
+
+### Escalation toolkit — reach for only on a hard signature or observed drift
+- [ ] An attribute (identity, lighting/color, orientation, drape) drifting across the batch? Lock that *specific* attribute in its own `## CRITICAL —` section, positively phrased — without over-constraining the stable ones. (see editing-guide.md "Constraint Locking with CRITICAL Sections")
+- [ ] Detail shot whose construction won't hold? Geometry lock via per-attribute enumeration, not generic "match exactly". (see capability-patterns.md "Geometry Lock for Detail Shots")
+- [ ] Nano Banana + `--thinking high` with 3+ references and weak adherence? Add the inventory preamble. ("Silently inventory the design-critical details: ...")
+- [ ] Follow-up shot from the same set? Continuity assertion. ("from the same set as Image N: same subject, same setting, same light" — see editing-guide.md "Continuity Assertion")
+- [ ] Campaign with a locked hero image? Collapse to two-input form — hero as bundle-source + the single new-attribute reference. (see editing-guide.md "Single-Reference Collapse")

@@ -129,7 +129,7 @@ When to use:
 - Nano Banana + `--thinking high` only (Pro has a fixed reasoning budget; no benefit)
 - Skip for single-reference edits (overkill) and t2i (irrelevant)
 
-Pattern:
+Prompt template (paste verbatim into your prompt):
 
 ```
 ## Reference inventory — analyze silently before generation

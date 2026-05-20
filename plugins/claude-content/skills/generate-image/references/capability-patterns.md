@@ -174,6 +174,8 @@ Settings: --model nano-banana --thinking high --resolution 2K --batch 3 --aspect
 Expected yield: 2/4 keepers (detail crops are simpler than full-body)
 ```
 
+*(Adapt directory names to your campaign layout — `final/` and `raw/` above are MaisonX conventions.)*
+
 Which reference is the bundle-source is a per-campaign choice, not a fixed rule — here it was the hero front shot. This two-input form outperformed the original six-reference setup for detail shots because there were fewer competing signals. Anchor the detail shot to the bundle-source with a continuity assertion (editing-guide.md) and lock the construction with geometry enumeration (below).
 
 ### Geometry Lock for Detail Shots

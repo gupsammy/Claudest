@@ -9,6 +9,8 @@ token-analysis-dashboard.html
 context-simulator.html
 .claude/worktrees/
 .claude/agent-memory/
+plugins/**/.claude/
+*.zip
 plugins/*/docs/
 docs/
 .obsidian/

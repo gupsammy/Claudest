@@ -58,6 +58,8 @@ Good:  "A headshot on a clean neutral gray backdrop, even soft frontal fill ligh
 
 This rule applies everywhere in the skill — t2i prompts, i2i directives, reference role descriptions, and framing instructions.
 
+**Name sources explicitly — leave no ambiguity in references.** Every element in the prompt should trace to a specific source: "the man from Image 2" not "this man"; "the shirt from Image 3" not "the shirt". Ambiguous references bind to whichever source the model weights most, which is never reliably the right one. This isn't about over-describing — don't re-describe what the reference already shows. It's about making each reference point to exactly one source.
+
 A useful formula: `[Subject] doing [Action] in [Context]. [Camera/Composition]. [Lighting]. [Style]. [Constraint].` Not every prompt needs every element — match detail to intent. If the user has a specific vision, be prescriptive (exact descriptions); if exploring, be open (general direction, let the model decide details). Ask if unclear.
 
 ### Advanced Prompting Techniques
@@ -204,6 +206,7 @@ Core items are the floor — apply them to every prompt of the matching mode. Th
 - [ ] Base image first in `--input` (Image 1), and prompt labels match input order? (mislabeled roles cause character drift)
 - [ ] Only one change per prompt? (split competing directives into sequential passes)
 - [ ] When extracting/transferring elements: explicitly named each element rather than generic "outfit/object from image X"?
+- [ ] One reference carrying an element you need to preserve while another reference could compete with it? → add `CRITICAL — [element]` proactively: assign the source reference explicitly ("Image 1 is the sole identity source. Image 2 is scoped to [attribute] only."). Do not wait for drift — role competition defeats text directives silently.
 - [ ] No color labels competing with reference image? (color words override visual reference — see editing-guide)
 - [ ] Base image has minimal accessories that could contaminate? (bags, hats, sunglasses bleed into output)
 - [ ] Reference count within model limits? (Nano Banana: 14, Nano Banana Pro: 11)

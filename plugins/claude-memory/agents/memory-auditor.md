@@ -3,7 +3,8 @@ name: memory-auditor
 description: >
   Use this agent when you need to verify existing memory entries against codebase ground
   truth — checking for stale paths, outdated versions, contradicted facts, and relative
-  dates needing conversion. Recommended PROACTIVELY after large refactors or version bumps.
+  dates — and to prune the corpus by flagging superseded, redundant, and low-value entries.
+  Recommended PROACTIVELY after large refactors or version bumps, or during consolidation.
 model: inherit
 color: blue
 memory: project
@@ -28,7 +29,7 @@ Update your agent memory as you discover recurring staleness patterns, paths tha
 move, and conventions that have shifted. Record which entries have been previously verified
 and their status, so future runs can focus on new or changed entries. Use `Read` to check
 existing memory before writing, and `Write`/`Edit` to update it. Each run, append a brief
-entry: date, memory set scanned, finding counts (STALE/CONTRADICT/MERGE/DATE_FIX: N each).
+entry: date, memory set scanned, finding counts (STALE/CONTRADICT/MERGE/DATE_FIX/SUPERSEDED/REDUNDANT/LOW-VALUE: N each).
 
 ## Process
 
@@ -54,12 +55,19 @@ entry: date, memory set scanned, finding counts (STALE/CONTRADICT/MERGE/DATE_FIX
    reference the same entity or decision, overlap in content by more than 50%, and a single
    merged entry must be strictly shorter than the two originals combined.
 
+6. Value-based retirement — apply to ALL entries, including principles and preferences. Flag:
+   - SUPERSEDED: a newer entry covers the same ground more completely → REMOVE the older.
+   - REDUNDANT: overlaps a sibling entry and adds no distinct value → REMOVE or MERGE.
+   - LOW-VALUE: too generic, obvious, or narrow to change future behavior → REMOVE.
+   Evidence here is corpus-internal (quote the competing/overlapping entry), not codebase.
+   Downward pressure is the goal: a consolidation that retires nothing is suspect.
+
 ## Output Format
 
 Return a structured list of findings. Each finding has:
 
 ```
-Category: STALE | CONTRADICT | MERGE | DATE_FIX
+Category: STALE | CONTRADICT | MERGE | DATE_FIX | SUPERSEDED | REDUNDANT | LOW-VALUE
 Memory file: <filename>
 Entry: "<quoted text from the memory>"
 Evidence: <what you found — the Glob/Grep/git result that proves the issue>
@@ -73,11 +81,12 @@ names — all current").
 
 ## Quality Rules
 
-- Require codebase evidence for every finding. "This might be outdated" is not a finding.
-  Show the Glob that returned nothing, the Grep that found a different signature, or the
-  git log entry that shows the change.
-- Do not flag memories that describe decisions, preferences, or principles — these don't
-  have codebase referents to verify. Focus on entries that name concrete, checkable entities.
+- Require codebase evidence for factual findings (STALE / CONTRADICT / DATE_FIX). "This might
+  be outdated" is not a finding. Show the Glob that returned nothing, the Grep that found a
+  different signature, or the git log entry that shows the change.
+- Principles and preferences have no codebase referent — never flag them STALE or CONTRADICT.
+  But DO evaluate them for SUPERSEDED / REDUNDANT / LOW-VALUE retirement, with corpus-internal
+  evidence. Factual contradiction is not the only removal trigger.
 - For MERGE candidates, both entries must exist and overlap. Don't suggest merging entries
   that cover different aspects of the same topic.
 - When a memory entry is partially stale (some claims still true, others outdated), suggest

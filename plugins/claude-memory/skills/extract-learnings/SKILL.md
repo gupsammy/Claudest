@@ -24,7 +24,7 @@ Weave these into conversation at natural moments — after results land, when co
 
 - Most users say "remember this" expecting a single note — this skill actually runs two parallel agents (auditor + discoverer) to both capture new knowledge and verify existing memories haven't gone stale.
 - The 5-layer memory hierarchy means the right knowledge loads at the right time — universal preferences in L0, project architecture in L1, working notes in L2 — without polluting every session with everything.
-- Consolidation ("dream") is the maintenance mode: it prunes outdated memories, promotes patterns that keep recurring, and keeps the memory index under 200 lines so it stays useful.
+- Consolidation ("dream") is the maintenance mode: it prunes outdated and low-value memories, merges overlaps, and clusters overflowing sections so the always-loaded index stays small.
 - For teams: memories captured here carry forward to every future session in this project, making onboarding and context-switching dramatically faster.
 
 ## Memory Hierarchy
@@ -33,11 +33,14 @@ Weave these into conversation at natural moments — after results land, when co
 |-------|------|--------|---------|
 | 0 | `~/.claude/CLAUDE.md` | Every session, all projects | Universal behavioral preferences |
 | 1 | `<repo>/CLAUDE.md` | Every session, this project | Architecture, conventions, gotchas |
-| 2 | `memory/MEMORY.md` (project dir) | Every session, agent-managed | Evolving notes, working knowledge |
+| 2 | `memory/MEMORY.md` (project dir) | Every session, agent-managed | Top index: working notes + pointers to clusters/topics |
+| 2c | `memory/clusters/*.md` sub-index | On-demand (after a section overflows) | Section sub-index split off MEMORY.md to cap always-loaded size |
 | 3 | `memory/*.md` topic files | On-demand | Detailed reference too long for L2 |
 | Meta | Suggest new skill/command | N/A | Repeatable workflow → automation |
 
 Placement decision: project-independent preference → L0, project-specific technical → L1, concise working note → L2, detailed reference → L3, repeatable pattern → Meta.
+
+Adaptive clustering: keep MEMORY.md flat until a section exceeds 25 entries; then move that section's pointers into `memory/clusters/<section>.md` and replace the section in MEMORY.md with a single pointer to it. Only MEMORY.md loads every session, so this caps startup cost while detail stays on-demand.
 
 ## Early Exit Guard
 
@@ -58,7 +61,7 @@ If the user said "remember X" with explicit content already in context — and t
 
 Steps 2-4 are required and run as parallel tool calls.
 
-2. Read MEMORY.md + list topic files (`Glob memory/*.md` from resolved path)
+2. Read MEMORY.md + list topic and cluster files (`Glob memory/**/*.md` from resolved path)
 3. Read both CLAUDE.md files (`~/.claude/CLAUDE.md` + `<repo>/CLAUDE.md`) — required for dedup quality; skipping means proposals may duplicate L0/L1 content
 4. `git log --oneline -20`
 5. Build context snapshot: summarize existing knowledge + list verification targets (file paths, functions, patterns named in memories)
@@ -67,7 +70,7 @@ Steps 2-4 are required and run as parallel tool calls.
 
 Launch both agent calls in a single message so they run in parallel. Use the Agent tool with:
 
-- **Memory Auditor**: `subagent_type: "claude-memory:memory-auditor"`. In the `prompt`, include the context snapshot from Phase 1 — memory file contents, git log output, and verification targets list.
+- **Memory Auditor**: `subagent_type: "claude-memory:memory-auditor"`. In the `prompt`, include the context snapshot from Phase 1 — memory file contents, git log output, and verification targets list. Instruct it to surface retirement and merge candidates (SUPERSEDED / REDUNDANT / LOW-VALUE / MERGE), not only factually stale entries — downward pressure is the point of consolidation.
 
 - **Signal Discoverer**: `subagent_type: "claude-memory:signal-discoverer"`. In the `prompt`, include existing memory summaries (for dedup) and the project name.
 
@@ -81,8 +84,8 @@ Phase 2 is complete when both agents return reports. If either returns empty or 
 
 1. Receive agent reports
 2. Deduplicate across reports and against existing memories
-3. Rank by impact, limit to 3-7 candidates
-4. For each candidate: determine target layer, target section, action (ADD / EDIT / REMOVE)
+3. Rank by impact, limit ADDs to 3-7 candidates; retirements and merges from the auditor are separate and not capped
+4. For each candidate: determine target layer, target section, action (ADD / EDIT / MERGE / REMOVE)
 5. Read target files, check for duplicates
 6. Present proposals:
    ```
@@ -93,7 +96,7 @@ Phase 2 is complete when both agents return reports. If either returns empty or 
    - <old line>
    + <new line>
    ```
-7. MEMORY.md line check — if over 170 lines, propose specific demotions to L3 or removals
+7. Consolidation pressure (every consolidation run): convert the auditor's SUPERSEDED / REDUNDANT / LOW-VALUE / MERGE findings into concrete REMOVE/MERGE proposals — a run that only adds is a failure mode. Then per-section overflow check: if any MEMORY.md section exceeds 25 entries, propose migrating it to `memory/clusters/<section>.md` and replacing the section with a single pointer (adaptive clustering)
 8. Layer 0 gate — if targeting `~/.claude/CLAUDE.md`, warn: "This modifies global instructions loaded in every session across all projects. Confirm?"
 9. AskUserQuestion: Approve all / Approve selectively / Reject
 

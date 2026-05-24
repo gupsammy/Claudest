@@ -1,3 +1,7 @@
+---
+paths:
+  - "plugins/claude-memory/**"
+---
 # claude-memory Architecture
 
 ## Hook Lifecycle

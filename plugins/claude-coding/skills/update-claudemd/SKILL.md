@@ -17,7 +17,7 @@ allowed-tools:
 
 # Update and Optimize CLAUDE.md
 
-Reconcile project CLAUDE.md and its topic files against codebase reality and git history since each file's last commit. Enforce progressive disclosure: CLAUDE.md is a top-level index of project identity, universal invariants, and pointers to topic files at `.claude/rules/*.md`.
+Reconcile project CLAUDE.md and its topic files against codebase reality and git history since each file's last commit. Enforce progressive disclosure: CLAUDE.md is a top-level index of project identity, universal invariants, and pointers to topic files at `.claude/rules/*.md`. Files in `.claude/rules/` auto-load at SessionStart unless scoped with `paths:` frontmatter — every topic file this skill writes must carry that frontmatter so it loads only when its subsystem's files are touched, not on every session.
 
 Reconciliation scope includes every file in `.claude/rules/`. Topic files are first-class content — they share the same staleness, accuracy, and duplication risks as CLAUDE.md itself and must be audited, reconciled, and (when warranted) edited during every run. They are not appendices.
 
@@ -94,7 +94,7 @@ Also scan for index drift between CLAUDE.md and the topic files directory:
 - `dangling_references` — topic files pointed at from CLAUDE.md's `## Topic Files` section but missing from disk
 - `unreferenced_topic_files` — topic files on disk with no pointer from CLAUDE.md
 
-Return: `sections[{source, name, line_count, classification_hint, promote_back_candidate}]`, `stale_items[{source, item, reason}]`, `duplications[{items, locations}]`, `existing_topic_files[{path, line_count, last_touched, subject, section_count}]`, `dangling_references[]`, `unreferenced_topic_files[]`.
+Return: `sections[{source, name, line_count, classification_hint, promote_back_candidate}]`, `stale_items[{source, item, reason}]`, `duplications[{items, locations}]`, `existing_topic_files[{path, line_count, last_touched, subject, section_count, has_paths_frontmatter}]`, `dangling_references[]`, `unreferenced_topic_files[]`.
 
 **Agent B — Git History Per File** (`subagent_type: Explore`)
 
@@ -126,6 +126,7 @@ Assign exactly one action to every section from Agent A (CLAUDE.md sections AND 
 - `promote → CLAUDE.md` — topic-file content that has become a universal invariant moves back to CLAUDE.md. Reserved for sections Agent A flagged as `promote_back_candidate` — content whose load trigger now applies to almost every task, not just one subsystem. This is the reverse of `demote` and must be used sparingly; the CLAUDE.md budget is tight
 - `move → <other-topic-file>` — topic-file content whose subject clustering changed and now belongs in a different topic file
 - `add` — new content surfaced by research that belongs in CLAUDE.md or a topic file
+- `add-paths-frontmatter → <glob>` — existing topic file lacks `paths:` frontmatter; prepend it scoped to the file's subject. Applied to every file Agent A reported with `has_paths_frontmatter: false`
 
 Address dangling-reference items from Agent A as reconciliation actions:
 - `dangling_references` — either create the missing topic file (if the referenced subject is still valid) or remove the dead pointer from CLAUDE.md
@@ -170,6 +171,7 @@ For each topic file being created:
 For each topic file being updated:
 - Path, line count: `<current> → <estimated>`
 - Keep / update / delete / promoted out / moved in — same structured breakdown as CLAUDE.md
+- Paths frontmatter: added (when `paths:` is being prepended to a file that lacked it)
 - Budget flag if over ~300 lines
 
 For each topic file being left alone: path and one-line reason (no drift detected).
@@ -188,7 +190,11 @@ Execute in this order so topic-file pointers resolve:
 
 1. Run `cp CLAUDE.md CLAUDE.md.bak` via Bash to create a backup before any writes
 2. Create `.claude/rules/` with `mkdir -p` if missing
-3. Apply topic file actions in this sub-order: delete orphaned topic files the user approved for removal, then write new topic files, then edit existing topic files (applying keep/update/delete/promoted-out/moved-in actions). Promoted-out sections are removed from the topic file in this step; they reappear in CLAUDE.md in step 4
+3. Apply topic file actions in this sub-order:
+   - Delete orphaned topic files the user approved for removal
+   - Write new topic files; each must carry `paths:` YAML frontmatter scoped to the globs its subject covers (e.g. `paths: ["plugins/*/hooks/**"]`)
+   - Edit existing topic files (applying keep/update/delete/promoted-out/moved-in actions); promoted-out sections are removed here and reappear in CLAUDE.md in step 4
+   - Backfill `paths:` frontmatter onto any existing topic file Agent A reported as missing it — without it the file auto-loads every session and defeats progressive disclosure
 4. Write CLAUDE.md with a regenerated `## Topic Files` section at the end, excluding pointers to deleted topic files. Promoted-in sections from step 3 are written as new H2 sections in the CLAUDE.md body (not inside the `## Topic Files` index block)
 
 The `## Topic Files` section is regenerated from actual disk state after step 2, not maintained manually. Each entry is a load trigger, not a descriptive link:
@@ -202,7 +208,17 @@ Read on demand — do not load preemptively.
 - `.claude/rules/hooks.md` — before editing anything in plugins/*/hooks/
 ```
 
-The load-trigger phrase is generated from the topic file's subject, not copied from a heading.
+The load-trigger phrase is generated from the topic file's subject, not copied from a heading. The same trigger drives the topic file's own `paths:` frontmatter — the glob and the pointer phrase must agree:
+
+```
+---
+paths:
+  - "plugins/*/hooks/**"
+---
+# Hooks
+```
+
+A topic file with no `paths:` frontmatter loads at every SessionStart with CLAUDE.md priority — the opposite of on-demand. Path-scoping is mandatory.
 
 Use `Edit` for targeted changes when most of CLAUDE.md is staying. Use `Write` only if more than 60% of the file is changing — at that point the document is being regenerated rather than updated.
 

@@ -51,9 +51,12 @@ entry: date, memory set scanned, finding counts (STALE/CONTRADICT/MERGE/DATE_FIX
    morning". These decay into meaninglessness. Flag each for conversion to an absolute date.
 
 5. Identify merge opportunities — memory entries that cover overlapping ground and could be
-   combined into a single, stronger entry. Merge criteria: both entries must currently exist,
-   reference the same entity or decision, overlap in content by more than 50%, and a single
-   merged entry must be strictly shorter than the two originals combined.
+   combined into a single, stronger entry. Merge criteria (ANY one triggers a candidate):
+   content overlaps more than 50%; OR the files share a slug prefix and the same subject
+   (e.g. `feedback_composite_*` all covering face-composite — a topic family is the strongest
+   merge signal, check these first); OR both reference the same entity or decision. Both
+   entries must currently exist, and the merged entry must be strictly shorter than the
+   originals combined.
 
 6. Value-based retirement — apply to ALL entries, including principles and preferences. Flag:
    - SUPERSEDED: a newer entry covers the same ground more completely → REMOVE the older.
@@ -91,6 +94,9 @@ names — all current").
   that cover different aspects of the same topic.
 - When a memory entry is partially stale (some claims still true, others outdated), suggest
   an EDIT with the corrected version, not a REMOVE.
+- Any index or cluster pointer you propose (in a Replacement) is a load trigger, not a label:
+  `**When <condition>:** <takeaway>. → [file]` for triggered knowledge, or a terse fact for
+  always-on entries. A pointer that only names a file gets ignored.
 
 ## Edge Cases
 

@@ -14,6 +14,7 @@ allowed-tools:
   - Bash(git:*)
   - Bash(find:*)
   - Bash(date:*)
+  - Bash(trash:*)
   - AskUserQuestion
   - Agent
 ---
@@ -41,6 +42,15 @@ Weave these into conversation at natural moments — after results land, when co
 Placement decision: project-independent preference → L0, project-specific technical → L1, concise working note → L2, detailed reference → L3, repeatable pattern → Meta.
 
 Adaptive clustering: keep MEMORY.md flat until a section exceeds 25 entries; then move that section's pointers into `memory/clusters/<section>.md` and replace the section in MEMORY.md with a single pointer to it. Only MEMORY.md loads every session, so this caps startup cost while detail stays on-demand.
+
+## Pointer Format
+
+Every MEMORY.md and cluster entry is a load trigger, not a label — a future session must recognize its current task in the pointer and open the file. A pointer that only names a file gets ignored, so the index loads without ever being used. Two shapes:
+
+- Triggered (default): `**When <task-condition>:** <one-line takeaway>. → [detail](file.md)`. Use whenever a sharp "when" can be written — e.g. `**When compositing a face onto a turned head:** align centers, tight ellipse. → [detail](feedback_composite_align_tight_ellipse.md)`.
+- Always-on: `<terse fact>. → [detail](file.md)`. Only for rules that apply in every relevant session (locked context, global preferences), where a condition would be fake.
+
+Choose triggered if you can name the task that should open the file; choose always-on only when the rule applies regardless of task. Cluster files carry a short always-on block at the top, then a trigger-index — every other entry is a condition pointer. Do not inline full rule bodies in a cluster; it routes to topic files, detail lives in them.
 
 ## Early Exit Guard
 
@@ -85,7 +95,7 @@ Phase 2 is complete when both agents return reports. If either returns empty or 
 1. Receive agent reports
 2. Deduplicate across reports and against existing memories
 3. Rank by impact, limit ADDs to 3-7 candidates; retirements and merges from the auditor are separate and not capped
-4. For each candidate: determine target layer, target section, action (ADD / EDIT / MERGE / REMOVE)
+4. For each candidate: determine target layer, target section, action (ADD / EDIT / MERGE / REMOVE); write every index/cluster pointer in the Pointer Format (condition-first)
 5. Read target files, check for duplicates
 6. Present proposals:
    ```
@@ -96,23 +106,31 @@ Phase 2 is complete when both agents return reports. If either returns empty or 
    - <old line>
    + <new line>
    ```
-7. Consolidation pressure (every consolidation run): convert the auditor's SUPERSEDED / REDUNDANT / LOW-VALUE / MERGE findings into concrete REMOVE/MERGE proposals — a run that only adds is a failure mode. Then per-section overflow check: if any MEMORY.md section exceeds 25 entries, propose migrating it to `memory/clusters/<section>.md` and replacing the section with a single pointer (adaptive clustering)
+7. Consolidation pressure (every consolidation run), in order: (a) convert the auditor's SUPERSEDED / REDUNDANT / LOW-VALUE / MERGE findings into concrete REMOVE/MERGE proposals — a run that only adds is a failure mode; (b) ONLY after retirements and merges are settled, run the per-section overflow check on the reduced set — if any MEMORY.md section still exceeds 25 entries, propose migrating it to `memory/clusters/<section>.md` and replacing the section with a single pointer (adaptive clustering). Clustering never runs before retirement; it must not mask removable entries. When migrating into or editing an existing cluster, extract any inline rule bodies into topic files so the cluster stays a pure trigger-index (Pointer Format) — this reshapes muddled clusters on the next run that touches them. Early-exit captures (no auditor findings) skip (a) and run (b) only if the new entry pushes a section past 25
 8. Layer 0 gate — if targeting `~/.claude/CLAUDE.md`, warn: "This modifies global instructions loaded in every session across all projects. Confirm?"
 9. AskUserQuestion: Approve all / Approve selectively / Reject
 
 ### Phase 4: Execute
 
-Apply approved edits. Output summary table:
+Apply approved edits in this order, so downward pressure actually lands:
+1. REMOVE: delete each retired topic file with `Bash: trash <path>` (trash, never rm — reversible), then remove its pointer from MEMORY.md or the cluster file.
+2. MERGE: write the merged entry, then trash the absorbed file(s) and drop their pointers.
+3. Cluster: apply approved section → `memory/clusters/<section>.md` migrations on the post-removal set.
+4. ADD / EDIT: apply remaining additions and edits, each pointer in the Pointer Format.
+
+Verify before reporting: after REMOVE/MERGE, run `Glob memory/**/*.md` and confirm each retired file is gone. Never mark a REMOVE/MERGE row "done" unless the file is verified absent — claiming a deletion that did not happen is the exact failure this guards against.
+
+Output summary table:
 
 ```
 | Learning | Action | Target | Status |
 |----------|--------|--------|--------|
 ```
 
-Only if Phase 2 agents ran (not an early-exit capture): write consolidation marker using Bash (Write tool requires prior Read and cannot create new files):
+Only if Phase 2 agents ran (not an early-exit capture): write the consolidation marker (required — a skipped marker re-fires the nudge next session):
 `Bash: date -u +%Y-%m-%dT%H:%M:%SZ > <memory-dir>/.last-consolidation`
 
-Phase 4 is complete when all approved edits are applied and the summary table is presented.
+Phase 4 is complete when all approved edits are applied, every REMOVE/MERGE is verified absent via Glob, the marker is written, and the summary table is presented.
 
 ## Content Quality Rules
 

@@ -118,7 +118,7 @@ Apply approved edits in this order, so downward pressure actually lands:
 3. Cluster: apply approved section → `memory/clusters/<section>.md` migrations on the post-removal set.
 4. ADD / EDIT: apply remaining additions and edits, each pointer in the Pointer Format.
 
-Verify before reporting: after REMOVE/MERGE, run `Glob memory/**/*.md` and confirm each retired file is gone. Never mark a REMOVE/MERGE row "done" unless the file is verified absent — claiming a deletion that did not happen is the exact failure this guards against.
+Verify before reporting: after REMOVE/MERGE, run `Glob memory/**/*.md` from resolved path and confirm each retired file is gone. Never mark a REMOVE/MERGE row "done" unless the file is verified absent — claiming a deletion that did not happen is the exact failure this guards against.
 
 Output summary table:
 
@@ -127,7 +127,7 @@ Output summary table:
 |----------|--------|--------|--------|
 ```
 
-Only if Phase 2 agents ran (not an early-exit capture): write the consolidation marker (required — a skipped marker re-fires the nudge next session):
+Only if Phase 2 agents ran (not an early-exit capture): write the consolidation marker (required — a skipped marker re-fires the nudge next session). Use Bash, not Write — Write requires a prior Read and cannot create a new file:
 `Bash: date -u +%Y-%m-%dT%H:%M:%SZ > <memory-dir>/.last-consolidation`
 
 Phase 4 is complete when all approved edits are applied, every REMOVE/MERGE is verified absent via Glob, the marker is written, and the summary table is presented.

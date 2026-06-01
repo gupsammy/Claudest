@@ -192,7 +192,7 @@ Execute in this order so topic-file pointers resolve:
 2. Create `.claude/rules/` with `mkdir -p` if missing
 3. Apply topic file actions in this sub-order:
    - Delete orphaned topic files the user approved for removal
-   - Write new topic files; each must carry `paths:` YAML frontmatter scoped to the globs its subject covers (e.g. `paths: ["plugins/*/hooks/**"]`)
+   - Write new topic files; each must carry `paths:` YAML frontmatter scoped to the globs its subject covers, as a block sequence (the full example below shows the shape)
    - Edit existing topic files (applying keep/update/delete/promoted-out/moved-in actions); promoted-out sections are removed here and reappear in CLAUDE.md in step 4
    - Backfill `paths:` frontmatter onto any existing topic file Agent A reported as missing it — without it the file auto-loads every session and defeats progressive disclosure
 4. Write CLAUDE.md with a regenerated `## Topic Files` section at the end, excluding pointers to deleted topic files. Promoted-in sections from step 3 are written as new H2 sections in the CLAUDE.md body (not inside the `## Topic Files` index block)

@@ -74,8 +74,8 @@ from pathlib import Path
 # --- Model registry ---
 
 MODELS = {
-    "nano-banana": "gemini-3.1-flash-image-preview",
-    "pro": "gemini-3-pro-image-preview",
+    "nano-banana": "gemini-3.1-flash-image",
+    "pro": "gemini-3-pro-image",
 }
 MODEL_DISPLAY = {
     "nano-banana": "Nano Banana",

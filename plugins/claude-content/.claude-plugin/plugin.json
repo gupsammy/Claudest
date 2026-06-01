@@ -1,6 +1,6 @@
 {
   "name": "claude-content",
-  "version": "0.4.15",
+  "version": "0.4.16",
   "description": "Content creation skills: image generation, video compression, conversion, GIF creation, social media formatting, audio extraction, and shot frame extraction",
   "author": {
     "name": "Samarth Gupta"

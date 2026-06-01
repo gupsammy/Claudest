@@ -8,7 +8,7 @@
     {
       "name": "claude-memory",
       "description": "Searchable conversation memory with full-text search",
-      "version": "0.8.101",
+      "version": "0.8.104",
       "source": "./plugins/claude-memory"
     },
     {
@@ -32,7 +32,7 @@
     {
       "name": "claude-coding",
       "description": "Coding workflow skills: intelligent commits, push & PR, branch cleanup, CLAUDE.md maintenance, README generation, changelog creation, README updating, and GitHub Actions setup",
-      "version": "0.2.53",
+      "version": "0.2.55",
       "source": "./plugins/claude-coding"
     },
     {

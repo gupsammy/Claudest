@@ -94,6 +94,12 @@ patterns already captured in existing memories").
   Only surface project-specific or user-specific knowledge.
 - When in doubt about whether something is NOISE or FILL_GAP, ask: "Would knowing this
   change how Claude behaves in a future session?" If no, it's noise.
+- Raise the bar as the corpus matures. A healthy memory set yields few or zero new candidates
+  — returning 0 is a valid, valuable result, not a failure. Do the dedup and ranking yourself;
+  never pad the list or hand back near-duplicates for the caller to filter.
+- Supply each entry's index pointer as a load trigger: `**When <condition>:** <takeaway>.` for
+  triggered knowledge, or a terse fact for always-on knowledge. The condition is what makes a
+  future session open the file; a bare topic name gets ignored.
 
 ## Edge Cases
 

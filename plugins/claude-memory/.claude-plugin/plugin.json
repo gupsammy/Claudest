@@ -1,7 +1,7 @@
 {
   "name": "claude-memory",
   "description": "Searchable conversation memory - auto-syncs sessions to SQLite with full-text search",
-  "version": "0.8.105",
+  "version": "0.8.106",
   "author": {
     "name": "Samarth Gupta"
   },

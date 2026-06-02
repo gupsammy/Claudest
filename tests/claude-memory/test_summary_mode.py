@@ -420,3 +420,62 @@ class TestSearchSessionsSummaryMode:
 def _get_last_branch_id(conn: sqlite3.Connection) -> int:
     """Return the most recently inserted branch id."""
     return conn.execute("SELECT MAX(id) FROM branches").fetchone()[0]
+
+
+# ---------------------------------------------------------------------------
+# 6. Regression: unmigrated DB missing the context_summary column.
+#    Both PR reviewers flagged that an unconditional `SELECT b.context_summary`
+#    crashes a normal recall on a DB created before the migration. recall must
+#    degrade gracefully: full mode works, summary mode falls back to "".
+# ---------------------------------------------------------------------------
+
+class TestMissingContextSummaryColumn:
+    """recall must not fail with 'no such column' on a pre-migration database."""
+
+    def _seed_then_drop_column(self, conn: sqlite3.Connection) -> None:
+        proj_id = _seed_project(conn, name="oldproj")
+        sess_id = _seed_session(conn, proj_id, uuid="old-sess-1")
+        branch_id = _seed_branch(
+            conn, sess_id,
+            context_summary="will be dropped",
+            aggregated_content="legacy aggregated content",
+        )
+        _seed_message(conn, sess_id, branch_id, content="legacy message")
+        # Simulate a DB created before the context_summary migration ran.
+        conn.execute("ALTER TABLE branches DROP COLUMN context_summary")
+        conn.commit()
+
+    def test_recent_full_mode_survives_missing_column(self, memory_db: sqlite3.Connection):
+        """A normal (non-summary) recall must not crash on a pre-migration DB."""
+        self._seed_then_drop_column(memory_db)
+        results = get_recent_sessions(
+            memory_db, limit=5, sort_order="desc",
+            before=None, after=None, projects=["oldproj"],
+            verbose=False, include_notifications=False,
+        )
+        assert len(results) == 1
+        assert results[0]["messages"][0]["content"] == "legacy message"
+
+    def test_recent_summary_mode_falls_back_to_empty(self, memory_db: sqlite3.Connection):
+        """summary=True on a pre-migration DB yields '' rather than crashing."""
+        self._seed_then_drop_column(memory_db)
+        results = get_recent_sessions(
+            memory_db, limit=5, sort_order="desc",
+            before=None, after=None, projects=["oldproj"],
+            verbose=False, include_notifications=False,
+            summary=True,
+        )
+        assert len(results) == 1
+        assert results[0]["summary"] == ""
+
+    def test_search_summary_mode_survives_missing_column(self, memory_db: sqlite3.Connection):
+        """LIKE search with summary=True must not crash on a pre-migration DB."""
+        self._seed_then_drop_column(memory_db)
+        results = search_sessions(
+            memory_db, query="legacy", fts_level=None,
+            limit=5, projects=["oldproj"],
+            verbose=False, include_notifications=False,
+            summary=True,
+        )
+        assert len(results) == 1
+        assert results[0]["summary"] == ""

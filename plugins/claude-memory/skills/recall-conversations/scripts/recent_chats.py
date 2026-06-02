@@ -67,13 +67,18 @@ def get_recent_sessions(
     cursor.execute("PRAGMA table_info(branches)")
     branch_columns = {row[1] for row in cursor.fetchall()}
     has_tool_counts = "tool_counts" in branch_columns
+    has_context_summary = "context_summary" in branch_columns
 
+    # Both columns are optional: an unmigrated DB (opened before _migrate_columns
+    # ran via the import/sync path) may lack either. Gate each read on its own probe
+    # so a normal recall never fails with "no such column" on an old database.
+    context_summary_col = ", b.context_summary" if has_context_summary else ""
     tool_counts_col = ", b.tool_counts" if has_tool_counts else ""
     sql = f"""
         SELECT s.id, s.uuid, b.started_at, b.ended_at, b.exchange_count,
                b.files_modified, b.commits, s.git_branch,
                p.name as project, p.path as project_path,
-               b.id as branch_db_id, b.context_summary{tool_counts_col}
+               b.id as branch_db_id{context_summary_col}{tool_counts_col}
         FROM sessions s
         JOIN branches b ON b.session_id = s.id AND b.is_active = 1
         JOIN projects p ON s.project_id = p.id
@@ -101,15 +106,17 @@ def get_recent_sessions(
 
     results = []
     for session in sessions:
-        if has_tool_counts:
-            (_session_id, uuid, started_at, ended_at, _exchange_count,
-             files_json, commits_json, git_branch, project, _project_path,
-             branch_db_id, context_summary, tool_counts_json) = session
-        else:
-            (_session_id, uuid, started_at, ended_at, _exchange_count,
-             files_json, commits_json, git_branch, project, _project_path,
-             branch_db_id, context_summary) = session
-            tool_counts_json = None
+        # Fixed columns first, then the optional columns in SELECT order
+        # (context_summary, then tool_counts) — index-based to handle any combination.
+        (_session_id, uuid, started_at, ended_at, _exchange_count,
+         files_json, commits_json, git_branch, project, _project_path,
+         branch_db_id) = session[:11]
+        col = 11
+        context_summary = None
+        if has_context_summary:
+            context_summary = session[col]
+            col += 1
+        tool_counts_json = session[col] if has_tool_counts else None
 
         session_data = {
             "uuid": uuid,

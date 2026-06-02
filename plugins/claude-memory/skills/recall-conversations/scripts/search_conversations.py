@@ -59,6 +59,12 @@ def search_sessions(
     """Search sessions via FTS5/FTS4 (BM25-ranked when available) or LIKE fallback."""
     cursor = conn.cursor()
 
+    # context_summary is optional: an unmigrated DB may lack it. Gate the read so a
+    # normal search never fails with "no such column" on an old database.
+    cursor.execute("PRAGMA table_info(branches)")
+    has_context_summary = "context_summary" in {row[1] for row in cursor.fetchall()}
+    context_summary_col = ", b.context_summary" if has_context_summary else ""
+
     terms = query.split()
     if not terms:
         return []
@@ -72,10 +78,9 @@ def search_sessions(
             return []
         fts_query = " OR ".join(f'"{term}"' for term in sanitized_terms)
 
-        sql = """
+        sql = f"""
             SELECT s.id, s.uuid, b.started_at, b.ended_at, b.files_modified,
-                   b.commits, s.git_branch, p.name as project, b.id as branch_db_id,
-                   b.context_summary
+                   b.commits, s.git_branch, p.name as project, b.id as branch_db_id{context_summary_col}
             FROM branches_fts
             JOIN branches b ON branches_fts.rowid = b.id
             JOIN sessions s ON b.session_id = s.id
@@ -100,8 +105,7 @@ def search_sessions(
         like_clauses = " AND ".join("b.aggregated_content LIKE ?" for _ in terms)
         sql = f"""
             SELECT s.id, s.uuid, b.started_at, b.ended_at, b.files_modified,
-                   b.commits, s.git_branch, p.name as project, b.id as branch_db_id,
-                   b.context_summary
+                   b.commits, s.git_branch, p.name as project, b.id as branch_db_id{context_summary_col}
             FROM branches b
             JOIN sessions s ON b.session_id = s.id
             JOIN projects p ON s.project_id = p.id
@@ -124,7 +128,8 @@ def search_sessions(
     results = []
     for session in sessions:
         (_session_id, uuid, started_at, ended_at, files_json, commits_json,
-         git_branch, project, branch_db_id, context_summary) = session
+         git_branch, project, branch_db_id) = session[:9]
+        context_summary = session[9] if has_context_summary else None
 
         session_data = {
             "uuid": uuid,

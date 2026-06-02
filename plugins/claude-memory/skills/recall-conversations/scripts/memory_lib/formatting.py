@@ -139,12 +139,17 @@ def format_markdown_session(session: dict, verbose: bool = False) -> str:
 
 def format_json_sessions(sessions: list[dict], extra: Optional[dict] = None) -> str:
     """Format sessions as JSON with metadata."""
-    total_messages = sum(len(s.get("messages", [])) for s in sessions)
     output = {
         "sessions": sessions,
         "total_sessions": len(sessions),
-        "total_messages": total_messages
     }
+    # Summary-mode sessions carry a "summary" string instead of a "messages" list, so
+    # total_messages would always be 0 and mislead JSON consumers. Report the matching
+    # counter instead.
+    if any("summary" in s for s in sessions):
+        output["total_summaries"] = sum(1 for s in sessions if "summary" in s)
+    else:
+        output["total_messages"] = sum(len(s.get("messages", [])) for s in sessions)
     if extra:
         output.update(extra)
     return json.dumps(output, indent=2)

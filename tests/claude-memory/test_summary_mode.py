@@ -11,12 +11,13 @@ Coverage:
 
 from __future__ import annotations
 
+import json
 import sqlite3
 
 import pytest
 
 from memory_lib.cli_common import FANOUT_SUGGEST_CHARS, volume_flags, volume_signal
-from memory_lib.formatting import format_markdown_session
+from memory_lib.formatting import format_json_sessions, format_markdown_session
 from recent_chats import get_recent_sessions
 from search_conversations import search_sessions
 
@@ -479,3 +480,26 @@ class TestMissingContextSummaryColumn:
         )
         assert len(results) == 1
         assert results[0]["summary"] == ""
+
+
+# ---------------------------------------------------------------------------
+# 7. JSON session counters — summary mode must not report a misleading
+#    total_messages: 0 (it carries 'summary', not 'messages').
+# ---------------------------------------------------------------------------
+
+class TestJsonSessionCounters:
+    """format_json_sessions reports the counter that matches the retrieval mode."""
+
+    def test_full_mode_reports_total_messages(self):
+        """Full sessions report total_messages and no total_summaries key."""
+        sessions = [{"uuid": "a", "messages": [{"role": "user", "content": "hi"}]}]
+        out = json.loads(format_json_sessions(sessions))
+        assert out["total_messages"] == 1
+        assert "total_summaries" not in out
+
+    def test_summary_mode_reports_total_summaries_not_zero_messages(self):
+        """Summary sessions report total_summaries, NOT a misleading total_messages: 0."""
+        sessions = [{"uuid": "a", "summary": "s1"}, {"uuid": "b", "summary": "s2"}]
+        out = json.loads(format_json_sessions(sessions))
+        assert out["total_summaries"] == 2
+        assert "total_messages" not in out

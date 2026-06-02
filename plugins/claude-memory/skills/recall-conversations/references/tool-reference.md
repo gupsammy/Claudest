@@ -32,6 +32,8 @@ Use `--verbose` for lenses that need file/commit context (restore-context, revie
 
 Use `--summary` for broad/multi-session lenses (run-retro, find-gaps, find-antipatterns, extract-decisions) or `--all-projects` scope to keep context small. When retrieved content exceeds the volume budget, markdown mode prints an `INFO: …` signal to stderr and JSON mode adds three keys to `meta`: `content_chars`, `summary_suggested` (large full-content pull — switch to `--summary`), and `fanout_suggested` (large even after `--summary` — escalate to per-project subagent fan-out).
 
+`--summary` composes with `--verbose`: you still get the files-modified / commits / tool-counts metadata header, only the conversation body is replaced by the precomputed summary. In JSON, summary mode reports `total_summaries` instead of `total_messages`.
+
 ## search_conversations.py
 
 Search for sessions containing keywords using full-text search (FTS5/FTS4/LIKE cascade).

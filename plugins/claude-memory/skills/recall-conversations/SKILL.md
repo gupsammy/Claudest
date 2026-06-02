@@ -12,6 +12,7 @@ allowed-tools:
   - Glob
   - Bash(python3:*)
   - AskUserQuestion
+  - Agent
 ---
 
 ## Value Context
@@ -74,6 +75,13 @@ The recipe gets you the data. The lens tells you what to *look for* — for inst
 - Search supplementary terms (per-lens patterns in `references/lenses.md`)
 - Widen scope: append `--all-projects` to look across projects
 - Two rounds of deepening with no new signal → synthesize from what you have rather than thrashing further
+
+### 4. Manage volume on broad queries (high blast radius)
+
+The scripts emit full transcripts, so broad/multi-session lenses can flood context. Defend in two tiers — never trigger on session count alone; continuation-restore and specific-lookup lenses stay in-thread regardless of how many sessions match (the answer is small):
+
+1. `--summary` — append for run-retro, find-gaps, find-antipatterns, extract-decisions, or any `--all-projects`/multi-week scope. Emits precomputed per-session digests instead of full content (~3× smaller, single-pass, free). The scripts flag when to reach for it: a large full-content pull sets `summary_suggested` (JSON meta) or prints an `INFO:` line on stderr. Never use `--summary` for restore-context or specific lookups — they need exact full text.
+2. Fan out — only when even `--summary` output is still too big: `fanout_suggested` is true in JSON meta (or the stderr `INFO:` line recommends fanning out). Spawn one `Agent` per project (`subagent_type: general-purpose`, `model: sonnet`), each running the recipe scoped to its own project and returning a structured digest; then reduce. Shard by project, never by arbitrary session count — count-based splits sever a decision or antipattern thread across agents, and per-project shards preserve cross-session dedup within each mind.
 
 ---
 

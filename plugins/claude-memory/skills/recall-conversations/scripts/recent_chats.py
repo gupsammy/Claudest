@@ -18,10 +18,12 @@ import sys
 from memory_lib.cli_common import (
     add_common_args,
     emit_error,
+    emit_volume_signal,
     open_db_or_exit,
     resolve_format,
     resolve_scope,
     validate_limit,
+    volume_flags,
 )
 from memory_lib.formatting import format_markdown_session, format_json_sessions
 
@@ -57,20 +59,26 @@ def get_recent_sessions(
     projects: list[str] | None,
     verbose: bool,
     include_notifications: bool,
+    summary: bool = False,
 ) -> list[dict]:
-    """Get recent sessions with their messages."""
+    """Get recent sessions with their messages (or precomputed summaries if summary=True)."""
     cursor = conn.cursor()
 
     cursor.execute("PRAGMA table_info(branches)")
     branch_columns = {row[1] for row in cursor.fetchall()}
     has_tool_counts = "tool_counts" in branch_columns
+    has_context_summary = "context_summary" in branch_columns
 
+    # Both columns are optional: an unmigrated DB (opened before _migrate_columns
+    # ran via the import/sync path) may lack either. Gate each read on its own probe
+    # so a normal recall never fails with "no such column" on an old database.
+    context_summary_col = ", b.context_summary" if has_context_summary else ""
     tool_counts_col = ", b.tool_counts" if has_tool_counts else ""
     sql = f"""
         SELECT s.id, s.uuid, b.started_at, b.ended_at, b.exchange_count,
                b.files_modified, b.commits, s.git_branch,
                p.name as project, p.path as project_path,
-               b.id as branch_db_id{tool_counts_col}
+               b.id as branch_db_id{context_summary_col}{tool_counts_col}
         FROM sessions s
         JOIN branches b ON b.session_id = s.id AND b.is_active = 1
         JOIN projects p ON s.project_id = p.id
@@ -98,27 +106,17 @@ def get_recent_sessions(
 
     results = []
     for session in sessions:
-        if has_tool_counts:
-            (_session_id, uuid, started_at, ended_at, _exchange_count,
-             files_json, commits_json, git_branch, project, _project_path,
-             branch_db_id, tool_counts_json) = session
-        else:
-            (_session_id, uuid, started_at, ended_at, _exchange_count,
-             files_json, commits_json, git_branch, project, _project_path,
-             branch_db_id) = session
-            tool_counts_json = None
-
-        notif_clause = "" if include_notifications else "AND COALESCE(m.is_notification, 0) = 0"
-        cursor.execute(f"""
-            SELECT m.role, m.content, m.timestamp, COALESCE(m.is_notification, 0) as is_notification
-            FROM branch_messages bm
-            JOIN messages m ON bm.message_id = m.id
-            WHERE bm.branch_id = ? {notif_clause}
-            ORDER BY m.timestamp ASC
-        """, (branch_db_id,))
-
-        messages = [{"role": r, "content": c, "timestamp": t, "is_notification": notif}
-                    for r, c, t, notif in cursor.fetchall()]
+        # Fixed columns first, then the optional columns in SELECT order
+        # (context_summary, then tool_counts) — index-based to handle any combination.
+        (_session_id, uuid, started_at, ended_at, _exchange_count,
+         files_json, commits_json, git_branch, project, _project_path,
+         branch_db_id) = session[:11]
+        col = 11
+        context_summary = None
+        if has_context_summary:
+            context_summary = session[col]
+            col += 1
+        tool_counts_json = session[col] if has_tool_counts else None
 
         session_data = {
             "uuid": uuid,
@@ -126,8 +124,23 @@ def get_recent_sessions(
             "started_at": started_at,
             "ended_at": ended_at,
             "git_branch": git_branch,
-            "messages": messages
         }
+
+        if summary:
+            session_data["summary"] = context_summary or ""
+        else:
+            notif_clause = "" if include_notifications else "AND COALESCE(m.is_notification, 0) = 0"
+            cursor.execute(f"""
+                SELECT m.role, m.content, m.timestamp, COALESCE(m.is_notification, 0) as is_notification
+                FROM branch_messages bm
+                JOIN messages m ON bm.message_id = m.id
+                WHERE bm.branch_id = ? {notif_clause}
+                ORDER BY m.timestamp ASC
+            """, (branch_db_id,))
+            session_data["messages"] = [
+                {"role": r, "content": c, "timestamp": t, "is_notification": notif}
+                for r, c, t, notif in cursor.fetchall()
+            ]
 
         if verbose:
             session_data["files_modified"] = json.loads(files_json) if files_json else []
@@ -178,12 +191,19 @@ def main():
             projects=projects,
             verbose=args.verbose,
             include_notifications=args.include_notifications,
+            summary=args.summary,
         )
     except Exception as e:
         emit_error("query_failed", str(e), None, fmt)
         sys.exit(1)
     finally:
         conn.close()
+
+    content_chars = sum(
+        len(s.get("summary") or "")
+        + sum(len(m.get("content") or "") for m in s.get("messages", []))
+        for s in sessions
+    )
 
     if fmt == "json":
         meta = {
@@ -192,10 +212,12 @@ def main():
                 "auto_detected": auto_detected,
             },
             "has_more": len(sessions) == limit,
+            **volume_flags(content_chars, args.summary),
         }
         print(format_json_sessions(sessions, meta))
     else:
         print(format_markdown(sessions, verbose=args.verbose))
+        emit_volume_signal(content_chars, len(sessions), args.summary, fmt)
 
 
 if __name__ == "__main__":

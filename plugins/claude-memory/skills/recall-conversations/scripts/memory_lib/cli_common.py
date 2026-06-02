@@ -34,6 +34,9 @@ def _get_plugin_version() -> str:
 PLUGIN_VERSION = _get_plugin_version()
 LIMIT_MIN = 1
 LIMIT_MAX = 50
+# Retrieved output above this many characters is "large" — the orchestrator should
+# prefer --summary, and if already summarized, fan out by-project subagents.
+FANOUT_SUGGEST_CHARS = 50000
 
 
 def resolve_project(cwd: str, conn: sqlite3.Connection) -> Optional[list[str]]:
@@ -98,6 +101,9 @@ def add_common_args(parser: argparse.ArgumentParser, default_limit: int = 5) -> 
 
     parser.add_argument("--verbose", "-v", action="store_true",
                         help="Include files_modified, commits, tool_counts.")
+    parser.add_argument("--summary", action="store_true",
+                        help="Emit precomputed per-session summaries instead of full message "
+                             "content — token-efficient for broad/retro/multi-session queries.")
     parser.add_argument("--include-notifications", action="store_true",
                         help="Include task notification messages (hidden by default).")
     parser.add_argument("--db", type=Path, default=DEFAULT_DB_PATH,
@@ -175,6 +181,50 @@ def emit_warning(message: str, fmt: str) -> None:
         sys.stderr.write(json.dumps({"warning": message}) + "\n")
     else:
         sys.stderr.write(f"WARN: {message}\n")
+
+
+def volume_signal(output_chars: int, summary_mode: bool) -> tuple[bool, str]:
+    """Classify retrieved output volume and return (is_large, escalation_hint).
+
+    Drives the fan-out decision mechanically rather than by guessing from session
+    count: small answers (the common continuation/lookup case) never escalate.
+    """
+    if output_chars <= FANOUT_SUGGEST_CHARS:
+        return False, ""
+    if summary_mode:
+        hint = ("summarized output still exceeds the volume budget — fan out general-purpose "
+                "subagents sharded by project, then reduce")
+    else:
+        hint = ("re-run with --summary for precomputed summaries; if still large, fan out "
+                "general-purpose subagents sharded by project")
+    return True, hint
+
+
+def volume_flags(content_chars: int, summary_mode: bool) -> dict:
+    """Two-tier escalation flags derived from retrieved volume — the single source
+    of truth for both recall scripts' JSON meta.
+
+    summary_suggested: full-content pull is large → switch to --summary (tier 1).
+    fanout_suggested: even --summary output is large → fan out by project (tier 2).
+    The two are mutually exclusive by construction.
+    """
+    is_large = volume_signal(content_chars, summary_mode)[0]
+    return {
+        "content_chars": content_chars,
+        "summary_suggested": is_large and not summary_mode,
+        "fanout_suggested": is_large and summary_mode,
+    }
+
+
+def emit_volume_signal(output_chars: int, session_count: int, summary_mode: bool, fmt: str) -> None:
+    """Write a stderr nudge when retrieved output is large (markdown mode only)."""
+    if fmt == "json":
+        return
+    is_large, hint = volume_signal(output_chars, summary_mode)
+    if is_large:
+        sys.stderr.write(
+            f"INFO: retrieved {output_chars} chars across {session_count} sessions; {hint}.\n"
+        )
 
 
 def open_db_or_exit(db_path: Path, fmt: str) -> sqlite3.Connection:

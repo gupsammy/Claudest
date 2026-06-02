@@ -19,6 +19,7 @@ python3 ${CLAUDE_PLUGIN_ROOT}/skills/recall-conversations/scripts/recent_chats.p
 | `--before DATE`           | Sessions before this datetime (ISO)                                 |
 | `--after DATE`            | Sessions after this datetime (ISO)                                  |
 | `--verbose`, `-v`         | Include files_modified, commits, tool_counts                        |
+| `--summary`               | Emit precomputed per-session digests instead of full content (~3× smaller, single-pass). Skips the message fetch. |
 | `--format markdown\|json` | Output format (default: markdown)                                   |
 | `--json`                  | Alias for `--format json`                                           |
 | `--include-notifications` | Include task notification messages                                  |
@@ -28,6 +29,8 @@ python3 ${CLAUDE_PLUGIN_ROOT}/skills/recall-conversations/scripts/recent_chats.p
 | `-h, --help`              | Show help with examples                                             |
 
 Use `--verbose` for lenses that need file/commit context (restore-context, review-process, run-retro).
+
+Use `--summary` for broad/multi-session lenses (run-retro, find-gaps, find-antipatterns, extract-decisions) or `--all-projects` scope to keep context small. When retrieved content exceeds the volume budget, markdown mode prints an `INFO: …` signal to stderr and JSON mode adds three keys to `meta`: `content_chars`, `summary_suggested` (large full-content pull — switch to `--summary`), and `fanout_suggested` (large even after `--summary` — escalate to per-project subagent fan-out).
 
 ## search_conversations.py
 
@@ -44,6 +47,7 @@ python3 ${CLAUDE_PLUGIN_ROOT}/skills/recall-conversations/scripts/search_convers
 | `--project NAME`          | Filter by project name(s), comma-separated. Default: auto-detected. |
 | `--all-projects`          | Widen scope to all projects (overrides auto-detect)                 |
 | `--verbose`, `-v`         | Include files_modified, commits                                     |
+| `--summary`               | Emit precomputed per-session digests instead of full content (~3× smaller, single-pass). Skips the message fetch. |
 | `--format markdown\|json` | Output format (default: markdown)                                   |
 | `--json`                  | Alias for `--format json`                                           |
 | `--include-notifications` | Include task notification messages                                  |

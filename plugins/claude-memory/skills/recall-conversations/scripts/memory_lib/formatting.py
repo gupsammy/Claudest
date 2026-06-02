@@ -117,6 +117,13 @@ def format_markdown_session(session: dict, verbose: bool = False) -> str:
             lines.append("\n### Tools Used")
             lines.append(tools_str)
 
+    if session.get("summary") is not None:
+        lines.append("\n### Summary\n")
+        summ = (session.get("summary") or "").strip()
+        lines.append(summ if summ else "_(summary unavailable — re-run this session without --summary)_")
+        lines.append("\n---\n")
+        return "\n".join(lines)
+
     lines.append("\n### Conversation\n")
 
     for msg in session.get("messages", []):

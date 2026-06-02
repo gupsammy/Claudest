@@ -367,7 +367,7 @@ class TestBuildContext:
         assert "Run pytest from the project root." in result
         assert "User:**" in result
         assert "Assistant:**" in result
-        assert "/recall-conversations" in result
+        assert "claude-memory:recall-conversations" in result
 
     def test_multi_session_separator(self):
         sessions = [
@@ -534,4 +534,4 @@ class TestBuildFallbackContext:
             ],
         }
         result = _build_fallback_context(session)
-        assert "/recall-conversations" in result
+        assert "claude-memory:recall-conversations" in result

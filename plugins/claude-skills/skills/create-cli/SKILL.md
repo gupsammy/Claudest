@@ -82,12 +82,13 @@ If primary consumer is human-only, the Errors and Reduce Tool Calls subsections 
 
 ### Errors (agent/mixed consumers only)
 - When `--json` is active, emit error objects on stderr: `{"error": "<snake_case_code>", "message": "...", "hint": "<exact CLI invocation or null>"}` — so agent callers can route recovery logic without parsing free-text stderr. The `hint` field must be an executable command, not prose.
-- Exit codes: `0` success, `1` runtime error, `2` invalid usage; add command-specific codes only when genuinely useful.
+- Exit codes: `0` success, `1` runtime error, `2` invalid usage; for agent/mixed consumers, extend with the typed table from cli-guidelines.md → Exit codes (typed) (`3` not-found, `4` auth, `5` upstream, `7` conflict) — apply identically across all subcommands so agents branch on the code.
 
 ### Flags
 - `-h/--help` always shows help; ignores other args.
 - `--version` prints version to stdout.
 - `--json` preferred for structured output. `--output json`/`-o json` acceptable when the CLI needs multiple output formats (yaml, table, csv) under a single flag. Pick one and apply consistently.
+- For commands an agent calls in a loop, offer `--compact` (opt-in): same JSON shape, minimal whitespace, essential fields only — `--json` stays the full-fidelity default. See cli-guidelines.md → Output defaults.
 - Consistent flag names across all subcommands for the same concept (`--id`, `--force`, `--json`) — agents learn the naming pattern once and apply it everywhere without guessing.
 - Prompts only when stdin is a TTY; `--no-input` disables prompts. `--non-interactive` acceptable if the ecosystem already uses it.
 - Destructive operations: interactive confirmation; non-interactive requires `--force`.

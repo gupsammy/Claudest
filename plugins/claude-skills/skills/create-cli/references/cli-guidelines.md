@@ -277,8 +277,8 @@ calls total.
 - Extend the base set (`0` success, `1` generic runtime, `2` usage/validation) with a small
   fixed table applied identically across every subcommand, so agents branch on the code instead
   of parsing stderr: `3` not-found, `4` auth/permission, `5` upstream/network, `7`
-  conflict/precondition. Skip codes that don't apply; never renumber once shipped — the table is
-  a contract.
+  conflict/precondition (`6` is reserved — skip it). Skip codes that don't apply; never renumber
+  once shipped — the table is a contract.
 - Pair each non-zero code with the `hint` command an agent can run to recover.
 
 ### Reduce tool calls

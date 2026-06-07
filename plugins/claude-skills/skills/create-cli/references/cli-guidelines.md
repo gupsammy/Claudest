@@ -250,13 +250,20 @@ calls total.
 
 ### Output defaults
 
-- Default output is human-readable text. `--json` gives structured JSON. Explicit is better
-  than implicit — no TTY sniffing, no surprises. Agents pass `--json`; humans get readable
-  output without any flags.
+- Data format (JSON vs human text) follows an explicit `--json`/`--plain` flag that overrides
+  TTY state — never TTY alone. Agents pass the flag and must not rely on auto-detection: some
+  harnesses allocate a PTY, which would silently flip an auto-detecting tool to human tables and
+  break the parser. TTY-detecting the *default* (table on a TTY, JSON when piped) is fine for
+  human-primary tools, but only with the explicit override as the documented stable contract.
+- Cosmetics (color, spinners, progress, pagers, decorative output) TTY-detect always; suppress
+  when piped, `NO_COLOR`, `TERM=dumb`, or `--json`.
 - List commands in `--json` mode: NDJSON (one object per line) — enables streaming and `jq`
   piping without buffering. For paginated results with metadata, a JSON object with an
   `items` array is acceptable.
-- Suppress ANSI codes, progress indicators, and decorative output when `--json` is active.
+- For high-frequency agent calls, offer `--compact`: same JSON shape, minimal whitespace, only
+  essential fields (drop verbose/derived ones). `--json` stays the full-fidelity default;
+  `--compact` is the opt-in mode for commands an agent calls in a loop, where per-call token
+  cost compounds.
 
 ### Structured errors
 
@@ -264,6 +271,15 @@ calls total.
   `{"error": "<snake_case_code>", "message": "<sentence>", "hint": "<exact CLI invocation or null>"}`
 - `hint` must be an executable command the agent can run directly — not a prose suggestion.
   Good: `"hint": "snapr list --json"`. Bad: `"hint": "Check available snapshots first."`.
+
+### Exit codes (typed)
+
+- Extend the base set (`0` success, `1` generic runtime, `2` usage/validation) with a small
+  fixed table applied identically across every subcommand, so agents branch on the code instead
+  of parsing stderr: `3` not-found, `4` auth/permission, `5` upstream/network, `7`
+  conflict/precondition (`6` is reserved — skip it). Skip codes that don't apply; never renumber
+  once shipped — the table is a contract.
+- Pair each non-zero code with the `hint` command an agent can run to recover.
 
 ### Reduce tool calls
 
@@ -277,6 +293,63 @@ calls total.
   the pattern once and apply it everywhere.
 - Idempotency: document which commands are safe to repeat. Agents rely on idempotency for
   error recovery without human intervention.
+
+### Stateful CLIs (local cache)
+
+Most CLIs are stateless wrappers — one command, one backend call. When the same data is queried
+repeatedly, or the useful questions span entities the backend can't join in a single call, a
+local cache earns its complexity:
+
+- `sync` pulls from the backend incrementally (cursor / updated-since) into local SQLite.
+  Subsequent `list`/`search`/`filter` read local — fast, offline, rate-limit-free, deterministic
+  within a snapshot.
+- Full-text search (SQLite FTS5) and compound queries (joins/aggregates the API has no single
+  endpoint for, e.g. "stale items whose blockers sat >7d") collapse N round-trips into one local
+  command — the largest token and tool-call saving available.
+- Cost: staleness, local storage, sync/cursor logic, schema design. Adopt only when the access
+  pattern justifies it; a pure pass-through CLI stays stateless.
+
+**Data Layer Decision (required scorecard).** For any CLI that reads from a backend, score these
+five signals and record the verdict in the spec — a `stateless` verdict must be as deliberate as
+an `adopt` one:
+
+| # | Signal | Weight |
+|---|--------|--------|
+| 1 | Read-heavy (reads ≫ writes) | support |
+| 2 | Same data feeds many questions over time | support |
+| 3 | Compound / cross-entity / cross-period queries the API has no single endpoint for | STRONG |
+| 4 | Fetches expensive or rate-limited | support |
+| 5 | Staleness-tolerant (NOT must-be-live) | GATE |
+
+- Signal 5 = NO → **stateless** (live correctness wins; stop here).
+- Signal 3 = YES and 5 = YES → **adopt cache** (the decisive combo).
+- Otherwise: 2+ support signals and 5 = YES → adopt; else stateless.
+
+If `adopt`, the spec must specify: the `sync` command (incremental cursor), a local schema sketch
+(tables + FTS5 if search is needed), which reads go local vs stay live, and that writes always go
+live with a read-after-write invalidation note.
+
+### Wrapping an existing API (input provenance)
+
+When the CLI wraps an existing backend, the command surface is *derived from* an API rather than
+designed from scratch. Record where that surface came from:
+
+- API source: documented (OpenAPI / docs), a live URL, or a **HAR capture** (DevTools → Network →
+  Export) that surfaces an undocumented, browser-fed API where no official spec exists.
+- Map the endpoint inventory to the command tree and keep a **provenance appendix**: each
+  subcommand ← method + path + a sample request.
+
+A HAR / undocumented source adds five non-negotiable design checks:
+
+- **Secrets are radioactive.** A HAR contains live cookies, tokens, and PII. Extract *structure*
+  only; parameterize every credential as an env-var NAME, never echo a value into the spec.
+- **Auth model.** Identify cookie / bearer / CSRF and how it enters the CLI (env var, never a
+  flag); note token expiry.
+- **Coverage.** A HAR is sampled — only endpoints you exercised appear. Mark which surfaces are
+  covered vs unknown; don't imply completeness.
+- **Fragility.** Undocumented endpoints have no contract and can change without notice. Isolate
+  the endpoint-mapping layer so a break is a one-line patch.
+- **ToS/legal.** Replaying a private API may violate terms. Surface this to the user; never assume.
 
 ### Discovery
 

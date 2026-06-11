@@ -16,6 +16,7 @@ import sqlite3
 import sys
 
 from memory_lib.cli_common import (
+    ScopeFilter,
     add_common_args,
     emit_error,
     emit_volume_signal,
@@ -42,6 +43,9 @@ EXAMPLES
   Time-bounded retrieval:
     recent_chats.py --after 2026-04-01 --before 2026-04-15
 
+  Full uncapped arc of a project, oldest-first (triage index, no message bodies):
+    recent_chats.py --project PKM --timeline --sort-order asc
+
   JSON output for downstream tooling:
     recent_chats.py --limit 20 --json | jq '.sessions[].project'
 
@@ -56,7 +60,7 @@ def get_recent_sessions(
     sort_order: str,
     before: str | None,
     after: str | None,
-    projects: list[str] | None,
+    scope: ScopeFilter | None,
     verbose: bool,
     include_notifications: bool,
     summary: bool = False,
@@ -92,10 +96,10 @@ def get_recent_sessions(
     if after:
         sql += " AND b.started_at > ?"
         params.append(after)
-    if projects:
-        placeholders = ",".join("?" * len(projects))
-        sql += f" AND p.name IN ({placeholders})"
-        params.extend(projects)
+    if scope and scope.values:
+        placeholders = ",".join("?" * len(scope.values))
+        sql += f" AND p.{scope.column} IN ({placeholders})"
+        params.extend(scope.values)
 
     order = "DESC" if sort_order == "desc" else "ASC"
     sql += f" ORDER BY b.ended_at {order} LIMIT ?"
@@ -161,6 +165,109 @@ def format_markdown(sessions: list[dict], verbose: bool = False) -> str:
     return "\n".join(lines)
 
 
+def get_timeline(
+    conn: sqlite3.Connection,
+    sort_order: str,
+    before: str | None,
+    after: str | None,
+    scope: ScopeFilter | None,
+) -> list[dict]:
+    """Compact, UNCAPPED session index — one row per session, no message bodies.
+
+    The triage primitive for reconstructing a project's full arc: a single cheap
+    call returns every session ordered by time, so a miner can see the whole shape
+    before deep-reading the dense ones. Carries project_path so ambiguous names
+    (two projects sharing a basename) stay distinguishable per-row.
+    """
+    cursor = conn.cursor()
+
+    cursor.execute("PRAGMA table_info(branches)")
+    branch_columns = {row[1] for row in cursor.fetchall()}
+    has_tool_counts = "tool_counts" in branch_columns
+    has_context_summary = "context_summary" in branch_columns
+    context_summary_col = ", b.context_summary" if has_context_summary else ""
+    tool_counts_col = ", b.tool_counts" if has_tool_counts else ""
+
+    sql = f"""
+        SELECT s.uuid, p.name as project, p.path as project_path,
+               s.git_branch, b.started_at, b.ended_at,
+               b.exchange_count{context_summary_col}{tool_counts_col}
+        FROM sessions s
+        JOIN branches b ON b.session_id = s.id AND b.is_active = 1
+        JOIN projects p ON s.project_id = p.id
+        WHERE 1=1
+    """
+    params: list = []
+    if before:
+        sql += " AND b.started_at < ?"
+        params.append(before)
+    if after:
+        sql += " AND b.started_at > ?"
+        params.append(after)
+    if scope and scope.values:
+        placeholders = ",".join("?" * len(scope.values))
+        sql += f" AND p.{scope.column} IN ({placeholders})"
+        params.extend(scope.values)
+
+    order = "DESC" if sort_order == "desc" else "ASC"
+    sql += f" ORDER BY b.started_at {order}"  # no LIMIT — the whole arc, by design
+
+    cursor.execute(sql, params)
+
+    # Stream rows straight off the cursor instead of fetchall() — the no-LIMIT
+    # design means a large store could return thousands of rows, and we only ever
+    # build the compact `results` list, so materialising the raw tuples too just
+    # doubles peak memory. --before/--after remain the way to window the range.
+    results = []
+    for row in cursor:
+        uuid, project, project_path, git_branch, started_at, ended_at, exchange_count = row[:7]
+        col = 7
+        context_summary = None
+        if has_context_summary:
+            context_summary = row[col]
+            col += 1
+        tool_counts_json = row[col] if has_tool_counts else None
+
+        tools = 0
+        if tool_counts_json:
+            try:
+                tools = sum(json.loads(tool_counts_json).values())
+            except (ValueError, TypeError, AttributeError):
+                tools = 0
+        title = ""
+        if context_summary:
+            title = context_summary.strip().splitlines()[0][:120] if context_summary.strip() else ""
+
+        results.append({
+            "uuid": uuid,
+            "project": project,
+            "project_path": project_path,
+            "git_branch": git_branch,
+            "started_at": started_at,
+            "ended_at": ended_at,
+            "exchanges": exchange_count,
+            "tools": tools,
+            "title": title,
+        })
+    return results
+
+
+def format_timeline_markdown(rows: list[dict]) -> str:
+    if not rows:
+        return "No sessions found."
+    lines = [f"# Session Timeline ({len(rows)} sessions)\n"]
+    for r in rows:
+        date = (r["started_at"] or "")[:10]
+        branch = r["git_branch"] or "-"
+        lines.append(
+            f"- {date}  [{r['exchanges']}ex/{r['tools']}t]  ({branch})  "
+            f"{r['project']}  {r['uuid']}"
+        )
+        if r["title"]:
+            lines.append(f"    {r['title']}")
+    return "\n".join(lines)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Retrieve recent conversation sessions (defaults to current project).",
@@ -174,21 +281,48 @@ def main():
                         help="Sessions before this datetime (ISO).")
     parser.add_argument("--after", type=str,
                         help="Sessions after this datetime (ISO).")
+    parser.add_argument("--timeline", action="store_true",
+                        help="Compact UNCAPPED session index (no message bodies, no 50-limit) — "
+                             "the triage primitive for reconstructing a project's full arc. "
+                             "Pair with --sort-order asc for oldest-first. "
+                             "Note: --verbose and --summary are ignored in timeline mode.")
 
     args = parser.parse_args()
     fmt = resolve_format(args)
+
+    if args.timeline:
+        conn = open_db_or_exit(args.db, fmt)
+        try:
+            scope, auto_detected = resolve_scope(args, conn, fmt)
+            rows = get_timeline(conn, args.sort_order, args.before, args.after, scope)
+        except Exception as e:
+            emit_error("query_failed", str(e), None, fmt)
+            sys.exit(1)
+        finally:
+            conn.close()
+        if fmt == "json":
+            print(json.dumps({
+                "timeline": rows,
+                "count": len(rows),
+                "scope": {"projects": scope.values if scope else None,
+                          "auto_detected": auto_detected},
+            }, indent=2))
+        else:
+            print(format_timeline_markdown(rows))
+        return
+
     limit = validate_limit(args, fmt)
 
     conn = open_db_or_exit(args.db, fmt)
     try:
-        projects, auto_detected = resolve_scope(args, conn, fmt)
+        scope, auto_detected = resolve_scope(args, conn, fmt)
         sessions = get_recent_sessions(
             conn,
             limit=limit,
             sort_order=args.sort_order,
             before=args.before,
             after=args.after,
-            projects=projects,
+            scope=scope,
             verbose=args.verbose,
             include_notifications=args.include_notifications,
             summary=args.summary,
@@ -208,7 +342,7 @@ def main():
     if fmt == "json":
         meta = {
             "scope": {
-                "projects": projects,
+                "projects": scope.values if scope else None,
                 "auto_detected": auto_detected,
             },
             "has_more": len(sessions) == limit,

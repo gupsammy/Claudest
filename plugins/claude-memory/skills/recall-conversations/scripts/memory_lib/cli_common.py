@@ -15,9 +15,21 @@ import os
 import sqlite3
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import NamedTuple, Optional
 
 from .db import DEFAULT_DB_PATH
+
+
+class ScopeFilter(NamedTuple):
+    """A resolved project filter: which projects column to match, and the values.
+
+    column is always a literal chosen by our code ("name" or "path"), never user
+    input — safe to interpolate into SQL. values are bound as parameters. Empty
+    values means "no projects matched" and callers skip the filter.
+    """
+
+    column: str
+    values: list[str]
 
 
 def _get_plugin_version() -> str:
@@ -39,23 +51,27 @@ LIMIT_MAX = 50
 FANOUT_SUGGEST_CHARS = 50000
 
 
-def resolve_project(cwd: str, conn: sqlite3.Connection) -> Optional[list[str]]:
+def resolve_project(cwd: str, conn: sqlite3.Connection) -> Optional[ScopeFilter]:
     """
     Resolve current project from CWD by walking up the path tree against
-    projects.path in the DB. Returns [project_name] or None if no match.
+    projects.path in the DB. Returns a path-keyed ScopeFilter or None if no match.
 
     Strategy:
     1. Walk up from CWD; for each ancestor, look up projects.path = ancestor.
-    2. If no path match, try projects.name = basename(cwd) as a fallback.
+       An exact path match is unambiguous — filter by path so projects that merely
+       share a basename (duplicate names are expected — see list_projects.py) are
+       never merged into one arc.
+    2. If no path match, fall back to projects.name = basename(cwd); resolve that
+       to the path(s) of every same-named project so the filter stays path-precise.
     3. If both fail, return None — caller decides how to handle (warn + widen).
     """
     cur = os.path.abspath(cwd)
     cursor = conn.cursor()
     while True:
-        cursor.execute("SELECT name FROM projects WHERE path = ?", (cur,))
+        cursor.execute("SELECT path FROM projects WHERE path = ?", (cur,))
         row = cursor.fetchone()
         if row and row[0]:
-            return [row[0]]
+            return ScopeFilter("path", [row[0]])
         parent = os.path.dirname(cur)
         if parent == cur:
             break
@@ -63,9 +79,10 @@ def resolve_project(cwd: str, conn: sqlite3.Connection) -> Optional[list[str]]:
 
     derived = os.path.basename(os.path.abspath(cwd))
     if derived:
-        cursor.execute("SELECT 1 FROM projects WHERE name = ?", (derived,))
-        if cursor.fetchone():
-            return [derived]
+        cursor.execute("SELECT path FROM projects WHERE name = ?", (derived,))
+        paths = [r[0] for r in cursor.fetchall() if r[0]]
+        if paths:
+            return ScopeFilter("path", paths)
     return None
 
 
@@ -136,25 +153,27 @@ def resolve_scope(
     args: argparse.Namespace,
     conn: sqlite3.Connection,
     fmt: str,
-) -> tuple[Optional[list[str]], bool]:
+) -> tuple[Optional[ScopeFilter], bool]:
     """
-    Resolve project scope from args. Returns (projects_or_none, auto_detected).
+    Resolve project scope from args. Returns (scope_or_none, auto_detected).
 
     - If --all-projects: returns (None, False) — no filter.
-    - If --project NAME[,NAME]: returns ([names...], False).
-    - Otherwise: auto-detect from CWD. If auto-detect succeeds, returns ([name], True).
-      If auto-detect fails, prints stderr warning and returns (None, False) — falls
-      through to all-projects so the user gets *some* result rather than zero.
+    - If --project NAME[,NAME]: returns (ScopeFilter("name", [names...]), False) —
+      explicit names filter by name, preserving the exact requested set.
+    - Otherwise: auto-detect from CWD. On success returns (path-keyed ScopeFilter,
+      True) so same-named projects are never merged. On failure, warns and returns
+      (None, False) — falls through to all-projects so the user gets *some* result.
     """
     if args.all_projects:
         return None, False
     if args.project:
-        return [p.strip() for p in args.project.split(",") if p.strip()], False
+        names = [p.strip() for p in args.project.split(",") if p.strip()]
+        return ScopeFilter("name", names), False
 
     cwd = args.cwd or os.getcwd()
-    projects = resolve_project(cwd, conn)
-    if projects is not None:
-        return projects, True
+    scope = resolve_project(cwd, conn)
+    if scope is not None:
+        return scope, True
 
     emit_warning(
         f"Could not auto-detect project for CWD {cwd}; searching all projects. "

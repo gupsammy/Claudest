@@ -16,7 +16,7 @@ import sqlite3
 
 import pytest
 
-from memory_lib.cli_common import FANOUT_SUGGEST_CHARS, volume_flags, volume_signal
+from memory_lib.cli_common import FANOUT_SUGGEST_CHARS, ScopeFilter, volume_flags, volume_signal
 from memory_lib.formatting import format_json_sessions, format_markdown_session
 from recent_chats import get_recent_sessions
 from search_conversations import search_sessions
@@ -237,7 +237,7 @@ class TestGetRecentSessionsSummaryMode:
         self._setup_one_session(memory_db)
         results = get_recent_sessions(
             memory_db, limit=5, sort_order="desc",
-            before=None, after=None, projects=["testproj"],
+            before=None, after=None, scope=ScopeFilter("name", ["testproj"]),
             verbose=False, include_notifications=False,
         )
         assert len(results) == 1
@@ -249,7 +249,7 @@ class TestGetRecentSessionsSummaryMode:
         self._setup_one_session(memory_db)
         results = get_recent_sessions(
             memory_db, limit=5, sort_order="desc",
-            before=None, after=None, projects=["testproj"],
+            before=None, after=None, scope=ScopeFilter("name", ["testproj"]),
             verbose=False, include_notifications=False,
         )
         assert "summary" not in results[0]
@@ -259,7 +259,7 @@ class TestGetRecentSessionsSummaryMode:
         self._setup_one_session(memory_db, context_summary="Precomputed summary text.")
         results = get_recent_sessions(
             memory_db, limit=5, sort_order="desc",
-            before=None, after=None, projects=["testproj"],
+            before=None, after=None, scope=ScopeFilter("name", ["testproj"]),
             verbose=False, include_notifications=False,
             summary=True,
         )
@@ -271,7 +271,7 @@ class TestGetRecentSessionsSummaryMode:
         self._setup_one_session(memory_db)
         results = get_recent_sessions(
             memory_db, limit=5, sort_order="desc",
-            before=None, after=None, projects=["testproj"],
+            before=None, after=None, scope=ScopeFilter("name", ["testproj"]),
             verbose=False, include_notifications=False,
             summary=True,
         )
@@ -282,7 +282,7 @@ class TestGetRecentSessionsSummaryMode:
         self._setup_one_session(memory_db, context_summary=None)
         results = get_recent_sessions(
             memory_db, limit=5, sort_order="desc",
-            before=None, after=None, projects=["testproj"],
+            before=None, after=None, scope=ScopeFilter("name", ["testproj"]),
             verbose=False, include_notifications=False,
             summary=True,
         )
@@ -294,7 +294,7 @@ class TestGetRecentSessionsSummaryMode:
         self._setup_one_session(memory_db)
         results = get_recent_sessions(
             memory_db, limit=5, sort_order="desc",
-            before=None, after=None, projects=["testproj"],
+            before=None, after=None, scope=ScopeFilter("name", ["testproj"]),
             verbose=False, include_notifications=False,
             summary=True,
         )
@@ -376,7 +376,7 @@ class TestSearchSessionsSummaryMode:
         self._setup_searchable_session(memory_db)
         results = search_sessions(
             memory_db, query="findable", fts_level=None,
-            limit=5, projects=["searchproj"],
+            limit=5, scope=ScopeFilter("name", ["searchproj"]),
             verbose=False, include_notifications=False,
             summary=False,
         )
@@ -389,7 +389,7 @@ class TestSearchSessionsSummaryMode:
         self._setup_searchable_session(memory_db)
         results = search_sessions(
             memory_db, query="findable", fts_level=None,
-            limit=5, projects=["searchproj"],
+            limit=5, scope=ScopeFilter("name", ["searchproj"]),
             verbose=False, include_notifications=False,
             summary=True,
         )
@@ -410,7 +410,7 @@ class TestSearchSessionsSummaryMode:
         _seed_message(memory_db, sess_id, _get_last_branch_id(memory_db), content="unique keyword zxqwerty")
         results = search_sessions(
             memory_db, query="unique keyword zxqwerty", fts_level=None,
-            limit=5, projects=["searchproj2"],
+            limit=5, scope=ScopeFilter("name", ["searchproj2"]),
             verbose=False, include_notifications=False,
             summary=True,
         )
@@ -451,7 +451,7 @@ class TestMissingContextSummaryColumn:
         self._seed_then_drop_column(memory_db)
         results = get_recent_sessions(
             memory_db, limit=5, sort_order="desc",
-            before=None, after=None, projects=["oldproj"],
+            before=None, after=None, scope=ScopeFilter("name", ["oldproj"]),
             verbose=False, include_notifications=False,
         )
         assert len(results) == 1
@@ -462,7 +462,7 @@ class TestMissingContextSummaryColumn:
         self._seed_then_drop_column(memory_db)
         results = get_recent_sessions(
             memory_db, limit=5, sort_order="desc",
-            before=None, after=None, projects=["oldproj"],
+            before=None, after=None, scope=ScopeFilter("name", ["oldproj"]),
             verbose=False, include_notifications=False,
             summary=True,
         )
@@ -474,7 +474,7 @@ class TestMissingContextSummaryColumn:
         self._seed_then_drop_column(memory_db)
         results = search_sessions(
             memory_db, query="legacy", fts_level=None,
-            limit=5, projects=["oldproj"],
+            limit=5, scope=ScopeFilter("name", ["oldproj"]),
             verbose=False, include_notifications=False,
             summary=True,
         )

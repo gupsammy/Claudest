@@ -16,6 +16,7 @@ import sqlite3
 import sys
 
 from memory_lib.cli_common import (
+    ScopeFilter,
     add_common_args,
     emit_error,
     emit_volume_signal,
@@ -51,7 +52,7 @@ def search_sessions(
     query: str,
     fts_level: str | None,
     limit: int,
-    projects: list[str] | None,
+    scope: ScopeFilter | None,
     verbose: bool,
     include_notifications: bool,
     summary: bool = False,
@@ -90,10 +91,10 @@ def search_sessions(
         """
         params.append(fts_query)
 
-        if projects:
-            placeholders = ",".join("?" * len(projects))
-            sql += f" AND p.name IN ({placeholders})"
-            params.extend(projects)
+        if scope and scope.values:
+            placeholders = ",".join("?" * len(scope.values))
+            sql += f" AND p.{scope.column} IN ({placeholders})"
+            params.extend(scope.values)
 
         if fts_level == "fts5":
             sql += " ORDER BY bm25(branches_fts) LIMIT ?"
@@ -114,10 +115,10 @@ def search_sessions(
         """
         params.extend(f"%{term}%" for term in terms)
 
-        if projects:
-            placeholders = ",".join("?" * len(projects))
-            sql += f" AND p.name IN ({placeholders})"
-            params.extend(projects)
+        if scope and scope.values:
+            placeholders = ",".join("?" * len(scope.values))
+            sql += f" AND p.{scope.column} IN ({placeholders})"
+            params.extend(scope.values)
 
         sql += " ORDER BY b.ended_at DESC LIMIT ?"
         params.append(limit)
@@ -189,14 +190,14 @@ def main():
 
     conn = open_db_or_exit(args.db, fmt)
     try:
-        projects, auto_detected = resolve_scope(args, conn, fmt)
+        scope, auto_detected = resolve_scope(args, conn, fmt)
         fts_level = detect_fts_support(conn)
         sessions = search_sessions(
             conn,
             query=args.query,
             fts_level=fts_level,
             limit=limit,
-            projects=projects,
+            scope=scope,
             verbose=args.verbose,
             include_notifications=args.include_notifications,
             summary=args.summary,
@@ -217,7 +218,7 @@ def main():
         meta = {
             "query": args.query,
             "scope": {
-                "projects": projects,
+                "projects": scope.values if scope else None,
                 "auto_detected": auto_detected,
             },
             "has_more": len(sessions) == limit,

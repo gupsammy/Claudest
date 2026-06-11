@@ -13,6 +13,7 @@ SCRIPTS_DIR = Path(__file__).resolve().parents[2] / "plugins" / "claude-memory" 
 sys.path.insert(0, str(SCRIPTS_DIR))
 
 from search_conversations import search_sessions
+from memory_lib.cli_common import ScopeFilter
 from memory_lib.db import SCHEMA, _migrate_columns, detect_fts_support
 
 
@@ -129,7 +130,7 @@ class TestSearchSessionsFTS:
             pytest.skip("FTS not available")
 
         results = search_sessions(search_db, "pytest", fts_level, limit=10,
-                                  projects=None, verbose=False, include_notifications=False)
+                                  scope=None, verbose=False, include_notifications=False)
         assert len(results) >= 2, "Should match sessions mentioning 'pytest'"
         uuids = {r["uuid"] for r in results}
         assert "sess-alpha-1" in uuids
@@ -141,14 +142,14 @@ class TestSearchSessionsFTS:
             pytest.skip("FTS not available")
 
         results = search_sessions(search_db, "database migration", fts_level, limit=10,
-                                  projects=None, verbose=False, include_notifications=False)
+                                  scope=None, verbose=False, include_notifications=False)
         assert len(results) >= 1
         assert any(r["uuid"] == "sess-alpha-2" for r in results)
 
     def test_empty_query_returns_empty(self, search_db):
         fts_level = detect_fts_support(search_db)
         results = search_sessions(search_db, "", fts_level, limit=10,
-                                  projects=None, verbose=False, include_notifications=False)
+                                  scope=None, verbose=False, include_notifications=False)
         assert results == []
 
     def test_limit_respected(self, search_db):
@@ -157,7 +158,7 @@ class TestSearchSessionsFTS:
             pytest.skip("FTS not available")
 
         results = search_sessions(search_db, "pytest", fts_level, limit=1,
-                                  projects=None, verbose=False, include_notifications=False)
+                                  scope=None, verbose=False, include_notifications=False)
         assert len(results) <= 1
 
     def test_project_filter(self, search_db):
@@ -166,7 +167,7 @@ class TestSearchSessionsFTS:
             pytest.skip("FTS not available")
 
         results = search_sessions(search_db, "pytest", fts_level, limit=10,
-                                  projects=["alpha"], verbose=False, include_notifications=False)
+                                  scope=ScopeFilter("name", ["alpha"]), verbose=False, include_notifications=False)
         assert all(r["project"] == "alpha" for r in results), "Should only return alpha project"
         assert len(results) >= 1
 
@@ -176,7 +177,7 @@ class TestSearchSessionsFTS:
             pytest.skip("FTS not available")
 
         results = search_sessions(search_db, "pytest fixtures", fts_level, limit=5,
-                                  projects=None, verbose=False, include_notifications=False)
+                                  scope=None, verbose=False, include_notifications=False)
         matching = [r for r in results if r["uuid"] == "sess-alpha-1"]
         assert len(matching) == 1
         session = matching[0]
@@ -192,10 +193,10 @@ class TestSearchSessionsFTS:
             pytest.skip("FTS not available")
 
         results = search_sessions(search_db, "pytest", fts_level, limit=10,
-                                  projects=None, verbose=False, include_notifications=False)
+                                  scope=None, verbose=False, include_notifications=False)
         projects_found = {r["project"] for r in results}
         assert len(projects_found) > 1, (
-            "projects=None should return sessions from multiple projects, not just one"
+            "scope=None should return sessions from multiple projects, not just one"
         )
 
     def test_unknown_project_returns_empty(self, search_db):
@@ -206,7 +207,7 @@ class TestSearchSessionsFTS:
             pytest.skip("FTS not available")
 
         results = search_sessions(search_db, "pytest", fts_level, limit=10,
-                                  projects=["nonexistent"], verbose=False, include_notifications=False)
+                                  scope=ScopeFilter("name", ["nonexistent"]), verbose=False, include_notifications=False)
         assert results == [], "Unknown project name should return empty list, not raise"
 
 
@@ -215,7 +216,7 @@ class TestSearchSessionsLIKE:
 
     def test_like_search_returns_results(self, search_db):
         results = search_sessions(search_db, "pytest", fts_level=None, limit=10,
-                                  projects=None, verbose=False, include_notifications=False)
+                                  scope=None, verbose=False, include_notifications=False)
         assert len(results) >= 2
         uuids = {r["uuid"] for r in results}
         assert "sess-alpha-1" in uuids
@@ -225,7 +226,7 @@ class TestSearchSessionsLIKE:
         # LIKE fallback ANDs all terms — "pytest fixtures" must match both words in aggregated_content.
         # Only sess-alpha-1 contains both "pytest" and "fixtures"; sess-beta-1 has pytest but not fixtures.
         results = search_sessions(search_db, "pytest fixtures", fts_level=None, limit=10,
-                                  projects=None, verbose=False, include_notifications=False)
+                                  scope=None, verbose=False, include_notifications=False)
         uuids = {r["uuid"] for r in results}
         assert uuids == {"sess-alpha-1"}, (
             "AND-logic should exclude sessions that match only one term"
@@ -233,34 +234,34 @@ class TestSearchSessionsLIKE:
 
     def test_like_project_filter(self, search_db):
         results = search_sessions(search_db, "pytest", fts_level=None, limit=10,
-                                  projects=["beta"], verbose=False, include_notifications=False)
+                                  scope=ScopeFilter("name", ["beta"]), verbose=False, include_notifications=False)
         assert all(r["project"] == "beta" for r in results)
 
     def test_like_empty_query(self, search_db):
         results = search_sessions(search_db, "", fts_level=None, limit=10,
-                                  projects=None, verbose=False, include_notifications=False)
+                                  scope=None, verbose=False, include_notifications=False)
         assert results == []
 
     def test_like_limit(self, search_db):
         results = search_sessions(search_db, "pytest", fts_level=None, limit=1,
-                                  projects=None, verbose=False, include_notifications=False)
+                                  scope=None, verbose=False, include_notifications=False)
         assert len(results) <= 1
 
     def test_like_projects_none_spans_all_projects(self, search_db):
         # Mirrors TestSearchSessionsFTS: LIKE path must also return cross-project results
-        # when projects=None, confirming the filter is absent in both code paths.
+        # when scope=None, confirming the filter is absent in both code paths.
         results = search_sessions(search_db, "pytest", fts_level=None, limit=10,
-                                  projects=None, verbose=False, include_notifications=False)
+                                  scope=None, verbose=False, include_notifications=False)
         projects_found = {r["project"] for r in results}
         assert len(projects_found) > 1, (
-            "projects=None should return sessions from multiple projects, not just one"
+            "scope=None should return sessions from multiple projects, not just one"
         )
 
     def test_like_unknown_project_returns_empty(self, search_db):
         # Prevents SQL errors from the LIKE path's IN clause when the project name
         # matches nothing — should return [] not raise.
         results = search_sessions(search_db, "pytest", fts_level=None, limit=10,
-                                  projects=["nonexistent"], verbose=False, include_notifications=False)
+                                  scope=ScopeFilter("name", ["nonexistent"]), verbose=False, include_notifications=False)
         assert results == [], "Unknown project name should return empty list, not raise"
 
 
@@ -270,7 +271,7 @@ class TestVerboseFlag:
     def test_verbose_false_omits_file_fields(self, search_db):
         # Prevents callers from accidentally relying on fields that are absent by default
         results = search_sessions(search_db, "pytest", fts_level=None, limit=5,
-                                  projects=None, verbose=False, include_notifications=False)
+                                  scope=None, verbose=False, include_notifications=False)
         assert len(results) >= 1
         for r in results:
             assert "files_modified" not in r
@@ -279,7 +280,7 @@ class TestVerboseFlag:
     def test_verbose_true_includes_file_fields(self, search_db):
         # Prevents regression where verbose path silently drops metadata
         results = search_sessions(search_db, "pytest", fts_level=None, limit=5,
-                                  projects=None, verbose=True, include_notifications=False)
+                                  scope=None, verbose=True, include_notifications=False)
         assert len(results) >= 1
         for r in results:
             assert "files_modified" in r
@@ -296,7 +297,7 @@ class TestIncludeNotificationsFlag:
         # Prevents notification noise from polluting context injection results
         results = search_sessions(search_db_with_notification, "pytest fixtures",
                                   fts_level=None, limit=5,
-                                  projects=None, verbose=False, include_notifications=False)
+                                  scope=None, verbose=False, include_notifications=False)
         matching = [r for r in results if r["uuid"] == "sess-alpha-1"]
         assert len(matching) == 1
         contents = [m["content"] for m in matching[0]["messages"]]
@@ -308,7 +309,7 @@ class TestIncludeNotificationsFlag:
         # Verifies the flag actually toggles behavior, not just that the default filters
         results = search_sessions(search_db_with_notification, "pytest fixtures",
                                   fts_level=None, limit=5,
-                                  projects=None, verbose=False, include_notifications=True)
+                                  scope=None, verbose=False, include_notifications=True)
         matching = [r for r in results if r["uuid"] == "sess-alpha-1"]
         assert len(matching) == 1
         contents = [m["content"] for m in matching[0]["messages"]]

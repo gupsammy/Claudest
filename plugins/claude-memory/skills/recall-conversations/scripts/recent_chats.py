@@ -16,6 +16,7 @@ import sqlite3
 import sys
 
 from memory_lib.cli_common import (
+    ScopeFilter,
     add_common_args,
     emit_error,
     emit_volume_signal,
@@ -59,7 +60,7 @@ def get_recent_sessions(
     sort_order: str,
     before: str | None,
     after: str | None,
-    projects: list[str] | None,
+    scope: ScopeFilter | None,
     verbose: bool,
     include_notifications: bool,
     summary: bool = False,
@@ -95,10 +96,10 @@ def get_recent_sessions(
     if after:
         sql += " AND b.started_at > ?"
         params.append(after)
-    if projects:
-        placeholders = ",".join("?" * len(projects))
-        sql += f" AND p.name IN ({placeholders})"
-        params.extend(projects)
+    if scope and scope.values:
+        placeholders = ",".join("?" * len(scope.values))
+        sql += f" AND p.{scope.column} IN ({placeholders})"
+        params.extend(scope.values)
 
     order = "DESC" if sort_order == "desc" else "ASC"
     sql += f" ORDER BY b.ended_at {order} LIMIT ?"
@@ -169,7 +170,7 @@ def get_timeline(
     sort_order: str,
     before: str | None,
     after: str | None,
-    projects: list[str] | None,
+    scope: ScopeFilter | None,
 ) -> list[dict]:
     """Compact, UNCAPPED session index — one row per session, no message bodies.
 
@@ -203,19 +204,22 @@ def get_timeline(
     if after:
         sql += " AND b.started_at > ?"
         params.append(after)
-    if projects:
-        placeholders = ",".join("?" * len(projects))
-        sql += f" AND p.name IN ({placeholders})"
-        params.extend(projects)
+    if scope and scope.values:
+        placeholders = ",".join("?" * len(scope.values))
+        sql += f" AND p.{scope.column} IN ({placeholders})"
+        params.extend(scope.values)
 
     order = "DESC" if sort_order == "desc" else "ASC"
     sql += f" ORDER BY b.started_at {order}"  # no LIMIT — the whole arc, by design
 
     cursor.execute(sql, params)
-    rows = cursor.fetchall()
 
+    # Stream rows straight off the cursor instead of fetchall() — the no-LIMIT
+    # design means a large store could return thousands of rows, and we only ever
+    # build the compact `results` list, so materialising the raw tuples too just
+    # doubles peak memory. --before/--after remain the way to window the range.
     results = []
-    for row in rows:
+    for row in cursor:
         uuid, project, project_path, git_branch, started_at, ended_at, exchange_count = row[:7]
         col = 7
         context_summary = None
@@ -289,8 +293,8 @@ def main():
     if args.timeline:
         conn = open_db_or_exit(args.db, fmt)
         try:
-            projects, auto_detected = resolve_scope(args, conn, fmt)
-            rows = get_timeline(conn, args.sort_order, args.before, args.after, projects)
+            scope, auto_detected = resolve_scope(args, conn, fmt)
+            rows = get_timeline(conn, args.sort_order, args.before, args.after, scope)
         except Exception as e:
             emit_error("query_failed", str(e), None, fmt)
             sys.exit(1)
@@ -300,7 +304,8 @@ def main():
             print(json.dumps({
                 "timeline": rows,
                 "count": len(rows),
-                "scope": {"projects": projects, "auto_detected": auto_detected},
+                "scope": {"projects": scope.values if scope else None,
+                          "auto_detected": auto_detected},
             }, indent=2))
         else:
             print(format_timeline_markdown(rows))
@@ -310,14 +315,14 @@ def main():
 
     conn = open_db_or_exit(args.db, fmt)
     try:
-        projects, auto_detected = resolve_scope(args, conn, fmt)
+        scope, auto_detected = resolve_scope(args, conn, fmt)
         sessions = get_recent_sessions(
             conn,
             limit=limit,
             sort_order=args.sort_order,
             before=args.before,
             after=args.after,
-            projects=projects,
+            scope=scope,
             verbose=args.verbose,
             include_notifications=args.include_notifications,
             summary=args.summary,
@@ -337,7 +342,7 @@ def main():
     if fmt == "json":
         meta = {
             "scope": {
-                "projects": projects,
+                "projects": scope.values if scope else None,
                 "auto_detected": auto_detected,
             },
             "has_more": len(sessions) == limit,

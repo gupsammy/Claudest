@@ -280,7 +280,8 @@ def main():
     parser.add_argument("--timeline", action="store_true",
                         help="Compact UNCAPPED session index (no message bodies, no 50-limit) — "
                              "the triage primitive for reconstructing a project's full arc. "
-                             "Pair with --sort-order asc for oldest-first.")
+                             "Pair with --sort-order asc for oldest-first. "
+                             "Note: --verbose and --summary are ignored in timeline mode.")
 
     args = parser.parse_args()
     fmt = resolve_format(args)

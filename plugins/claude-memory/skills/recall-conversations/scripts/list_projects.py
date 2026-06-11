@@ -55,8 +55,9 @@ def get_projects(conn: sqlite3.Connection, match: str | None) -> list[dict]:
     """
     params: list = []
     if match:
-        sql += " WHERE p.name LIKE ? OR p.path LIKE ?"
-        params.extend([f"%{match}%", f"%{match}%"])
+        sql += " WHERE p.name LIKE ? ESCAPE '\\' OR p.path LIKE ? ESCAPE '\\'"
+        escaped = match.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        params.extend([f"%{escaped}%", f"%{escaped}%"])
     sql += " GROUP BY p.id ORDER BY last_seen DESC"
 
     cursor.execute(sql, params)

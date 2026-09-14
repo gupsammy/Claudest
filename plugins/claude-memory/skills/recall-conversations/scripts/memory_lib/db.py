@@ -29,7 +29,8 @@ CODEX_UNKNOWN_PROJECT_PATH = "/(unknown-codex)"
 
 # Bulk-import coordination
 IMPORT_LOCK_PATH = Path.home() / ".claude-memory" / "import.lock"
-BACKUP_RETENTION = 10
+BACKUP_RETENTION = 3
+BACKUP_MIN_INTERVAL_HOURS = 24
 
 # Default settings
 DEFAULT_SETTINGS = {

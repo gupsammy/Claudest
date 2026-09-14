@@ -16,6 +16,7 @@ import json
 import os
 import sqlite3
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -24,6 +25,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR.parent / "skills" / "recall-conversations" / "scripts"))
 
 from memory_lib.db import (
+    BACKUP_MIN_INTERVAL_HOURS,
     BACKUP_RETENTION,
     CODEX_IMPORT_SENTINEL,
     CODEX_UNKNOWN_PROJECT_PATH,
@@ -116,8 +118,17 @@ def get_file_hash(filepath: Path) -> str:
     return h.hexdigest()
 
 
-def backup_database(db_path: Path, retention: int = BACKUP_RETENTION) -> Path | None:
+def backup_database(
+    db_path: Path,
+    retention: int = BACKUP_RETENTION,
+    min_interval_hours: float = BACKUP_MIN_INTERVAL_HOURS,
+) -> Path | None:
     """Create a consistent SQLite backup before bulk import.
+
+    Each backup is a full page copy of the DB, so the cost is one DB-size
+    file per call. Bulk imports can be triggered on every SessionStart, so
+    a backup is skipped (and the newest existing one returned) when the
+    newest backup is younger than `min_interval_hours`.
 
     Filenames use microsecond resolution so concurrent runs (rare, gated by
     the import lock — but still possible if a stale lock was just stolen)
@@ -131,6 +142,14 @@ def backup_database(db_path: Path, retention: int = BACKUP_RETENTION) -> Path | 
 
     backup_dir = db_path.parent / "backups"
     backup_dir.mkdir(parents=True, exist_ok=True)
+
+    if min_interval_hours > 0:
+        newest = max(backup_dir.glob(f"{db_path.stem}-*{db_path.suffix}"), default=None)
+        if newest is not None:
+            age_hours = (time.time() - newest.stat().st_mtime) / 3600
+            if age_hours < min_interval_hours:
+                return newest
+
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
     backup_path = backup_dir / f"{db_path.stem}-{stamp}{db_path.suffix}"
 
@@ -430,20 +449,21 @@ def import_project(
     cursor = conn.cursor()
 
     project_key = normalize_project_key(project_dir.name)
-    # Try to get real path from first session's metadata (avoids lossy hyphen reconstruction)
-    raw_path = None
-    for f in sorted(project_dir.glob("*.jsonl"))[:1]:
+    # Recover the real path from session metadata (avoids lossy hyphen
+    # reconstruction). A session's cwd is only trusted when it encodes back to
+    # this directory's key: a session that started elsewhere and `/cd`'d here
+    # records the *starting* cwd, which belongs to a different project.
+    trusted_path = None
+    for f in sorted(project_dir.glob("*.jsonl"))[:5]:
         try:
-            first_entries = list(parse_all_with_uuids(f))
-            meta = extract_session_metadata(first_entries)
-            if meta.get("cwd"):
-                raw_path = meta["cwd"]
-                break
+            meta = extract_session_metadata(list(parse_all_with_uuids(f)))
         except Exception:
-            pass
-    if not raw_path:
-        raw_path = parse_project_key(project_key)
-    project_path = normalize_cwd(raw_path)
+            continue
+        cwd = meta.get("cwd")
+        if cwd and get_project_key(cwd) == project_key:
+            trusted_path = normalize_cwd(cwd)
+            break
+    project_path = trusted_path or normalize_cwd(parse_project_key(project_key))
     project_name = extract_project_name(project_path)
 
     if exclude_projects and project_name in exclude_projects:
@@ -453,11 +473,15 @@ def import_project(
     existing = cursor.fetchone()
     if existing:
         project_id = existing[0]
-        if project_path != existing[1]:
-            cursor.execute(
-                "UPDATE projects SET path = ?, name = ? WHERE id = ?",
-                (project_path, project_name, project_id),
-            )
+        # Rename only from a trusted cwd (never from the lossy fallback) and
+        # only when no other project already owns the target path.
+        if trusted_path and trusted_path != existing[1]:
+            cursor.execute("SELECT 1 FROM projects WHERE path = ? AND id != ?", (trusted_path, project_id))
+            if cursor.fetchone() is None:
+                cursor.execute(
+                    "UPDATE projects SET path = ?, name = ? WHERE id = ?",
+                    (trusted_path, project_name, project_id),
+                )
     else:
         cursor.execute(
             "INSERT INTO projects (path, key, name) VALUES (?, ?, ?)"

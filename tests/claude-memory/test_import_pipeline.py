@@ -14,7 +14,9 @@ import pytest
 # Add hooks dir to sys.path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "plugins" / "claude-memory" / "hooks"))
 
+import json
 import os
+import time
 
 import import_conversations as import_module
 from import_conversations import (
@@ -489,7 +491,7 @@ class TestImportBackup:
 
         # Microsecond-resolution timestamps make every backup uniquely named.
         for _ in range(5):
-            backup_database(db_path, retention=3)
+            backup_database(db_path, retention=3, min_interval_hours=0)
 
         backups = sorted((db_path.parent / "backups").glob(f"{db_path.stem}-*.db"))
         assert len(backups) == 3, (
@@ -504,11 +506,104 @@ class TestImportBackup:
         conn.commit()
         conn.close()
 
-        first = backup_database(db_path)
-        second = backup_database(db_path)
+        first = backup_database(db_path, min_interval_hours=0)
+        second = backup_database(db_path, min_interval_hours=0)
 
         assert first is not None and second is not None
         assert first != second, "Backups in the same second must still get distinct filenames"
+
+    def test_backup_throttled_within_min_interval(self, tmp_path):
+        """A second backup inside the interval is skipped and the newest one returned."""
+        db_path = tmp_path / "conversations.db"
+        conn = sqlite3.connect(db_path)
+        conn.execute("CREATE TABLE sample (value TEXT)")
+        conn.commit()
+        conn.close()
+
+        first = backup_database(db_path, min_interval_hours=24)
+        second = backup_database(db_path, min_interval_hours=24)
+
+        assert first == second
+        backups = list((db_path.parent / "backups").glob(f"{db_path.stem}-*.db"))
+        assert len(backups) == 1
+
+    def test_backup_taken_after_interval_elapsed(self, tmp_path):
+        """A backup older than the interval no longer blocks a new one."""
+        db_path = tmp_path / "conversations.db"
+        conn = sqlite3.connect(db_path)
+        conn.execute("CREATE TABLE sample (value TEXT)")
+        conn.commit()
+        conn.close()
+
+        first = backup_database(db_path, min_interval_hours=24)
+        stale = time.time() - 25 * 3600
+        os.utime(first, (stale, stale))
+        second = backup_database(db_path, min_interval_hours=24)
+
+        assert first != second
+
+
+class TestImportProjectPath:
+    """Project path reconciliation must never collide with or corrupt other projects."""
+
+    @staticmethod
+    def _write_session(project_dir, name, cwd):
+        entry = {
+            "type": "user", "uuid": f"u-{name}", "parentUuid": None, "cwd": cwd,
+            "sessionId": name, "timestamp": "2026-09-14T10:00:00.000Z",
+            "message": {"role": "user", "content": "hello"},
+        }
+        (project_dir / f"{name}.jsonl").write_text(json.dumps(entry) + "\n")
+
+    def test_foreign_cwd_does_not_rename_onto_existing_project(self, memory_db, tmp_path):
+        """A session that started in another project (then /cd'd) must not steal that project's path."""
+        project_dir = tmp_path / "-Users-me-repos-claudest"
+        project_dir.mkdir()
+        self._write_session(project_dir, "s1", "/Users/me/PKM")
+
+        memory_db.execute("INSERT INTO projects (path, key, name) VALUES (?, ?, ?)",
+                          ("/Users/me/PKM", "-Users-me-PKM", "PKM"))
+        memory_db.execute("INSERT INTO projects (path, key, name) VALUES (?, ?, ?)",
+                          ("/Users/me/repos/claudest", "-Users-me-repos-claudest", "claudest"))
+        memory_db.commit()
+
+        import_project(memory_db, project_dir, [])  # must not raise IntegrityError
+
+        rows = dict(memory_db.execute("SELECT key, path FROM projects").fetchall())
+        assert rows["-Users-me-repos-claudest"] == "/Users/me/repos/claudest"
+        assert rows["-Users-me-PKM"] == "/Users/me/PKM"
+
+    def test_lossy_fallback_never_renames_existing_project(self, memory_db, tmp_path):
+        """With no trustworthy cwd, an existing hyphenated path must survive intact."""
+        project_dir = tmp_path / "-Users-me-repos-voice-app"
+        project_dir.mkdir()
+        self._write_session(project_dir, "s1", "/Users/me/elsewhere")
+
+        memory_db.execute("INSERT INTO projects (path, key, name) VALUES (?, ?, ?)",
+                          ("/Users/me/repos/voice-app", "-Users-me-repos-voice-app", "voice-app"))
+        memory_db.commit()
+
+        import_project(memory_db, project_dir, [])
+
+        path = memory_db.execute("SELECT path FROM projects WHERE key = ?",
+                                 ("-Users-me-repos-voice-app",)).fetchone()[0]
+        assert path == "/Users/me/repos/voice-app"
+
+    def test_trusted_cwd_renames_existing_project(self, memory_db, tmp_path):
+        """A cwd that encodes to this key is trusted and repairs a lossy stored path."""
+        project_dir = tmp_path / "-Users-me-repos-voice-app"
+        project_dir.mkdir()
+        self._write_session(project_dir, "s1", "/Users/me/repos/voice-app")
+
+        memory_db.execute("INSERT INTO projects (path, key, name) VALUES (?, ?, ?)",
+                          ("/Users/me/repos/voice/app", "-Users-me-repos-voice-app", "app"))
+        memory_db.commit()
+
+        import_project(memory_db, project_dir, [])
+
+        path, name = memory_db.execute("SELECT path, name FROM projects WHERE key = ?",
+                                       ("-Users-me-repos-voice-app",)).fetchone()
+        assert (path, name) == ("/Users/me/repos/voice-app", "voice-app")
 
 
 class TestFKSafeReimport:
@@ -595,11 +690,11 @@ class TestImportProject:
     def test_exclude_projects_skips(self, memory_db):
         """import_project with exclude_projects should skip named projects."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            project_dir = Path(tmpdir) / "-home-user-myproject"
+            project_dir = Path(tmpdir) / "-Users-samarthgupta-repos-forks-node-banana"
             project_dir.mkdir()
 
             # Copy a fixture into it; the fixture has cwd="/Users/samarthgupta/repos/forks/node-banana"
-            # so project_name will be "node-banana" (derived from real cwd, not directory key)
+            # and the directory key encodes the same path, so the cwd is trusted → project_name "node-banana"
             import shutil
             shutil.copy(FIXTURE_DIR / "linear_3_exchange.jsonl", project_dir / "session1.jsonl")
 

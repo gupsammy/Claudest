@@ -676,9 +676,12 @@ def main():
     try:
         if args.backup_on_import and is_import_mode:
             try:
+                started = time.time()
                 backup_path = backup_database(db_path)
                 if backup_path:
-                    print(f"Backup created: {backup_path}")
+                    fresh = backup_path.stat().st_mtime >= started - 1
+                    label = "created" if fresh else "reused (throttled)"
+                    print(f"Backup {label}: {backup_path}")
             except Exception as e:
                 print(f"Backup failed; refusing to import: {e}", file=sys.stderr)
                 sys.exit(1)

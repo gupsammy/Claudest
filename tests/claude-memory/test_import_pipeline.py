@@ -605,6 +605,24 @@ class TestImportProjectPath:
                                        ("-Users-me-repos-voice-app",)).fetchone()
         assert (path, name) == ("/Users/me/repos/voice-app", "voice-app")
 
+    def test_new_project_fallback_collision_does_not_rekey_other_project(self, memory_db, tmp_path):
+        """A new dir whose lossy fallback path is already taken must get its own row, not hijack the other."""
+        project_dir = tmp_path / "-Users-me-repos-voice-app"
+        project_dir.mkdir()
+        self._write_session(project_dir, "s1", "/Users/me/elsewhere")
+
+        # Another project legitimately owns the path the fallback would produce.
+        memory_db.execute("INSERT INTO projects (path, key, name) VALUES (?, ?, ?)",
+                          ("/Users/me/repos/voice/app", "-Users-me-repos-voice-app-real", "app"))
+        memory_db.commit()
+
+        import_project(memory_db, project_dir, [])
+
+        rows = dict(memory_db.execute("SELECT key, path FROM projects").fetchall())
+        assert rows["-Users-me-repos-voice-app-real"] == "/Users/me/repos/voice/app"
+        assert "-Users-me-repos-voice-app" in rows
+        assert rows["-Users-me-repos-voice-app"] != "/Users/me/repos/voice/app"
+
 
 class TestFKSafeReimport:
     """Test that reimport works with foreign keys enabled."""

@@ -486,7 +486,9 @@ def import_project(
         # A path already owned by another project (possible when the lossy
         # fallback collapses two hyphenated dirs onto one path) must not be
         # re-keyed onto this one. Fall back to the encoded directory key,
-        # which is unique by construction; lookups go through `key` anyway.
+        # which is unique by construction. Import lookups go through `key`;
+        # the CWD-based recall scope filter matches on `path`, so this
+        # project stays out of scope until a trusted cwd repairs the path.
         cursor.execute("SELECT 1 FROM projects WHERE path = ?", (project_path,))
         if cursor.fetchone() is not None:
             project_path = project_key

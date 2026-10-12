@@ -309,7 +309,8 @@ def semantic_hits(
         return None
     query_vec = embed([QUERY_PROMPT.format(query)], model, settings["ollama_url"], timeout=10.0)[0]
     pool = max(limit * 5, HYBRID_POOL_MIN)
-    return vector_hits(conn, query_vec, model, scope, include_notifications, pool)
+    return vector_hits(conn, query_vec, model, scope, include_notifications, pool,
+                       min_score=float(settings["semantic_min_score"]))
 
 
 def format_markdown(sessions: list[dict], query: str, verbose: bool = False) -> str:

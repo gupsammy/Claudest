@@ -1,4 +1,4 @@
-# claude-memory ![v0.8.120](https://img.shields.io/badge/v0.8.120-blue?style=flat-square)
+# claude-memory ![v0.8.121](https://img.shields.io/badge/v0.8.121-blue?style=flat-square)
 
 Searchable conversation memory for Claude Code. Auto-syncs sessions to a SQLite database with full-text search, injects previous session context on startup, and provides on-demand recall of past conversations.
 
@@ -45,7 +45,7 @@ Keyword search misses paraphrases: "the car" never matches "the automobile". Wit
 ollama pull embeddinggemma-2:270m
 ```
 
-Then add `"semantic_search": true` to `~/.claude-memory/config.json`. The next session start builds the index in the background (newest exchanges first); after that, each exchange is embedded as soon as its turn ends. `embedding_model` and `ollama_url` override the defaults. If Ollama is not running, search falls back to keywords with a warning.
+Then add `"semantic_search": true` to `~/.claude-memory/config.json`. The next session start builds the index in the background (newest exchanges first); after that, each exchange is embedded as soon as its turn ends. `embedding_model` and `ollama_url` override the defaults. `semantic_min_score` (default 0.70, set for the default model) drops semantic hits below that cosine similarity, so a query with no real match returns keyword results only. If Ollama is not running, search falls back to keywords with a warning.
 
 ### Background session sync
 

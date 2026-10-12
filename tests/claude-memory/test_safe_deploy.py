@@ -5,7 +5,8 @@ Coverage:
 2. A live migration lock defers the migration; a stale one is stolen.
 3. migrate=False applies no data migration and takes no backup.
 4. A fresh DB is stamped with the latest version and takes no backups.
-5. A backup that dies mid-copy leaves neither a final-named file nor a .partial.
+5. A backup that dies mid-copy leaves neither a final-named file nor a .partial;
+   a later backup sweeps .partial files left by killed copies.
 6. memory-setup leaves the migration to the background backfill worker.
 7. A second backfill exits while the first holds its lock.
 """
@@ -180,6 +181,37 @@ class TestAtomicBackup:
         conn = sqlite3.connect(f"file:{backup}?mode=ro", uri=True)
         assert conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0] == 6
         conn.close()
+
+
+    def test_partials_left_by_killed_copies_are_swept(self, tmp_path):
+        db_file = tmp_path / "conversations.db"
+        _db_at_v5(db_file)
+        dead = tmp_path / "conversations.pre-v6-harness-turns-20260101-000000.db.partial"
+        dead_wal = Path(f"{dead}-wal")
+        live = tmp_path / "conversations.pre-v6-harness-turns-20260101-000001.db.partial"
+        for f in (dead, dead_wal, live):
+            f.write_bytes(b"x" * 1024)
+        old = os.path.getmtime(live) - db_module.STALE_PARTIAL_SECONDS - 60
+        os.utime(dead, (old, old))
+        os.utime(dead_wal, (old, old))
+
+        assert db_module._backup_db_before_migration(db_file, "v6-harness-turns") is True
+
+        assert not dead.exists() and not dead_wal.exists(), "orphaned .partial leaks a DB-sized file"
+        assert live.exists(), "a copy still being written must not be removed"
+
+
+class TestLocks:
+    def test_failed_pid_note_does_not_leak_a_held_lock(self, tmp_path, monkeypatch):
+        lock = tmp_path / "x.lock"
+        def full_disk(*_a):
+            raise OSError("no space left on device")
+        monkeypatch.setattr(db_module.os, "ftruncate", full_disk)
+        assert db_module.acquire_lock(lock) == os.getpid()
+        monkeypatch.undo()
+        db_module.release_lock(lock)
+        assert db_module.acquire_lock(lock) is not None, "the lock stayed held by a leaked descriptor"
+        db_module.release_lock(lock)
 
 
 class TestHooks:

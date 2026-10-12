@@ -35,7 +35,7 @@ import pytest
 
 import search_conversations
 from memory_lib.cli_common import ScopeFilter
-from memory_lib.db import get_db_connection
+from memory_lib.db import DEFAULT_SETTINGS, get_db_connection
 from memory_lib.embeddings import (
     DIMS,
     EmbeddingError,
@@ -214,6 +214,15 @@ class TestRanking:
         [q] = embed(["vehicle"], MODEL, ollama)
         assert ids["car"] not in {h[0] for h in vector_hits(conn, q, MODEL, None, False, 10)}
 
+    def test_min_score_drops_weak_matches(self, tmp_path, ollama):
+        conn, _ = _seed(tmp_path / "c.db", SESSIONS)
+        embed_index.index_pending(conn, MODEL, ollama)
+        [q] = embed(["vehicle trouble"], MODEL, ollama)
+        hits = vector_hits(conn, q, MODEL, None, False, 10)
+        assert len(hits) >= 2
+        floor = (hits[0][1] + hits[1][1]) / 2
+        assert [h[0] for h in vector_hits(conn, q, MODEL, None, False, 10, min_score=floor)] == [hits[0][0]]
+
     def test_fuse_rewards_agreement(self):
         # B is second in both lists; 2/(60+2) beats 1/(60+1).
         assert fuse(["A", "B"], ["C", "B"], 3) == ["B", "A", "C"]
@@ -224,7 +233,7 @@ class TestHybridSearch:
     def test_vector_only_session_ranks_in_with_its_exchange(self, tmp_path, ollama):
         conn, ids = _seed(tmp_path / "c.db", SESSIONS)
         embed_index.index_pending(conn, MODEL, ollama)
-        settings = {"embedding_model": MODEL, "ollama_url": ollama}
+        settings = {**DEFAULT_SETTINGS, "embedding_model": MODEL, "ollama_url": ollama}
 
         lexical = search_conversations.search_sessions(
             conn, "vehicle", "fts5", 5, None, False, False, excerpts=True)
@@ -238,12 +247,12 @@ class TestHybridSearch:
 
     def test_semantic_hits_none_without_index(self, tmp_path, dead_url):
         conn, _ = _seed(tmp_path / "c.db", SESSIONS)
-        settings = {"embedding_model": MODEL, "ollama_url": dead_url}
+        settings = {**DEFAULT_SETTINGS, "embedding_model": MODEL, "ollama_url": dead_url}
         assert search_conversations.semantic_hits(conn, "x", settings, None, False, 5) is None
 
 
 def _run_cli(monkeypatch, capsys, db_file, settings, *extra):
-    monkeypatch.setattr(search_conversations, "load_settings", lambda: settings)
+    monkeypatch.setattr(search_conversations, "load_settings", lambda: {**DEFAULT_SETTINGS, **settings})
     monkeypatch.setattr(sys, "argv", ["search_conversations.py", "-q", "sqlite schema", "--all-projects",
                                       "--json", "--db", str(db_file), *extra])
     search_conversations.main()

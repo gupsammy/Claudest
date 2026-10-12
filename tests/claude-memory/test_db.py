@@ -8,6 +8,7 @@ import tempfile
 from pathlib import Path
 
 
+import memory_lib.db as db_module
 from memory_lib.db import (
     CURRENT_ONBOARDING_VERSION,
     DEFAULT_SETTINGS,
@@ -1033,4 +1034,48 @@ class TestScopedFtsUpdateTriggers:
         assert conn.execute(match, ("omega",)).fetchall() == [(bid,)]
         assert conn.execute(match, ("alpha",)).fetchall() == []
         conn.execute("INSERT INTO branches_fts(branches_fts) VALUES('integrity-check')")
+        conn.close()
+
+    def test_trigger_swap_blocks_writers(self, tmp_path):
+        """A write landing between the drop and the recreate would skip the FTS update."""
+        db_file = tmp_path / "conversations.db"
+        conn = get_db_connection({"db_path": str(db_file)})
+        conn.executescript("""
+            DROP TRIGGER branches_au;
+            CREATE TRIGGER branches_au AFTER UPDATE ON branches BEGIN
+              INSERT INTO branches_fts(branches_fts, rowid, aggregated_content) VALUES('delete', old.id, old.aggregated_content);
+              INSERT INTO branches_fts(rowid, aggregated_content) VALUES (new.id, new.aggregated_content);
+            END;
+        """)
+        cursor = conn.cursor()
+        pid = _add_project(cursor, "/r/p", "-r-p", "p")
+        cursor.execute("INSERT INTO sessions (uuid, project_id) VALUES ('s', ?)", (pid,))
+        cursor.execute("INSERT INTO branches (session_id, leaf_uuid, aggregated_content) VALUES (?, 'l', 'alpha')",
+                       (cursor.lastrowid,))
+        bid = cursor.lastrowid
+        conn.commit()
+
+        writer = sqlite3.connect(db_file, timeout=0)
+        outcome = []
+
+        def race(sql):
+            # Fires as each statement starts: at the recreate, the old trigger is gone.
+            if sql.lstrip().upper().startswith("CREATE TRIGGER IF NOT EXISTS BRANCHES_AU") and not outcome:
+                try:
+                    writer.execute("UPDATE branches SET aggregated_content = 'omega' WHERE id = ?", (bid,))
+                    writer.commit()
+                    outcome.append("wrote")
+                except sqlite3.OperationalError:
+                    outcome.append("blocked")
+
+        conn.set_trace_callback(race)
+        db_module._apply_fts_schema(conn, db_module.SCHEMA_FTS5)
+        conn.set_trace_callback(None)
+
+        assert outcome == ["blocked"], "a writer slipped in while the trigger was missing"
+        writer.execute("UPDATE branches SET aggregated_content = 'omega' WHERE id = ?", (bid,))
+        writer.commit()
+        writer.close()
+        match = "SELECT rowid FROM branches_fts WHERE branches_fts MATCH ?"
+        assert conn.execute(match, ("omega",)).fetchall() == [(bid,)]
         conn.close()

@@ -42,6 +42,8 @@ LATEST_DATA_VERSION = 6
 # migrate (and back up) the same DB twice. Background callers wait this long.
 MIGRATE_LOCK_NAME = "migrate.lock"
 MIGRATE_LOCK_WAIT_SECONDS = 300
+# A migration backup's .partial file untouched this long belongs to a dead copy.
+STALE_PARTIAL_SECONDS = 600
 
 # Default settings
 DEFAULT_SETTINGS = {
@@ -58,6 +60,9 @@ DEFAULT_SETTINGS = {
     "semantic_search": False,
     "embedding_model": "embeddinggemma-2:270m",
     "ollama_url": "http://localhost:11434",
+    # Cosine floor for a semantic hit, calibrated for embeddinggemma-2 at 256 dims:
+    # off-topic queries peak near 0.69, real matches sit at 0.72-0.87.
+    "semantic_min_score": 0.70,
 }
 
 # Keys in config.json that override DEFAULT_SETTINGS
@@ -70,6 +75,7 @@ _CONFIG_KEYS = {
     "semantic_search",
     "embedding_model",
     "ollama_url",
+    "semantic_min_score",
 }
 
 # Database schema — v3: messages stored once, branches as separate index
@@ -620,12 +626,15 @@ def acquire_lock(lock_path: Path) -> int | None:
     if not _try_os_lock(fd):
         os.close(fd)
         return None
+    _HELD_LOCKS[key] = fd
     pid = os.getpid()
     if os.name != "nt":
         # Windows locks the first byte against writes, so the PID note is POSIX-only.
-        os.ftruncate(fd, 0)
-        os.write(fd, str(pid).encode("ascii"))
-    _HELD_LOCKS[key] = fd
+        try:
+            os.ftruncate(fd, 0)
+            os.write(fd, str(pid).encode("ascii"))
+        except OSError:
+            pass  # the note is optional; the lock is already ours
     return pid
 
 
@@ -660,6 +669,15 @@ def _backup_db_before_migration(db_path: Path, label: str) -> bool:
     ts = time.strftime("%Y%m%d-%H%M%S")
     backup_path = db_path.with_suffix(f".pre-{label}-{ts}.db")
     partial_path = backup_path.with_name(backup_path.name + ".partial")
+    # A copy killed mid-write (hook timeout, SIGKILL) skips the cleanup below and
+    # leaves a DB-sized .partial. A live copy writes continuously, so one untouched
+    # for STALE_PARTIAL_SECONDS is dead.
+    for stale in db_path.parent.glob(f"{db_path.stem}.pre-*.db.partial*"):
+        try:
+            if time.time() - stale.stat().st_mtime > STALE_PARTIAL_SECONDS:
+                stale.unlink()
+        except OSError:
+            pass
     ok = False
     try:
         src = sqlite3.connect(str(db_path))
@@ -869,16 +887,30 @@ def _migrate_project_paths(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
-def _drop_unscoped_update_triggers(conn: sqlite3.Connection) -> None:
-    """Drop FTS update triggers that fire on any column so the schema script
-    recreates them scoped to the indexed column. Unscoped, every metadata or
-    summary write re-indexed the row's full text."""
+def _apply_fts_schema(conn: sqlite3.Connection, schema: str) -> None:
+    """Create the FTS tables and triggers, rescoping old update triggers.
+
+    Old update triggers fired on any column, so every metadata or summary write
+    re-indexed the row's full text. They are dropped and recreated scoped to the
+    indexed column in one write transaction: a writer committing between the drop
+    and the create would change content with no trigger and desync the index.
+    """
+    unscoped = []
     for name in ("messages_au", "branches_au"):
         row = conn.execute(
             "SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = ?", (name,)
         ).fetchone()
         if row and " UPDATE OF " not in row[0].upper():
-            conn.execute(f"DROP TRIGGER {name}")
+            unscoped.append(name)
+    if not unscoped:
+        conn.executescript(schema)
+        return
+    drops = "".join(f"DROP TRIGGER IF EXISTS {name};\n" for name in unscoped)
+    try:
+        conn.executescript(f"BEGIN IMMEDIATE;\n{drops}{schema}\nCOMMIT;")
+    except sqlite3.Error:
+        conn.rollback()
+        raise
 
 
 def get_db_connection(settings: Optional[dict] = None, migrate: bool = True) -> sqlite3.Connection:
@@ -921,12 +953,10 @@ def get_db_connection(settings: Optional[dict] = None, migrate: bool = True) -> 
         if fresh:
             # Nothing to migrate in an empty DB: skip every data migration and its backup.
             conn.execute(f"PRAGMA user_version = {LATEST_DATA_VERSION}")
-        if fts:
-            _drop_unscoped_update_triggers(conn)
         if fts == "fts5":
-            conn.executescript(SCHEMA_FTS5)
+            _apply_fts_schema(conn, SCHEMA_FTS5)
         elif fts == "fts4":
-            conn.executescript(SCHEMA_FTS4)
+            _apply_fts_schema(conn, SCHEMA_FTS4)
         conn.commit()
 
     # Add any missing columns (e.g. tool_summary)

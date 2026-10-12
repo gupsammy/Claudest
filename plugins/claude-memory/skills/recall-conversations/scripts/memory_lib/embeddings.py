@@ -126,11 +126,13 @@ def vector_hits(
     scope: Optional[ScopeFilter],
     include_notifications: bool,
     limit: int,
+    min_score: float = -1.0,
 ) -> list[tuple[int, float, int]]:
     """Rank active branches by their closest exchange to the query.
 
     Returns up to `limit` (branch_id, similarity, message_id) tuples, best first;
-    message_id is the exchange that matched.
+    message_id is the exchange that matched. Branches whose best exchange scores
+    below min_score are dropped, so a query with no real match returns nothing.
     """
     sql = """
         SELECT bm.branch_id, e.message_id, e.vec
@@ -154,7 +156,8 @@ def vector_hits(
         score = sum(map(operator.mul, query_vec, unpack(blob)))
         if branch_id not in best or score > best[branch_id][0]:
             best[branch_id] = (score, message_id)
-    ranked = sorted(best.items(), key=lambda kv: kv[1][0], reverse=True)[:limit]
+    ranked = sorted(((bid, hit) for bid, hit in best.items() if hit[0] >= min_score),
+                    key=lambda kv: kv[1][0], reverse=True)[:limit]
     return [(bid, score, mid) for bid, (score, mid) in ranked]
 
 

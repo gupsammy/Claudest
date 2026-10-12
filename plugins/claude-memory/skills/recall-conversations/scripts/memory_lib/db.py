@@ -484,6 +484,14 @@ CREATE INDEX IF NOT EXISTS idx_token_snapshots_start ON token_snapshots(start_ti
         conn.execute("PRAGMA user_version = 4")
         conn.commit()
 
+    if version < 5:
+        # Worktree folding: _migrate_project_paths folds worktree projects into their
+        # main checkout, moving sessions between projects. Snapshot first; the
+        # fold is gated on v5, so it never runs without a backup on disk.
+        if not db_path.name or _backup_db_before_migration(db_path, "v5-worktree-fold"):
+            conn.execute("PRAGMA user_version = 5")
+            conn.commit()
+
 
 def _backup_db_before_migration(db_path: Path, label: str) -> bool:
     """Create a timestamped WAL-safe backup using sqlite3.Connection.backup().
@@ -728,9 +736,11 @@ def get_db_connection(settings: Optional[dict] = None) -> sqlite3.Connection:
     # Add any missing columns (e.g. tool_summary)
     _migrate_columns(conn)
 
-    # Fix project paths that were incorrectly derived from hyphenated directory keys
+    # Fix project paths and fold worktree projects into their main checkout.
+    # Waits for v5, whose migration takes the pre-fold backup.
     try:
-        _migrate_project_paths(conn)
+        if conn.execute("PRAGMA user_version").fetchone()[0] >= 5:
+            _migrate_project_paths(conn)
     except Exception:
         pass  # Never block DB connection on data migration errors
 

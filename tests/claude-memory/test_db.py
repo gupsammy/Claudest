@@ -14,6 +14,7 @@ from memory_lib.db import (
     SCHEMA,
     _migrate_columns,
     _migrate_project_paths,
+    get_db_connection,
     resolve_project_cwd,
     load_config,
     load_settings,
@@ -211,7 +212,7 @@ class TestVersionedMigration:
         conn = _pre_migration_db()
         _migrate_columns(conn)
         version = conn.execute("PRAGMA user_version").fetchone()[0]
-        assert version == 4
+        assert version == 5
         conn.close()
 
     def test_v0_to_v2_backfills_both(self):
@@ -230,7 +231,7 @@ class TestVersionedMigration:
         assert rows[0] == (1, 0)
         assert rows[1] == (2, 1)
         assert rows[2] == (3, 1)
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 4
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 5
         conn.close()
 
     def test_v1_to_v2_backfills_only_teammate(self):
@@ -250,7 +251,7 @@ class TestVersionedMigration:
         assert rows[0] == (1, 1)  # Already flagged, untouched
         assert rows[1] == (2, 1)  # Newly flagged by version 2
         assert rows[2] == (3, 0)  # Normal, untouched
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 4
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 5
         conn.close()
 
     def test_v2_skips_data_backfills(self):
@@ -266,7 +267,7 @@ class TestVersionedMigration:
         cursor.execute("SELECT is_notification FROM messages WHERE id = 1")
         assert cursor.fetchone()[0] == 0
         # v3 migration runs from v2, bumping version to 3
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 4
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 5
         conn.close()
 
     def test_v2_to_v3_preserves_import_log(self):
@@ -282,7 +283,7 @@ class TestVersionedMigration:
         assert count == 1
         hash_val = conn.execute("SELECT file_hash FROM import_log").fetchone()[0]
         assert hash_val == "abc123"
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 4
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 5
         conn.close()
 
     def test_v3_backfill_updates_origin(self, tmp_path):
@@ -649,7 +650,7 @@ class TestV4Migration:
         """After migration from v3, user_version should be 4."""
         conn = _v3_db_with_messages()
         _migrate_columns(conn)
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 4
+        assert conn.execute("PRAGMA user_version").fetchone()[0] >= 4
         conn.close()
 
     def test_v4_clears_task_notification_origin(self):
@@ -679,7 +680,7 @@ class TestV4Migration:
         _migrate_columns(conn)  # v3->v4
         _migrate_columns(conn)  # no-op
 
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 4
+        assert conn.execute("PRAGMA user_version").fetchone()[0] >= 4
         origin = conn.execute("SELECT origin FROM messages WHERE id = 1").fetchone()[0]
         assert origin == "telegram", "idempotent re-run must not corrupt already-correct data"
         conn.close()
@@ -932,3 +933,44 @@ class TestWorktreeProjectFolding:
         _migrate_project_paths(conn)
 
         assert cursor.execute("SELECT path FROM projects WHERE id = ?", (main_id,)).fetchone()[0] == "/r/proj"
+
+
+def _worktree_db_at_v4(db_file):
+    """File-backed DB at v4 holding a main project and a legacy worktree project."""
+    conn = get_db_connection({"db_path": str(db_file)})
+    cursor = conn.cursor()
+    main_id = _add_project(cursor, "/r/proj", "-r-proj", "proj")
+    _add_sessions(cursor, main_id, "/r/proj")
+    wt_id = _add_project(cursor, "/r/proj/.claude/worktrees/pr", "-r-proj--claude-worktrees-pr", "pr")
+    _add_sessions(cursor, wt_id, "/r/proj/.claude/worktrees/pr", count=2)
+    conn.execute("PRAGMA user_version = 4")
+    conn.commit()
+    conn.close()
+    return main_id, wt_id
+
+
+class TestV5WorktreeFoldBackup:
+    def test_backup_taken_before_first_fold(self, tmp_path):
+        db_file = tmp_path / "conversations.db"
+        main_id, wt_id = _worktree_db_at_v4(db_file)
+
+        conn = get_db_connection({"db_path": str(db_file)})
+
+        assert list(tmp_path.glob("conversations.pre-v5-worktree-fold-*.db")), "no pre-fold backup on disk"
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 5
+        assert _sessions_in(conn.cursor(), main_id) == 3
+        assert conn.execute("SELECT 1 FROM projects WHERE id = ?", (wt_id,)).fetchone() is None
+        conn.close()
+
+    def test_fold_waits_when_backup_fails(self, tmp_path, monkeypatch):
+        import memory_lib.db as db_module
+        monkeypatch.setattr(db_module, "_backup_db_before_migration", lambda *_: False)
+        db_file = tmp_path / "conversations.db"
+        main_id, wt_id = _worktree_db_at_v4(db_file)
+
+        conn = get_db_connection({"db_path": str(db_file)})
+
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 4
+        assert _sessions_in(conn.cursor(), main_id) == 1, "sessions moved without a backup"
+        assert conn.execute("SELECT 1 FROM projects WHERE id = ?", (wt_id,)).fetchone() is not None
+        conn.close()

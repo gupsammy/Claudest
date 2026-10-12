@@ -661,7 +661,8 @@ def _migrate_project_paths(conn: sqlite3.Connection) -> None:
         per_root = tallies.setdefault(proj_id, {})
         root = resolve_project_cwd(conn, cwd)
         per_root[root] = per_root.get(root, 0) + count
-    best_cwd = {proj_id: max(per_root, key=per_root.get) for proj_id, per_root in tallies.items()}
+    # sorted() makes ties pick the same root every run, whatever the row order.
+    best_cwd = {proj_id: max(sorted(per_root), key=per_root.get) for proj_id, per_root in tallies.items()}
 
     # Now check which projects need updating
     cursor.execute("SELECT id, path, key FROM projects")

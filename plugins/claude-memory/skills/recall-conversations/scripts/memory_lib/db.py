@@ -743,7 +743,10 @@ def get_db_connection(settings: Optional[dict] = None) -> sqlite3.Connection:
         if conn.execute("PRAGMA user_version").fetchone()[0] >= 5:
             _migrate_project_paths(conn)
     except Exception:
-        pass  # Never block DB connection on data migration errors
+        # Never block DB connection on data migration errors. Roll back so the
+        # caller's next commit can't persist a half-applied fold; it retries on
+        # the next connection.
+        conn.rollback()
 
     return conn
 

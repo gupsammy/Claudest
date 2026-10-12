@@ -974,3 +974,30 @@ class TestV5WorktreeFoldBackup:
         assert _sessions_in(conn.cursor(), main_id) == 1, "sessions moved without a backup"
         assert conn.execute("SELECT 1 FROM projects WHERE id = ?", (wt_id,)).fetchone() is not None
         conn.close()
+
+    def test_failed_fold_leaves_no_partial_changes_pending(self, tmp_path, monkeypatch):
+        """A fold that fails partway must roll back, or the caller's next commit
+        would persist a half-applied merge."""
+        import memory_lib.db as db_module
+        db_file = tmp_path / "conversations.db"
+        conn = get_db_connection({"db_path": str(db_file)})
+        cursor = conn.cursor()
+        main_id = _add_project(cursor, "/r/a", "-r-a", "a")
+        _add_sessions(cursor, main_id, "/r/a")
+        wt_a = _add_project(cursor, "/r/a/.claude/worktrees/x", "-r-a--claude-worktrees-x", "x")
+        _add_sessions(cursor, wt_a, "/r/a/.claude/worktrees/x")
+        wt_b = _add_project(cursor, "/r/b/.claude/worktrees/y", "-r-b--claude-worktrees-y", "y")
+        _add_sessions(cursor, wt_b, "/r/b/.claude/worktrees/y")
+        conn.commit()
+        conn.close()
+
+        def boom(*_):
+            raise RuntimeError("fail after the first merge")
+        monkeypatch.setattr(db_module, "_rekeyed_worktree_key", boom)
+
+        conn = get_db_connection({"db_path": str(db_file)})
+        conn.commit()  # what a hook does next
+
+        assert _sessions_in(conn.cursor(), main_id) == 1, "half-applied fold was committed"
+        assert conn.execute("SELECT 1 FROM projects WHERE id = ?", (wt_a,)).fetchone() is not None
+        conn.close()

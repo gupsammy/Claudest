@@ -44,7 +44,7 @@ Search for sessions containing keywords using full-text search (FTS5/FTS4/LIKE c
 
 Matching: the query is split on whitespace and FTS special characters are removed from each term. FTS5 OR-joins the terms and ranks by BM25; FTS4 OR-joins and orders by recency; the LIKE fallback requires every term and orders by recency. Each hit returns the whole session by default, its summary with `--summary`, or its matching passages with `--excerpts`.
 
-With `semantic_search` on in `config.json`, the keyword ranking is fused (reciprocal rank) with a ranking by embedding similarity of each exchange, so paraphrases match. A session found only by meaning has no keyword passage; under `--excerpts` it shows the message that matched. Ollama down → keyword results plus a stderr warning.
+With `semantic_search` on in `config.json`, the keyword ranking is fused (reciprocal rank) with a ranking by embedding similarity of each exchange, so paraphrases match. A session found only by meaning has no keyword passage; under `--excerpts` it shows the message that matched. Exchanges below `semantic_min_score` (0.70, calibrated for the default model) never rank, so no result means no close match, not a missing index. Ollama down → keyword results plus a stderr warning.
 
 ```bash
 python3 ${CLAUDE_PLUGIN_ROOT}/skills/recall-conversations/scripts/search_conversations.py --query "keyword"

@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 
 from memory_lib.formatting import (
+    codex_worktree_repo,
     extract_project_name,
     format_markdown_session,
     format_time,
@@ -279,3 +280,19 @@ class TestFormatMarkdownSession:
         md = format_markdown_session(session)
         assert "**User:** Hello" in md
         assert "Subagent Result" not in md
+
+
+class TestCodexWorktreeRepo:
+    def test_returns_repo_name_for_codex_worktree(self):
+        assert codex_worktree_repo("/Users/sam/.codex/worktrees/aa5e/tinyconcepts") == "tinyconcepts"
+
+    def test_returns_repo_name_from_subdirectory(self):
+        assert codex_worktree_repo("/Users/sam/.codex/worktrees/aa5e/tinyconcepts/web") == "tinyconcepts"
+
+    def test_none_when_no_repo_level(self):
+        """~/.codex/worktrees/<name> has no repo component to match on."""
+        assert codex_worktree_repo("/Users/sam/.codex/worktrees/clicky-parity-foundation") is None
+
+    def test_none_for_regular_and_claude_worktree_paths(self):
+        assert codex_worktree_repo("/Users/sam/repos/tinyconcepts") is None
+        assert codex_worktree_repo("/Users/sam/repos/tinyconcepts/.claude/worktrees/fix") is None

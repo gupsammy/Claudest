@@ -23,10 +23,10 @@ allowed-tools:
 
 Weave these into conversation at natural moments — after results land, when context is relevant, or on first use. One or two per run, not all at once.
 
-- Most users say "remember this" expecting a single note — this skill actually runs two parallel agents (auditor + discoverer) to both capture new knowledge and verify existing memories haven't gone stale.
+- A plain "remember this" saves one note fast; a consolidation run goes further, running two agents in parallel (auditor + discoverer) that capture new knowledge and check that existing memories haven't gone stale.
 - The 5-layer memory hierarchy means the right knowledge loads at the right time — universal preferences in L0, project architecture in L1, working notes in L2 — without polluting every session with everything.
 - Consolidation ("dream") is the maintenance mode: it prunes outdated and low-value memories, merges overlaps, and clusters overflowing sections so the always-loaded index stays small.
-- For teams: memories captured here carry forward to every future session in this project, making onboarding and context-switching dramatically faster.
+- Memories captured here carry forward to every future session in this project. Only L1 (the repo's CLAUDE.md) reaches teammates; L2/L3 memory lives in the user's own `~/.claude` directory.
 
 ## Memory Hierarchy
 
@@ -63,10 +63,7 @@ If the user said "remember X" with explicit content already in context — and t
 
 ### Phase 1: Orient (main session)
 
-1. Resolve memory path using Bash (Glob does not expand `~`):
-   `Bash: find $HOME/.claude/projects -name MEMORY.md -path "*<repo-dir-name>*" 2>/dev/null | head -1`
-   The result is the full path to MEMORY.md (a file). The memory directory is its parent: `$(dirname <find-result>)`.
-   If no result, construct the project key by replacing `/` with `-` in the current working directory path (e.g., `/home/user/myrepo` → `-home-user-myrepo`), then use `$HOME/.claude/projects/<project-key>/memory/MEMORY.md`.
+1. Resolve the memory directory. If the session's system prompt names a persistent memory directory, use it. Otherwise derive the project key the way the consolidation-check hook does, so the Phase 4 marker lands where the hook reads it: take the working directory, cut everything from `/.claude/worktrees/` onward so a worktree resolves to its base repo, then replace `/`, `:` and `.` with `-` (e.g. `/home/user/my.repo/.claude/worktrees/fix` → `-home-user-my-repo`). The directory is `$HOME/.claude/projects/<project-key>/memory/` — use Bash for `$HOME`; Glob does not expand `~`.
    - If MEMORY.md does not exist, create it with `# Project Memory` header. Note that the Memory Auditor has nothing to audit — in Phase 2, spawn only the Signal Discoverer.
 
 Steps 2-4 are required and run as parallel tool calls.
@@ -82,13 +79,11 @@ Launch both agent calls in a single message so they run in parallel. Use the Age
 
 - **Memory Auditor**: `subagent_type: "claude-memory:memory-auditor"`. In the `prompt`, include the context snapshot from Phase 1 — memory file contents, git log output, and verification targets list. Instruct it to surface retirement and merge candidates (SUPERSEDED / REDUNDANT / LOW-VALUE / MERGE), not only factually stale entries — downward pressure is the point of consolidation.
 
-- **Signal Discoverer**: `subagent_type: "claude-memory:signal-discoverer"`. In the `prompt`, include existing memory summaries (for dedup) and the project name.
+- **Signal Discoverer**: `subagent_type: "claude-memory:signal-discoverer"`. In the `prompt`, include existing memory summaries (for dedup).
 
 If Phase 1 noted MEMORY.md was just created (no existing memories), skip the Memory Auditor and spawn only the Signal Discoverer.
 
-Both agents require `maxTurns ≥ 30` — verify agent frontmatter at `plugins/claude-memory/agents/`. Agents with low maxTurns exit early and return truncated output that appears non-empty but contains no findings.
-
-Phase 2 is complete when both agents return reports. If either returns empty or clearly truncated (one line, no structured findings), proceed with the other's results — but if the Signal Discoverer fails, also perform a manual fallback: query the 5 most recent session summaries directly from `~/.claude-memory/conversations.db` using `Bash(python3 -c "import sqlite3; ...")` and apply the signal criteria from the Content Quality Rules section below.
+Phase 2 is complete when both agents return reports. If either returns empty or clearly truncated (one line, no structured findings), proceed with the other's results — but if the Signal Discoverer fails, also perform a manual fallback: locate `recent_chats.py` under `$HOME/.claude/plugins/cache` (the script the Signal Discoverer uses), run `python3 <script> --limit 5 --summary`, and apply the signal criteria from the Content Quality Rules section below.
 
 ### Phase 3: Synthesize & Propose (main session)
 
@@ -106,7 +101,7 @@ Phase 2 is complete when both agents return reports. If either returns empty or 
    - <old line>
    + <new line>
    ```
-7. Consolidation pressure (every consolidation run), in order: (a) convert the auditor's SUPERSEDED / REDUNDANT / LOW-VALUE / MERGE findings into concrete REMOVE/MERGE proposals — a run that only adds is a failure mode; (b) ONLY after retirements and merges are settled, run the per-section overflow check on the reduced set — if any MEMORY.md section still exceeds 25 entries, propose migrating it to `memory/clusters/<section>.md` and replacing the section with a single pointer (adaptive clustering). Clustering never runs before retirement; it must not mask removable entries. When migrating into or editing an existing cluster, extract any inline rule bodies into topic files so the cluster stays a pure trigger-index (Pointer Format) — this reshapes muddled clusters on the next run that touches them. Early-exit captures (no auditor findings) skip (a) and run (b) only if the new entry pushes a section past 25
+7. Consolidation pressure (every consolidation run): (a) turn the auditor's SUPERSEDED / REDUNDANT / LOW-VALUE / MERGE findings into concrete REMOVE/MERGE proposals — a run that only adds is a failure mode; (b) then, on the reduced set, run the per-section overflow check: if a MEMORY.md section still exceeds 25 entries, propose moving it to `memory/clusters/<section>.md` behind a single pointer. Clustering comes after retirement so it cannot hide removable entries. When migrating into or editing a cluster, move inline rule bodies into topic files so the cluster stays a pure trigger-index (Pointer Format). Early-exit captures (no auditor findings) skip (a) and run (b) only if the new entry pushes a section past 25.
 8. Layer 0 gate — if targeting `~/.claude/CLAUDE.md`, warn: "This modifies global instructions loaded in every session across all projects. Confirm?"
 9. AskUserQuestion: Approve all / Approve selectively / Reject
 
@@ -127,7 +122,7 @@ Output summary table:
 |----------|--------|--------|--------|
 ```
 
-Only if Phase 2 agents ran (not an early-exit capture): write the consolidation marker (required — a skipped marker re-fires the nudge next session). Use Bash, not Write — Write requires a prior Read and cannot create a new file:
+Only if Phase 2 agents ran (not an early-exit capture): write the consolidation marker (required — a skipped marker re-fires the nudge next session). Use Bash, not Write — the marker usually exists already, and Write refuses to overwrite a file not Read this session:
 `Bash: date -u +%Y-%m-%dT%H:%M:%SZ > <memory-dir>/.last-consolidation`
 
 Phase 4 is complete when all approved edits are applied, every REMOVE/MERGE is verified absent via Glob, the marker is written, and the summary table is presented.

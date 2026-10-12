@@ -48,6 +48,7 @@ from memory_lib.db import (
     DEFAULT_PROJECTS_DIR,
     get_db_connection,
     load_settings,
+    resolve_project_cwd,
     setup_logging,
 )
 from memory_lib.content import extract_text_content, is_task_notification, is_teammate_message, is_tool_result, parse_origin
@@ -55,7 +56,7 @@ from memory_lib.parsing import (
     parse_jsonl_file, parse_all_with_uuids, extract_session_metadata,
     find_all_branches, compute_branch_metadata, aggregate_branch_content,
 )
-from memory_lib.formatting import get_project_key, normalize_cwd, normalize_project_key, parse_project_key
+from memory_lib.formatting import get_project_key, normalize_project_key, parse_project_key
 from memory_lib.summarizer import compute_context_summary
 
 
@@ -231,7 +232,7 @@ def sync_entries(
     # Get or create project
     project_key = normalize_project_key(project_key)
     raw_path = meta["cwd"] if meta.get("cwd") else fallback_project_path
-    project_path = normalize_cwd(raw_path)
+    project_path = resolve_project_cwd(conn, raw_path)
     project_name = Path(project_path).name
 
     # First try to find existing project by key
@@ -479,7 +480,7 @@ def sync_codex_session(conn: sqlite3.Connection, filepath: Path) -> int:
     session_uuid, all_entries, messages, cwd = parse_codex_session(filepath)
     if not validate_codex_thread_id(session_uuid):
         return 0
-    fallback_project_path = cwd or CODEX_UNKNOWN_PROJECT_PATH
+    fallback_project_path = resolve_project_cwd(conn, cwd or CODEX_UNKNOWN_PROJECT_PATH)
     project_key = get_project_key(fallback_project_path)
     return sync_entries(conn, session_uuid, all_entries, messages, project_key, fallback_project_path)
 

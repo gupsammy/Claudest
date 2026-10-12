@@ -32,6 +32,7 @@ def format_time_full(ts_str: Optional[str]) -> str:
 
 _WORKTREE_MARKER = "/.claude/worktrees/"
 _WORKTREE_KEY_MARKER = "--claude-worktrees-"
+_CODEX_WORKTREE_MARKER = "/.codex/worktrees/"
 
 
 def normalize_cwd(cwd: str) -> str:
@@ -43,6 +44,20 @@ def normalize_cwd(cwd: str) -> str:
     cwd = cwd.replace("\\", "/")
     idx = cwd.rfind(_WORKTREE_MARKER)
     return cwd[:idx] if idx != -1 else cwd
+
+
+def codex_worktree_repo(cwd: str) -> Optional[str]:
+    """Return the repo name of a Codex worktree path (~/.codex/worktrees/<id>/<repo>/...), else None.
+
+    Codex worktree paths don't encode the main checkout's location, only its
+    directory name; callers resolve that name against known projects.
+    """
+    cwd = cwd.replace("\\", "/")
+    idx = cwd.find(_CODEX_WORKTREE_MARKER)
+    if idx == -1:
+        return None
+    parts = cwd[idx + len(_CODEX_WORKTREE_MARKER):].split("/")
+    return parts[1] if len(parts) >= 2 and parts[1] else None
 
 
 def get_project_key(cwd: str) -> str:

@@ -13,6 +13,8 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Optional
 
+from memory_lib.formatting import codex_worktree_repo, get_project_key, normalize_cwd, normalize_project_key
+
 # Default paths
 DEFAULT_DB_PATH = Path.home() / ".claude-memory" / "conversations.db"
 DEFAULT_PROJECTS_DIR = Path.home() / ".claude" / "projects"
@@ -581,6 +583,35 @@ def _backfill_origin(conn: sqlite3.Connection, cursor: sqlite3.Cursor) -> None:
     conn.commit()
 
 
+def resolve_project_cwd(conn: sqlite3.Connection, cwd: str) -> str:
+    """Map a session cwd to its project root, folding worktrees into the main checkout.
+
+    Claude worktrees (<repo>/.claude/worktrees/<name>) resolve by path. Codex
+    worktrees (~/.codex/worktrees/<id>/<repo>) only carry the repo's directory
+    name, so they resolve to the one non-worktree project with that name; with
+    zero or several candidates the worktree path is kept as its own project.
+    """
+    path = normalize_cwd(cwd)
+    repo = codex_worktree_repo(path)
+    if repo is None:
+        return path
+    rows = conn.execute("SELECT path FROM projects WHERE name = ?", (repo,)).fetchall()
+    mains = [p for (p,) in rows if p and codex_worktree_repo(p) is None and normalize_cwd(p) == p]
+    return mains[0] if len(mains) == 1 else path
+
+
+def _rekeyed_worktree_key(conn: sqlite3.Connection, proj_id: int, key: str, real_cwd: str) -> str:
+    """Return the main-checkout key for a worktree project row, or its current key."""
+    if normalize_project_key(key) != key:
+        new_key = normalize_project_key(key)  # keeps Claude Code's own directory encoding
+    elif "--codex-worktrees-" in key:  # get_project_key encoding of /.codex/worktrees/
+        new_key = get_project_key(real_cwd)
+    else:
+        return key
+    taken = conn.execute("SELECT 1 FROM projects WHERE key = ? AND id != ?", (new_key, proj_id)).fetchone()
+    return key if taken else new_key
+
+
 def _migrate_project_paths(conn: sqlite3.Connection) -> None:
     """Fix project paths that were incorrectly derived from hyphenated directory keys.
 
@@ -594,6 +625,9 @@ def _migrate_project_paths(conn: sqlite3.Connection) -> None:
     project path and name. It also merges duplicate projects that resolve to the same
     real path.
 
+    Session cwds are resolved through resolve_project_cwd first, so worktree
+    projects (Claude or Codex) merge into their main checkout's project.
+
     This is idempotent: after fixing, the project path matches session cwd, so subsequent
     runs find no mismatch and do nothing.
     """
@@ -601,9 +635,7 @@ def _migrate_project_paths(conn: sqlite3.Connection) -> None:
 
     # Find all projects that have at least one session with a non-null cwd
     cursor.execute("""
-        SELECT p.id, p.path, p.name,
-               s.cwd,
-               COUNT(*) AS cwd_count
+        SELECT p.id, s.cwd, COUNT(*) AS cwd_count
         FROM projects p
         JOIN sessions s ON s.project_id = p.id
         WHERE s.cwd IS NOT NULL AND s.cwd != ''
@@ -614,17 +646,20 @@ def _migrate_project_paths(conn: sqlite3.Connection) -> None:
     if not rows:
         return
 
-    # For each project, pick the most common cwd as the authoritative real path
-    best_cwd: dict[int, str] = {}
-    for proj_id, _path, _name, cwd, _count in rows:
-        if proj_id not in best_cwd:
-            best_cwd[proj_id] = cwd  # rows ordered by cwd_count DESC, first wins
+    # For each project, pick the most common resolved root as the authoritative
+    # path. Resolve everything before mutating: Codex resolution reads projects.
+    tallies: dict[int, dict[str, int]] = {}
+    for proj_id, cwd, count in rows:
+        per_root = tallies.setdefault(proj_id, {})
+        root = resolve_project_cwd(conn, cwd)
+        per_root[root] = per_root.get(root, 0) + count
+    best_cwd = {proj_id: max(per_root, key=per_root.get) for proj_id, per_root in tallies.items()}
 
     # Now check which projects need updating
-    cursor.execute("SELECT id, path, name FROM projects")
+    cursor.execute("SELECT id, path, key FROM projects")
     projects = cursor.fetchall()
 
-    for proj_id, stored_path, _stored_name in projects:
+    for proj_id, stored_path, stored_key in projects:
         real_cwd = best_cwd.get(proj_id)
         if not real_cwd or real_cwd == stored_path:
             continue  # No cwd data or already correct
@@ -644,10 +679,11 @@ def _migrate_project_paths(conn: sqlite3.Connection) -> None:
             )
             cursor.execute("DELETE FROM projects WHERE id = ?", (proj_id,))
         else:
-            # Simple fix: update path and name
+            # Simple fix: update path and name; a worktree row also takes the
+            # main checkout's key so later imports of that checkout find it.
             cursor.execute(
-                "UPDATE projects SET path = ?, name = ? WHERE id = ?",
-                (real_cwd, real_name, proj_id)
+                "UPDATE projects SET path = ?, name = ?, key = ? WHERE id = ?",
+                (real_cwd, real_name, _rekeyed_worktree_key(conn, proj_id, stored_key, real_cwd), proj_id)
             )
 
     conn.commit()

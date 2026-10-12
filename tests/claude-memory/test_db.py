@@ -14,6 +14,7 @@ from memory_lib.db import (
     SCHEMA,
     _migrate_columns,
     _migrate_project_paths,
+    resolve_project_cwd,
     load_config,
     load_settings,
     migrate_db,
@@ -831,3 +832,103 @@ class TestMigrateDbBackupGuard:
         assert count == 1, (
             "Original session data must be intact after aborted migration"
         )
+
+
+def _add_project(cursor, path, key, name):
+    cursor.execute("INSERT INTO projects (path, key, name) VALUES (?, ?, ?)", (path, key, name))
+    return cursor.lastrowid
+
+
+def _add_sessions(cursor, project_id, cwd, count=1):
+    for _ in range(count):
+        cursor.execute(
+            "INSERT INTO sessions (uuid, project_id, cwd) VALUES (lower(hex(randomblob(16))), ?, ?)",
+            (project_id, cwd),
+        )
+
+
+def _sessions_in(cursor, project_id):
+    return cursor.execute("SELECT COUNT(*) FROM sessions WHERE project_id = ?", (project_id,)).fetchone()[0]
+
+
+class TestResolveProjectCwd:
+    def test_claude_worktree_resolves_to_main_checkout(self):
+        conn = _project_path_db()
+        assert resolve_project_cwd(conn, "/r/proj/.claude/worktrees/fix") == "/r/proj"
+
+    def test_codex_worktree_resolves_to_unique_same_named_project(self):
+        conn = _project_path_db()
+        _add_project(conn.cursor(), "/r/tiny", "-r-tiny", "tiny")
+        assert resolve_project_cwd(conn, "/u/.codex/worktrees/aa5e/tiny") == "/r/tiny"
+
+    def test_codex_worktree_kept_when_name_is_ambiguous(self):
+        conn = _project_path_db()
+        cursor = conn.cursor()
+        _add_project(cursor, "/r/tiny", "-r-tiny", "tiny")
+        _add_project(cursor, "/other/tiny", "-other-tiny", "tiny")
+        wt = "/u/.codex/worktrees/aa5e/tiny"
+        assert resolve_project_cwd(conn, wt) == wt
+
+    def test_codex_worktree_ignores_other_worktree_projects_as_candidates(self):
+        conn = _project_path_db()
+        _add_project(conn.cursor(), "/u/.codex/worktrees/bbbb/tiny", "-u--codex-worktrees-bbbb-tiny", "tiny")
+        wt = "/u/.codex/worktrees/aa5e/tiny"
+        assert resolve_project_cwd(conn, wt) == wt
+
+
+class TestWorktreeProjectFolding:
+    def test_legacy_claude_worktree_project_merges_into_main(self):
+        """Sessions imported before worktree normalization move to the main project."""
+        conn = _project_path_db()
+        cursor = conn.cursor()
+        main_id = _add_project(cursor, "/r/proj", "-r-proj", "proj")
+        _add_sessions(cursor, main_id, "/r/proj")
+        wt_id = _add_project(cursor, "/r/proj/.claude/worktrees/pr", "-r-proj--claude-worktrees-pr", "pr")
+        _add_sessions(cursor, wt_id, "/r/proj/.claude/worktrees/pr", count=3)
+        conn.commit()
+
+        _migrate_project_paths(conn)
+
+        assert _sessions_in(cursor, main_id) == 4
+        assert cursor.execute("SELECT 1 FROM projects WHERE id = ?", (wt_id,)).fetchone() is None
+
+    def test_claude_worktree_project_without_main_takes_main_path_and_key(self):
+        """The surviving row must carry the main key, or the next import of the
+        main checkout would miss it and create a duplicate project."""
+        conn = _project_path_db()
+        cursor = conn.cursor()
+        wt_id = _add_project(cursor, "/r/proj/.claude/worktrees/pr", "-r-proj--claude-worktrees-pr", "pr")
+        _add_sessions(cursor, wt_id, "/r/proj/.claude/worktrees/pr")
+        conn.commit()
+
+        _migrate_project_paths(conn)
+
+        row = cursor.execute("SELECT path, key, name FROM projects WHERE id = ?", (wt_id,)).fetchone()
+        assert row == ("/r/proj", "-r-proj", "proj")
+
+    def test_codex_worktree_project_merges_into_same_named_main(self):
+        conn = _project_path_db()
+        cursor = conn.cursor()
+        main_id = _add_project(cursor, "/r/tiny", "-r-tiny", "tiny")
+        _add_sessions(cursor, main_id, "/r/tiny")
+        wt_id = _add_project(cursor, "/u/.codex/worktrees/aa5e/tiny", "-u--codex-worktrees-aa5e-tiny", "tiny")
+        _add_sessions(cursor, wt_id, "/u/.codex/worktrees/aa5e/tiny", count=2)
+        conn.commit()
+
+        _migrate_project_paths(conn)
+
+        assert _sessions_in(cursor, main_id) == 3
+        assert cursor.execute("SELECT 1 FROM projects WHERE id = ?", (wt_id,)).fetchone() is None
+
+    def test_main_project_keeps_its_path_when_worktree_sessions_outnumber_it(self):
+        """Worktree sessions vote for the main checkout, so they never rename it."""
+        conn = _project_path_db()
+        cursor = conn.cursor()
+        main_id = _add_project(cursor, "/r/proj", "-r-proj", "proj")
+        _add_sessions(cursor, main_id, "/r/proj")
+        _add_sessions(cursor, main_id, "/r/proj/.claude/worktrees/a", count=3)
+        conn.commit()
+
+        _migrate_project_paths(conn)
+
+        assert cursor.execute("SELECT path FROM projects WHERE id = ?", (main_id,)).fetchone()[0] == "/r/proj"

@@ -37,6 +37,7 @@ from memory_lib.db import (
     get_db_connection,
     get_db_path,
     load_settings,
+    resolve_project_cwd,
     setup_logging,
 )
 from memory_lib.content import extract_text_content, is_task_notification, is_teammate_message, is_tool_result, sanitize_fts_term, parse_origin
@@ -536,7 +537,7 @@ def import_codex_session(conn: sqlite3.Connection, filepath: Path) -> tuple[int,
     if not validate_codex_thread_id(session_uuid) or not all_entries or not messages:
         return -1, 0
 
-    fallback_project_path = cwd or CODEX_UNKNOWN_PROJECT_PATH
+    fallback_project_path = resolve_project_cwd(conn, cwd or CODEX_UNKNOWN_PROJECT_PATH)
     project_key = get_project_key(fallback_project_path)
     sync_entries(conn, session_uuid, all_entries, messages, project_key, fallback_project_path)
 

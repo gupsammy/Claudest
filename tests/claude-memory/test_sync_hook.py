@@ -609,3 +609,31 @@ class TestSyncBranchMessagesDiff:
                 "branch_messages did not grow after syncing a longer session — "
                 f"partial={len(links_after_partial)}, full={len(links_after_full)}"
             )
+
+
+class TestCodexWorktreeSync:
+    def test_codex_worktree_session_joins_main_project_without_renaming_it(self, memory_db_with_project, tmp_path):
+        conn, _ = memory_db_with_project
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO projects (path, key, name) VALUES (?, ?, ?)",
+            ("/Users/sam/repos/claudest", "-Users-sam-repos-claudest", "claudest"),
+        )
+        main_id = cursor.lastrowid
+        conn.commit()
+        fixture = tmp_path / "codex_worktree.codexlog"
+        fixture.write_text(
+            (FIXTURE_DIR / "codex_minimal.codexlog").read_text().replace(
+                "/Users/samarthgupta/repos/myrepos/claudest", "/Users/sam/.codex/worktrees/aa5e/claudest"
+            )
+        )
+
+        assert sync_codex_session(conn, fixture) == 2
+        conn.commit()
+
+        row = cursor.execute(
+            "SELECT p.id, p.path FROM sessions s JOIN projects p ON s.project_id = p.id WHERE s.uuid = ?",
+            ("019dee22-efcc-7b13-ba1c-f2bc9f3959a3",),
+        ).fetchone()
+        assert row == (main_id, "/Users/sam/repos/claudest")
+        assert cursor.execute("SELECT COUNT(*) FROM projects WHERE path LIKE '%worktrees%'").fetchone()[0] == 0

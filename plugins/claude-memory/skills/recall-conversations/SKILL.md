@@ -27,16 +27,13 @@ Weave these into conversation at natural moments — after results land, when co
 
 ## Tools
 
-Two scripts retrieve data:
-- `recent_chats.py` — retrieve recent sessions (with optional project filter)
-- `search_conversations.py` — keyword search across sessions (with optional project filter)
+Three scripts read the memory database. Run each as `python3 ${CLAUDE_PLUGIN_ROOT}/skills/recall-conversations/scripts/<script> <flags>`:
 
-Path prefix for both (used in recipes below):
-```bash
-PREFIX="python3 ${CLAUDE_PLUGIN_ROOT}/skills/recall-conversations/scripts"
-```
+- `recent_chats.py` — sessions by recency, optionally windowed with `--after`/`--before`. `--timeline` instead returns a compact, uncapped index (one line per session: date, size, branch, uuid, title) with no message bodies. `--session UUID[,UUID]` fetches named sessions by uuid or 8+ character prefix, as printed by the timeline and search output.
+- `search_conversations.py` — keyword search. Terms are OR-joined and BM25-ranked, so each term widens the match and rare terms weigh more. Returns whole sessions; `--excerpts` returns only the matching passages (up to 3 per session). When JSON meta says `retrieval: hybrid`, meaning-based matches are fused in, so paraphrases are found too; `--lexical` forces keywords only.
+- `list_projects.py` — project names mapped to paths, session counts, and date spans. One name can cover many paths, and `--project NAME` merges all of them; when the user names a project, run `list_projects.py --match NAME` first.
 
-For the full option catalog, load `references/tool-reference.md`.
+Full flag catalog and output contracts: `references/tool-reference.md`.
 
 ---
 
@@ -44,24 +41,20 @@ For the full option catalog, load `references/tool-reference.md`.
 
 ### 1. Pick a lens and run its recipe
 
-Each user intent maps to a lens with a full command recipe. Recipes default to the **current project** — the scripts auto-detect from CWD, so no `--project` flag is needed for the common case.
+Each user intent maps to a lens. Recipes default to the **current project** — the scripts auto-detect from CWD, so no `--project` flag is needed for the common case.
 
-| User Says | Lens | Recipe (prepend `$PREFIX/`) |
+| User Says | Lens | Recipe |
 |-----------|------|--------|
 | "where were we", "recap", "continue" | restore-context | `recent_chats.py --limit 5 --verbose` |
+| "what did we decide about X", "when did we fix Y" | specific-lookup | `search_conversations.py --query "<terms>" --excerpts`, then `recent_chats.py --session <id>` for the one session whose passage answers it |
 | "what I learned", "reflect on what I've learned" | extract-learnings | `recent_chats.py --limit 20` |
-| "gaps", "where I'm struggling" | find-gaps | `search_conversations.py --query "confused struggling help"` |
+| "gaps", "where I'm struggling" | find-gaps | `search_conversations.py --query "confused stuck struggling unclear" --summary` |
 | "mentor me", "review my process" | review-process | `recent_chats.py --limit 20 --verbose` |
-| "retro", "retrospective", "look back", "post-mortem" | run-retro | `recent_chats.py --limit 20 --verbose` |
-| "decisions", "CLAUDE.md-worthy rules" | extract-decisions | `search_conversations.py --query "decided chose trade-off because"` |
-| "antipatterns", "bad habits", "mistakes I repeat" | find-antipatterns | `search_conversations.py --query "again same mistake repeated forgot"` |
+| "retro", "retrospective", "look back", "post-mortem" | run-retro | `recent_chats.py --limit 20 --verbose --summary` |
+| "decisions", "CLAUDE.md-worthy rules" | extract-decisions | `search_conversations.py --query "decided chose tradeoff rejected" --summary` |
+| "antipatterns", "bad habits", "mistakes I repeat" | find-antipatterns | `search_conversations.py --query "mistake repeated forgot" --summary --all-projects` |
 
 **Scope overrides**: append `--project NAME` for a different project (e.g. `--project pkm`), or `--all-projects` to widen across everything. Multiple specific projects: `--project claudest,pkm`.
-
-Example expansion of the run-retro row:
-```bash
-python3 ${CLAUDE_PLUGIN_ROOT}/skills/recall-conversations/scripts/recent_chats.py --limit 20 --verbose
-```
 
 For per-lens questions, follow-ups, and supplementary search patterns, load `references/lenses.md`.
 
@@ -74,60 +67,26 @@ The recipe gets you the data. The lens tells you what to *look for* — for inst
 - Retrieve more sessions: bump `--limit` (1-50 for both scripts; default 5)
 - Search supplementary terms (per-lens patterns in `references/lenses.md`)
 - Widen scope: append `--all-projects` to look across projects
+- Reconstruct a long arc: `recent_chats.py --timeline --sort-order asc` lists every session; pick the sessions that matter, then pull them with `--session`
 - Two rounds of deepening with no new signal → synthesize from what you have rather than thrashing further
 
 ### 4. Manage volume on broad queries (high blast radius)
 
 The scripts emit full transcripts, so broad/multi-session lenses can flood context. Defend in two tiers — never trigger on session count alone; continuation-restore and specific-lookup lenses stay in-thread regardless of how many sessions match (the answer is small):
 
-1. `--summary` — append for run-retro, find-gaps, find-antipatterns, extract-decisions, or any `--all-projects`/multi-week scope. Emits precomputed per-session digests instead of full content (~3× smaller, single-pass, free). The scripts flag when to reach for it: a large full-content pull sets `summary_suggested` (JSON meta) or prints an `INFO:` line on stderr. Never use `--summary` for restore-context or specific lookups — they need exact full text.
+1. `--summary` — the broad recipes above already pass it; add it to any other `--all-projects` or multi-week pull. It emits precomputed per-session digests instead of full content (~3× smaller). A large full-content pull sets `summary_suggested` (JSON meta) or prints an `INFO:` line on stderr. Leave it off for restore-context and specific lookups — they need exact text, which `--excerpts` and `--session` deliver in small pieces.
 2. Fan out — only when even `--summary` output is still too big: `fanout_suggested` is true in JSON meta (or the stderr `INFO:` line recommends fanning out). Spawn one `Agent` per project (`subagent_type: general-purpose`, `model: sonnet`), each running the recipe scoped to its own project and returning a structured digest; then reduce. Shard by project, never by arbitrary session count — count-based splits sever a decision or antipattern thread across agents, and per-project shards preserve cross-session dedup within each mind.
 
 ---
 
 ## Query Construction
 
-Search terms should be content-bearing words that discriminate between sessions — high information value words that are rare enough to rank relevant sessions above irrelevant ones. BM25 ranking (when FTS5 is available) weights rare terms higher automatically.
+Search matches words, not meaning. Use terms that separate the target sessions from the rest: specific nouns, technologies, file and project names, error text. Words found in most sessions ("discuss", "yesterday", "conversation", "because", "insight") add noise. Since terms are OR-joined, put synonyms and alternate spellings in the same query ("auth login oauth signin") instead of running separate searches.
 
-**Include:** specific nouns, technologies, concepts, project names, domain terms, unique phrases. More terms improve ranking precision.
-
-**Exclude:** generic verbs ("discuss", "talk"), time markers ("yesterday"), vague nouns ("thing", "stuff"), meta-conversation words ("conversation", "chat") — these appear in nearly every session and add noise rather than signal.
-
-**Algorithm:**
-1. Extract substantive keywords from user request
-2. If 0 keywords, ask for clarification ("Which project specifically?")
-3. If 1+ specific terms, search with those terms; project scope is auto-detected — use `--project NAME` or `--all-projects` only to override
+When the request has no such terms ("what were we doing", "do you remember"), use `recent_chats.py` instead of search. Ask the user only when neither recency nor a keyword can find it.
 
 ---
 
 ## Synthesis
 
-### Principles
-
-1. **Prioritize significance** — 3-5 key findings, not exhaustive lists
-2. **Be specific** — file paths, dates, project names
-3. **Make it actionable** — every finding suggests a response
-4. **Show evidence** — quotes or references
-5. **Keep it scannable** — clear structure, no walls of text
-
-### Structure
-
-```markdown
-## [Analysis Type]: [Scope]
-
-### Summary
-[2-3 sentences]
-
-### Findings
-[Organized by whatever fits: categories, timeline, severity]
-
-### Patterns
-[Cross-cutting observations]
-
-### Recommendations
-[Actionable next steps]
-```
-
-### Length
-
-Default: 300-500 words. Expand only when data warrants it.
+Shape the answer to the lens. restore-context ends with the concrete next step. Analytical lenses lead with the findings that matter most, each tied to its evidence (date, project, file, or a short quote) and to the action it suggests. Length follows the evidence.

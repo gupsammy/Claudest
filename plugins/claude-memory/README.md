@@ -1,4 +1,4 @@
-# claude-memory ![v0.8.119](https://img.shields.io/badge/v0.8.119-blue?style=flat-square)
+# claude-memory ![v0.8.120](https://img.shields.io/badge/v0.8.120-blue?style=flat-square)
 
 Searchable conversation memory for Claude Code. Auto-syncs sessions to a SQLite database with full-text search, injects previous session context on startup, and provides on-demand recall of past conversations.
 
@@ -37,6 +37,16 @@ The skill triggers naturally on phrases like "what did we discuss," "remember wh
 
 The search works because the agent constructs the queries, not the user. When you ask about "the database migration," the agent extracts substantive keywords and sends them to FTS5. If the first results aren't good enough, it iterates: refining terms, trying different queries, narrowing by project. The agent compensates for the simplicity of the search engine. Conversation content helps too. People say the same thing multiple ways across a conversation ("the migration," "the schema change," "the ALTER TABLE"), giving keyword search plenty of entry points.
 
+### Semantic search (optional)
+
+Keyword search misses paraphrases: "the car" never matches "the automobile". With semantic search on, each exchange (a typed message plus the start of the reply) is also embedded by EmbeddingGemma 2 running in a local [Ollama](https://ollama.com), and search fuses the keyword and meaning-based rankings. Nothing leaves your machine. To turn it on:
+
+```bash
+ollama pull embeddinggemma-2:270m
+```
+
+Then add `"semantic_search": true` to `~/.claude-memory/config.json`. The next session start builds the index in the background (newest exchanges first); after that, each exchange is embedded as soon as its turn ends. `embedding_model` and `ollama_url` override the defaults. If Ollama is not running, search falls back to keywords with a warning.
+
 ### Background session sync
 
 On session stop, a sync hook fires asynchronously. It reads the session's JSONL file (where Claude Code stores raw conversation data), parses it into structured messages, detects conversation branches from rewinds using UUID parent chain analysis, and writes everything to the database. This never blocks Claude Code's shutdown.
@@ -67,17 +77,20 @@ Full-text search uses a platform-adaptive cascade: FTS5 with BM25 ranking on sys
 | messages | User/assistant messages, deduped by UUID |
 | branch_messages | Many-to-many mapping between branches and messages |
 | messages_fts / branches_fts | Full-text search indexes (FTS5, FTS4, or absent) |
+| exchange_embeddings | One vector per typed message, for optional semantic search |
 | import_log | Tracks which JSONL files have been imported |
 
 ### Hooks
 
 | Event | Hook | Action |
 |-------|------|--------|
-| SessionStart | memory-setup.py | Creates `~/.claude-memory/` directory, triggers initial import if DB missing |
+| SessionStart | memory-setup.py | Creates `~/.claude-memory/` directory, triggers initial import if DB missing, starts background summary and embedding jobs |
 | SessionStart | memory-context.py | Injects previous session context (on startup and clear events) |
-| Stop | memory-sync.py | Writes session data to a temp file and spawns `sync_current.py` asynchronously |
+| Stop | memory-sync.py | Writes session data to a temp file and spawns `sync_current.py` asynchronously, which also embeds the new exchange when semantic search is on |
 
 All hooks are Python for cross-platform compatibility (macOS, Linux, Windows).
+
+Chats started without a folder all share one `(scratch)` project, so a new one starts with the context of the last ones. Upgrades that rewrite stored data run once, in the background, after one backup; no session waits for them.
 
 ### Skills
 

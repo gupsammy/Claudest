@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import sqlite3
 import time
 from logging.handlers import RotatingFileHandler
@@ -34,6 +35,14 @@ IMPORT_LOCK_PATH = Path.home() / ".claude-memory" / "import.lock"
 BACKUP_RETENTION = 3
 BACKUP_MIN_INTERVAL_HOURS = 24
 
+# Highest PRAGMA user_version the data migrations reach. A fresh DB is stamped
+# with it, since it has no old rows to migrate.
+LATEST_DATA_VERSION = 6
+# Data migrations run under this lock, next to the DB, so concurrent hooks never
+# migrate (and back up) the same DB twice. Background callers wait this long.
+MIGRATE_LOCK_NAME = "migrate.lock"
+MIGRATE_LOCK_WAIT_SECONDS = 300
+
 # Default settings
 DEFAULT_SETTINGS = {
     "db_path": str(DEFAULT_DB_PATH),
@@ -45,6 +54,10 @@ DEFAULT_SETTINGS = {
     "consolidation_reminder_enabled": True,
     "consolidation_min_hours": 24,
     "consolidation_min_sessions": 5,
+    # Opt-in semantic search: exchanges embedded by a local Ollama server.
+    "semantic_search": False,
+    "embedding_model": "embeddinggemma-2:270m",
+    "ollama_url": "http://localhost:11434",
 }
 
 # Keys in config.json that override DEFAULT_SETTINGS
@@ -54,6 +67,9 @@ _CONFIG_KEYS = {
     "consolidation_min_hours",
     "consolidation_min_sessions",
     "max_context_sessions",
+    "semantic_search",
+    "embedding_model",
+    "ollama_url",
 }
 
 # Database schema — v3: messages stored once, branches as separate index
@@ -132,6 +148,14 @@ CREATE TABLE IF NOT EXISTS branch_messages (
 );
 CREATE INDEX IF NOT EXISTS idx_branch_messages_message ON branch_messages(message_id);
 
+-- One vector per human turn (the exchange it opens), for opt-in semantic search.
+-- An empty vec marks a turn with no text to embed, so it is not retried.
+CREATE TABLE IF NOT EXISTS exchange_embeddings (
+  message_id INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+  model TEXT NOT NULL,
+  vec BLOB NOT NULL
+);
+
 -- Import tracking
 CREATE TABLE IF NOT EXISTS import_log (
   id INTEGER PRIMARY KEY,
@@ -158,7 +182,7 @@ END;
 CREATE TRIGGER IF NOT EXISTS messages_ad AFTER DELETE ON messages BEGIN
   INSERT INTO messages_fts(messages_fts, rowid, content) VALUES('delete', old.id, old.content);
 END;
-CREATE TRIGGER IF NOT EXISTS messages_au AFTER UPDATE ON messages BEGIN
+CREATE TRIGGER IF NOT EXISTS messages_au AFTER UPDATE OF content ON messages BEGIN
   INSERT INTO messages_fts(messages_fts, rowid, content) VALUES('delete', old.id, old.content);
   INSERT INTO messages_fts(rowid, content) VALUES (new.id, new.content);
 END;
@@ -176,7 +200,7 @@ END;
 CREATE TRIGGER IF NOT EXISTS branches_ad AFTER DELETE ON branches BEGIN
   INSERT INTO branches_fts(branches_fts, rowid, aggregated_content) VALUES('delete', old.id, old.aggregated_content);
 END;
-CREATE TRIGGER IF NOT EXISTS branches_au AFTER UPDATE ON branches BEGIN
+CREATE TRIGGER IF NOT EXISTS branches_au AFTER UPDATE OF aggregated_content ON branches BEGIN
   INSERT INTO branches_fts(branches_fts, rowid, aggregated_content) VALUES('delete', old.id, old.aggregated_content);
   INSERT INTO branches_fts(rowid, aggregated_content) VALUES (new.id, new.aggregated_content);
 END;
@@ -196,7 +220,7 @@ END;
 CREATE TRIGGER IF NOT EXISTS messages_ad AFTER DELETE ON messages BEGIN
   INSERT INTO messages_fts(messages_fts, rowid, content) VALUES('delete', old.id, old.content);
 END;
-CREATE TRIGGER IF NOT EXISTS messages_au AFTER UPDATE ON messages BEGIN
+CREATE TRIGGER IF NOT EXISTS messages_au AFTER UPDATE OF content ON messages BEGIN
   INSERT INTO messages_fts(messages_fts, rowid, content) VALUES('delete', old.id, old.content);
   INSERT INTO messages_fts(rowid, content) VALUES (new.id, new.content);
 END;
@@ -213,7 +237,7 @@ END;
 CREATE TRIGGER IF NOT EXISTS branches_ad AFTER DELETE ON branches BEGIN
   INSERT INTO branches_fts(branches_fts, rowid, aggregated_content) VALUES('delete', old.id, old.aggregated_content);
 END;
-CREATE TRIGGER IF NOT EXISTS branches_au AFTER UPDATE ON branches BEGIN
+CREATE TRIGGER IF NOT EXISTS branches_au AFTER UPDATE OF aggregated_content ON branches BEGIN
   INSERT INTO branches_fts(branches_fts, rowid, aggregated_content) VALUES('delete', old.id, old.aggregated_content);
   INSERT INTO branches_fts(rowid, aggregated_content) VALUES (new.id, new.aggregated_content);
 END;
@@ -330,40 +354,39 @@ def get_db_path(settings: Optional[dict] = None) -> Path:
     return DEFAULT_DB_PATH
 
 
-def _reaggregate_notification_branches(cursor: sqlite3.Cursor) -> None:
+def _reaggregate_notification_branches(
+    cursor: sqlite3.Cursor, branch_ids: Optional[list[int]] = None
+) -> None:
     """Re-aggregate branches that contain notification messages.
 
     Updates aggregated_content and exchange_count to exclude notifications.
-    Called after backfilling is_notification on existing messages.
+    Called after backfilling is_notification on existing messages; pass
+    branch_ids to limit the work to branches whose tags just changed.
     """
-    cursor.execute("""
-        SELECT DISTINCT bm.branch_id
-        FROM branch_messages bm
-        JOIN messages m ON bm.message_id = m.id
-        WHERE m.is_notification = 1
-    """)
-    affected_branches = [row[0] for row in cursor.fetchall()]
-    for bid in affected_branches:
+    if branch_ids is None:
         cursor.execute("""
-            SELECT m.content FROM branch_messages bm
+            SELECT DISTINCT bm.branch_id
+            FROM branch_messages bm
+            JOIN messages m ON bm.message_id = m.id
+            WHERE m.is_notification = 1
+        """)
+        branch_ids = [row[0] for row in cursor.fetchall()]
+    for bid in branch_ids:
+        cursor.execute("""
+            SELECT m.content, m.role FROM branch_messages bm
             JOIN messages m ON bm.message_id = m.id
             WHERE bm.branch_id = ? AND COALESCE(m.is_notification, 0) = 0
             ORDER BY m.timestamp ASC
         """, (bid,))
-        agg = "\n".join(row[0] for row in cursor.fetchall())
-        cursor.execute("UPDATE branches SET aggregated_content = ? WHERE id = ?", (agg, bid))
-        cursor.execute("""
-            SELECT COUNT(*) FROM branch_messages bm
-            JOIN messages m ON bm.message_id = m.id
-            WHERE bm.branch_id = ? AND m.role = 'user' AND COALESCE(m.is_notification, 0) = 0
-        """, (bid,))
-        human_user_count = cursor.fetchone()[0]
-        cursor.execute("UPDATE branches SET exchange_count = ? WHERE id = ?",
-                       (human_user_count, bid))
+        rows = cursor.fetchall()
+        agg = "\n".join(row[0] for row in rows)
+        human_user_count = sum(1 for row in rows if row[1] == "user")
+        cursor.execute("UPDATE branches SET aggregated_content = ?, exchange_count = ? WHERE id = ?",
+                       (agg, human_user_count, bid))
 
 
-def _migrate_columns(conn: sqlite3.Connection) -> None:
-    """Add missing columns (DDL, idempotent) and run versioned data migrations (DML)."""
+def _migrate_columns(conn: sqlite3.Connection, data: bool = True) -> None:
+    """Add missing columns (DDL, idempotent), then versioned data migrations (DML) when `data`."""
     cursor = conn.cursor()
     cursor.execute("PRAGMA table_info(messages)")
     existing = {row[1] for row in cursor.fetchall()}
@@ -437,11 +460,39 @@ CREATE INDEX IF NOT EXISTS idx_token_snapshots_start ON token_snapshots(start_ti
     except sqlite3.OperationalError:
         pass
 
-    # --- DML migrations (version-gated via PRAGMA user_version, run once) ---
-    version = conn.execute("PRAGMA user_version").fetchone()[0]
+    if data:
+        _run_data_migrations(conn)
 
-    # Resolve db_path for backup operations (PRAGMA database_list returns (seq, name, file))
+
+def _run_data_migrations(conn: sqlite3.Connection) -> None:
+    """Run pending version-gated migrations, at most one process per DB at a time.
+
+    The version is re-read under the lock, so a caller that waited behind another
+    migrator finds the work done and backs nothing up twice.
+    """
+    if conn.execute("PRAGMA user_version").fetchone()[0] >= LATEST_DATA_VERSION:
+        return
+    # PRAGMA database_list returns (seq, name, file); file is "" for in-memory DBs.
     db_path = Path(conn.execute("PRAGMA database_list").fetchone()[2])
+    if not db_path.name:
+        _data_migrations(conn, db_path)
+        return
+    lock_path = db_path.parent / MIGRATE_LOCK_NAME
+    deadline = time.monotonic() + MIGRATE_LOCK_WAIT_SECONDS
+    while acquire_lock(lock_path) is None:
+        if time.monotonic() >= deadline:
+            return  # Another process is still migrating; the next connection retries.
+        time.sleep(0.5)
+    try:
+        _data_migrations(conn, db_path)
+    finally:
+        release_lock(lock_path)
+
+
+def _data_migrations(conn: sqlite3.Connection, db_path: Path) -> None:
+    """DML migrations, version-gated via PRAGMA user_version, each run once."""
+    cursor = conn.cursor()
+    version = conn.execute("PRAGMA user_version").fetchone()[0]
 
     if version < 1:
         # v0.5.0: Backfill task-notification messages
@@ -492,34 +543,154 @@ CREATE INDEX IF NOT EXISTS idx_token_snapshots_start ON token_snapshots(start_ti
             conn.execute("PRAGMA user_version = 5")
             conn.commit()
 
+    # Re-read: v5 stays unset when its backup fails, and v6 must not skip past it.
+    if conn.execute("PRAGMA user_version").fetchone()[0] == 5:
+        # Harness-written user turns (compaction summaries, PR monitor events,
+        # inter-session messages) join task notifications under is_notification,
+        # so exchange counts, topics and summaries reflect what the person typed.
+        if not db_path.name or _backup_db_before_migration(db_path, "v6-harness-turns"):
+            _tag_harness_messages(cursor)
+            conn.execute("PRAGMA user_version = 6")
+            conn.commit()
+
+
+def _tag_harness_messages(cursor: sqlite3.Cursor) -> None:
+    """Flag existing harness-written user messages and rebuild only their branches.
+
+    Applies the same Python predicate the importer uses, so a migrated row and a
+    freshly imported row can never be classified differently. Reset summaries are
+    rebuilt by the background backfill (summary_version IS NULL).
+    """
+    from memory_lib.content import is_harness_message
+
+    cursor.execute(
+        "SELECT id, content FROM messages WHERE role = 'user' AND COALESCE(is_notification, 0) = 0"
+    )
+    ids = [mid for mid, content in cursor.fetchall() if is_harness_message(content or "")]
+    branch_ids: set[int] = set()
+    for i in range(0, len(ids), 500):
+        chunk = ids[i:i + 500]
+        placeholders = ",".join("?" * len(chunk))
+        cursor.execute(f"UPDATE messages SET is_notification = 1 WHERE id IN ({placeholders})", chunk)
+        cursor.execute(
+            f"SELECT DISTINCT branch_id FROM branch_messages WHERE message_id IN ({placeholders})", chunk
+        )
+        branch_ids.update(row[0] for row in cursor.fetchall())
+    if not branch_ids:
+        return
+    ordered = sorted(branch_ids)
+    _reaggregate_notification_branches(cursor, ordered)
+    for i in range(0, len(ordered), 500):
+        chunk = ordered[i:i + 500]
+        placeholders = ",".join("?" * len(chunk))
+        cursor.execute(f"UPDATE branches SET summary_version = NULL WHERE id IN ({placeholders})", chunk)
+
+
+# Lockfile path -> open fd for each lock this process holds.
+_HELD_LOCKS: dict[str, int] = {}
+
+
+def _try_os_lock(fd: int) -> bool:
+    """Non-blocking exclusive lock on fd; the OS drops it when the process dies."""
+    try:
+        if os.name == "nt":
+            import msvcrt
+            os.lseek(fd, 0, os.SEEK_SET)
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return True
+    except OSError:
+        return False
+
+
+def acquire_lock(lock_path: Path) -> int | None:
+    """Acquire an exclusive lock on lock_path; returns our PID, or None if it is held.
+
+    The OS holds the lock, so a crashed holder releases it on exit and there is no
+    window where two processes both believe they own it. The PID inside the file
+    is for humans debugging a stuck lock, not part of the protocol.
+    """
+    key = str(lock_path)
+    if key in _HELD_LOCKS:
+        return None
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(key, os.O_CREAT | os.O_RDWR, 0o600)
+    if not _try_os_lock(fd):
+        os.close(fd)
+        return None
+    pid = os.getpid()
+    if os.name != "nt":
+        # Windows locks the first byte against writes, so the PID note is POSIX-only.
+        os.ftruncate(fd, 0)
+        os.write(fd, str(pid).encode("ascii"))
+    _HELD_LOCKS[key] = fd
+    return pid
+
+
+def release_lock(lock_path: Path) -> None:
+    """Release the lock if this process holds it. The file stays: unlinking a
+    locked file would let a later process lock a new inode alongside the old one."""
+    fd = _HELD_LOCKS.pop(str(lock_path), None)
+    if fd is None:
+        return
+    try:
+        if os.name == "nt":
+            import msvcrt
+            os.lseek(fd, 0, os.SEEK_SET)
+            msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
+
 
 def _backup_db_before_migration(db_path: Path, label: str) -> bool:
     """Create a timestamped WAL-safe backup using sqlite3.Connection.backup().
 
     Returns True if backup succeeded and was verified, False otherwise.
     sqlite3.Connection.backup() does a page-level copy that respects WAL journaling.
+    The copy is written under a .partial name and renamed only once complete, so a
+    process killed mid-copy (e.g. a hook timeout) never leaves a file that looks
+    like a valid backup.
     """
     if not db_path.name or not db_path.exists():
         return False
     ts = time.strftime("%Y%m%d-%H%M%S")
     backup_path = db_path.with_suffix(f".pre-{label}-{ts}.db")
-    src = None
-    dst = None
+    partial_path = backup_path.with_name(backup_path.name + ".partial")
+    ok = False
     try:
         src = sqlite3.connect(str(db_path))
-        dst = sqlite3.connect(str(backup_path))
-        src.backup(dst)
-        # Verify backup is non-empty
-        if not backup_path.exists() or backup_path.stat().st_size == 0:
-            return False
-        return True
+        try:
+            dst = sqlite3.connect(str(partial_path))
+            try:
+                src.backup(dst)
+                # The copy inherits WAL mode from the source; switch it to a rollback
+                # journal so the backup is one self-contained file with no -wal/-shm.
+                dst.execute("PRAGMA journal_mode = DELETE")
+                ok = dst.execute("PRAGMA quick_check").fetchone()[0] == "ok"
+            finally:
+                dst.close()
+        finally:
+            src.close()
+        if ok:
+            os.replace(partial_path, backup_path)
+        return ok
     except Exception:
         return False
     finally:
-        if dst:
-            dst.close()
-        if src:
-            src.close()
+        # Only files of our own copy; the source DB is never touched. The sidecars
+        # hold nothing once the copy is in rollback-journal mode and closed.
+        leftovers = [Path(f"{partial_path}-wal"), Path(f"{partial_path}-shm")]
+        if not ok:
+            leftovers.append(partial_path)
+        for p in leftovers:
+            try:
+                p.unlink()
+            except OSError:
+                pass
 
 
 def _backfill_origin(conn: sqlite3.Connection, cursor: sqlite3.Cursor) -> None:
@@ -698,11 +869,27 @@ def _migrate_project_paths(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
-def get_db_connection(settings: Optional[dict] = None) -> sqlite3.Connection:
+def _drop_unscoped_update_triggers(conn: sqlite3.Connection) -> None:
+    """Drop FTS update triggers that fire on any column so the schema script
+    recreates them scoped to the indexed column. Unscoped, every metadata or
+    summary write re-indexed the row's full text."""
+    for name in ("messages_au", "branches_au"):
+        row = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = ?", (name,)
+        ).fetchone()
+        if row and " UPDATE OF " not in row[0].upper():
+            conn.execute(f"DROP TRIGGER {name}")
+
+
+def get_db_connection(settings: Optional[dict] = None, migrate: bool = True) -> sqlite3.Connection:
     """
     Get database connection, initializing schema and running migrations if needed.
     Uses settings-based path if provided.
     Sets WAL mode and busy_timeout for concurrent access safety.
+
+    migrate=False skips the version-gated data migrations (backups, row rewrites),
+    so foreground hooks never block a session start on them; background workers
+    keep the default and run them under the migration lock.
     """
     db_path = get_db_path(settings)
     db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -726,8 +913,16 @@ def get_db_connection(settings: Optional[dict] = None) -> sqlite3.Connection:
 
     if not migrated:
         # Apply schema (handles fresh databases, idempotent)
+        fresh = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='sessions'"
+        ).fetchone() is None
         fts = detect_fts_support(conn)
         conn.executescript(SCHEMA_CORE)
+        if fresh:
+            # Nothing to migrate in an empty DB: skip every data migration and its backup.
+            conn.execute(f"PRAGMA user_version = {LATEST_DATA_VERSION}")
+        if fts:
+            _drop_unscoped_update_triggers(conn)
         if fts == "fts5":
             conn.executescript(SCHEMA_FTS5)
         elif fts == "fts4":
@@ -735,7 +930,7 @@ def get_db_connection(settings: Optional[dict] = None) -> sqlite3.Connection:
         conn.commit()
 
     # Add any missing columns (e.g. tool_summary)
-    _migrate_columns(conn)
+    _migrate_columns(conn, data=migrate)
 
     # Fix project paths and fold worktree projects into their main checkout.
     # Waits for v5, whose migration takes the pre-fold backup.

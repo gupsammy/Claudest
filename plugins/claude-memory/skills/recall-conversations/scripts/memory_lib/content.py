@@ -16,12 +16,15 @@ def sanitize_fts_term(term: str) -> str:
     quotes, parentheses, asterisks, and FTS keywords.
     Keeps alphanumeric, spaces, and basic punctuation.
     """
+    # Hyphens join words ("trade-off"); split them so the quoted term matches
+    # the tokenizer's adjacent tokens instead of an invented "tradeoff".
+    sanitized = term.replace('-', ' ')
     # Remove quotes, parentheses, asterisks, and word boundaries
-    sanitized = re.sub(r'["\(\)*\-^]', '', term)
+    sanitized = re.sub(r'["\(\)*^]', '', sanitized)
     # Remove FTS keywords: NEAR, AND, OR, NOT (case-insensitive)
     sanitized = re.sub(r'\b(NEAR|AND|OR|NOT)\b', '', sanitized, flags=re.IGNORECASE)
-    # Strip whitespace
-    sanitized = sanitized.strip()
+    # Collapse the gaps left by removals and hyphen splits
+    sanitized = " ".join(sanitized.split())
     return sanitized
 
 
@@ -81,30 +84,54 @@ def parse_origin(entry: dict) -> str | None:
     return None
 
 
-def is_task_notification(content) -> bool:
-    """Check if content is a task-notification message (subagent result)."""
+_SYSTEM_REMINDER_RE = re.compile(r"<system-reminder>.*?</system-reminder>", re.DOTALL)
+
+
+def strip_system_reminders(text: str) -> str:
+    """Remove harness-injected <system-reminder> blocks, leaving what the person typed."""
+    return _SYSTEM_REMINDER_RE.sub("", text).strip()
+
+
+def _user_text(content) -> str:
+    """Joined text blocks of a user message, stripped; '' for anything else."""
     if isinstance(content, list):
         texts = [item.get("text", "") for item in content
                  if isinstance(item, dict) and item.get("type") == "text"]
-        text = "\n".join(texts).strip()
-    elif isinstance(content, str):
-        text = content.strip()
-    else:
-        return False
-    return text.startswith("<task-notification>")
+        return "\n".join(texts).strip()
+    if isinstance(content, str):
+        return content.strip()
+    return ""
+
+
+def is_task_notification(content) -> bool:
+    """Check if content is a task-notification message (subagent result)."""
+    return _user_text(content).startswith("<task-notification>")
 
 
 def is_teammate_message(content) -> bool:
     """Detect teammate coordination messages (team reports, idle notifications, shutdown)."""
-    if isinstance(content, list):
-        texts = [item.get("text", "") for item in content
-                 if isinstance(item, dict) and item.get("type") == "text"]
-        text = "\n".join(texts).strip()
-    elif isinstance(content, str):
-        text = content.strip()
-    else:
-        return False
-    return text.startswith("<teammate-message")
+    return _user_text(content).startswith("<teammate-message")
+
+
+# User-role messages the harness writes on the person's behalf. Kept out of
+# exchanges, topics and summaries because the person did not type them.
+_HARNESS_PREFIXES = (
+    "This session is being continued from a previous conversation",  # compaction summary
+    "<artifact-content-authored-by-others/>",  # claude.ai summarized conversation
+    "<ci-monitor-event>",  # desktop PR monitor
+    "Another Claude session sent a message:",  # inter-session message
+    "<agent-message",
+)
+
+
+def is_harness_message(content) -> bool:
+    """Detect harness-written user-role messages (compaction, PR monitor, inter-session)."""
+    return _user_text(content).startswith(_HARNESS_PREFIXES)
+
+
+def is_notification_content(content) -> bool:
+    """True for any user-role message the person did not type; stored as is_notification."""
+    return is_task_notification(content) or is_teammate_message(content) or is_harness_message(content)
 
 
 def is_tool_result(content) -> bool:

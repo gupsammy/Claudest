@@ -20,7 +20,6 @@ After retrieving sessions with the lens recipe, look for these specifically:
 
 After running a lens, suggest the natural next step:
 
-- **find-gaps** → recommend `learn-anything` skill (if available) for targeted instruction on the gap topic
 - **extract-decisions** → recommend `/update-claudemd` to persist surfaced decisions as project rules
 - **find-antipatterns** → propose CLAUDE.md additions documenting the antipattern explicitly so future sessions avoid it
 
@@ -30,10 +29,10 @@ When the primary recipe's retrieval is thin, layer a targeted search on top of i
 
 | Lens | Supplementary Query |
 |------|---------------------|
-| extract-learnings | `"learned realized understand clicked finally"` |
-| find-gaps | `"confused struggling help don't understand stuck"` |
-| extract-decisions | `"decided chose instead trade-off because rather"` |
-| find-antipatterns | `"again same mistake repeated forgot keeps happening"` |
+| extract-learnings | `"realized lesson gotcha"` |
+| find-gaps | `"misunderstood lost"` |
+| extract-decisions | `"tradeoff alternative rejected"` |
+| find-antipatterns | `"forgot reverted regression"` |
 
 Run these via `search_conversations.py --query "..."` (auto-detects current project; pass `--project NAME` to override or `--all-projects` to widen). Combine results with the primary retrieval before synthesizing.
 
@@ -44,6 +43,5 @@ Recipes default to project-scoped because retros and reflective lenses usually c
 - "what mistakes do I keep making *everywhere*"
 - "patterns across *all* my projects"
 - "general lessons" (without a project context)
-- find-antipatterns specifically — antipatterns are often person-level habits, not project-bound
 
-In those cases, add `--all-projects` to the recipe.
+In those cases, add `--all-projects` to the recipe. The find-antipatterns recipe already passes it, since antipatterns are usually personal habits rather than project-bound.

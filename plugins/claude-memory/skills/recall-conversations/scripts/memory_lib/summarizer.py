@@ -13,11 +13,25 @@ import json
 import re
 import sqlite3
 
+from memory_lib.content import strip_system_reminders
 from memory_lib.formatting import format_time, format_time_full
 
-# Truncation limits
+# Truncation limits. Assistant replies keep more of the end (the outcome);
+# user messages keep more of the start (the request).
 _FRONT_CHARS = 300
 _BACK_CHARS = 600
+_USER_FRONT_CHARS = 800
+_USER_BACK_CHARS = 200
+
+# Rendered summaries must fit the SessionStart inline budget: the harness spills
+# anything over 10,000 chars to a file and shows only a short preview.
+SUMMARY_MAX_CHARS = 8000
+
+# Bump when the stored summary changes shape; the background backfill rebuilds
+# every branch below it. -1 marks a branch whose summary failed, never retried.
+SUMMARY_VERSION = 3
+NEEDS_SUMMARY_SQL = "summary_version IS NULL OR (summary_version >= 0 AND summary_version < ?)"
+
 
 # Session disposition patterns
 _COMPLETION_RE = re.compile(
@@ -90,6 +104,9 @@ def build_exchange_pairs(messages: list[dict]) -> list[dict]:
 
     for m in messages:
         if m["role"] == "user":
+            text = strip_system_reminders(m["content"] or "")
+            if not text:
+                continue
             if current_user is not None:
                 exchanges.append({
                     "user": current_user,
@@ -97,7 +114,7 @@ def build_exchange_pairs(messages: list[dict]) -> list[dict]:
                     "timestamp": current_user_ts,
                     "index": len(exchanges),
                 })
-            current_user = m["content"]
+            current_user = text
             current_user_ts = m.get("timestamp")
             current_asst_parts = []
         elif m["role"] == "assistant" and current_user is not None:
@@ -129,8 +146,8 @@ def build_context_summary_json(branch_row: dict, messages: list[dict]) -> dict:
         return {"version": 2, "topic": "", "first_exchanges": [],
                 "last_exchanges": [], "metadata": {}}
 
-    # Topic from first user message
-    topic = exchanges[0]["user"]
+    # Topic from first user message, on one line so "**Topic:** … | **Status:**" parses
+    topic = " ".join(exchanges[0]["user"].split())
     if len(topic) > 120:
         topic = topic[:120] + "..."
 
@@ -205,16 +222,48 @@ def _build_gap_summary(summary_json: dict) -> str:
     return ""
 
 
-def render_context_summary(summary_json: dict) -> str:
+# Layouts tried in order until the summary fits max_chars:
+# (show first exchanges?, last exchanges kept, user clip, assistant clip).
+_LAYOUTS = (
+    [(True, 6, (_USER_FRONT_CHARS, _USER_BACK_CHARS), (_FRONT_CHARS, _BACK_CHARS))]
+    + [(False, n, (_USER_FRONT_CHARS, _USER_BACK_CHARS), (_FRONT_CHARS, _BACK_CHARS))
+       for n in range(8, 0, -1)]
+    + [(False, 1, (300, 100), (150, 300))]
+)
+
+
+def render_context_summary(summary_json: dict, max_chars: int = SUMMARY_MAX_CHARS) -> str:
     """
-    Render the JSON summary to injection-ready markdown.
+    Render the JSON summary to injection-ready markdown no longer than max_chars.
 
     Short sessions (<=8 exchanges) render all exchanges once, no first/last split.
-    Longer sessions show first 2 exchanges + gap + last 6 exchanges.
+    Longer sessions show last exchanges, a gap line, then the first 2 exchanges.
+    Over budget, the opening exchanges go first, then the oldest of the recent
+    ones (the newest always stays), then clips tighten.
     """
     if not summary_json or not summary_json.get("first_exchanges"):
         return ""
+    text = ""
+    for show_first, keep_last, user_clip, asst_clip in _LAYOUTS:
+        text = _render(summary_json, show_first, keep_last, user_clip, asst_clip)
+        if len(text) <= max_chars:
+            return text
+    return text[:max_chars]
 
+
+def _render_exchange(lines: list[str], ex: dict, user_clip: tuple, asst_clip: tuple) -> None:
+    t = format_time(ex.get("timestamp"))
+    lines.append(f"**[{t}] User:**")
+    lines.append(truncate_mid(ex["user"], *user_clip))
+    lines.append("")
+    if ex["assistant"]:
+        lines.append(f"**[{t}] Assistant:**")
+        lines.append(truncate_mid(ex["assistant"], *asst_clip))
+        lines.append("")
+
+
+def _render(summary_json: dict, show_first: bool, keep_last: int,
+            user_clip: tuple, asst_clip: tuple) -> str:
     meta = summary_json.get("metadata", {})
     lines = []
 
@@ -261,36 +310,21 @@ def render_context_summary(summary_json: dict) -> str:
 
     lines.append("")
 
-    # Key Signals section (omitted if no markers)
     exchange_count = meta.get("exchange_count", 0)
-    first_exs = summary_json.get("first_exchanges", [])
-    last_exs = summary_json.get("last_exchanges", [])
+    first_exs = summary_json.get("first_exchanges", []) if show_first else []
+    last_exs = summary_json.get("last_exchanges", [])[-keep_last:]
 
     if exchange_count <= 8:
-        # Short/medium session: render all exchanges once
+        # Short/medium session: render its exchanges once, oldest dropped first
         lines.append("### Conversation\n")
         for ex in last_exs:
-            t = format_time(ex.get("timestamp"))
-            lines.append(f"**[{t}] User:**")
-            lines.append(ex["user"])
-            lines.append("")
-            if ex["assistant"]:
-                lines.append(f"**[{t}] Assistant:**")
-                lines.append(truncate_mid(ex["assistant"]))
-                lines.append("")
+            _render_exchange(lines, ex, user_clip, asst_clip)
     else:
         # Where We Left Off first — most recent context at top, where attention is
         # highest and where inline-preview truncation (if any) clips from below.
         lines.append("### Where We Left Off\n")
         for ex in last_exs:
-            t = format_time(ex.get("timestamp"))
-            lines.append(f"**[{t}] User:**")
-            lines.append(ex["user"])
-            lines.append("")
-            if ex["assistant"]:
-                lines.append(f"**[{t}] Assistant:**")
-                lines.append(truncate_mid(ex["assistant"]))
-                lines.append("")
+            _render_exchange(lines, ex, user_clip, asst_clip)
 
         # Gap indicator with summary of middle exchanges
         gap = exchange_count - len(first_exs) - len(last_exs)
@@ -301,21 +335,14 @@ def render_context_summary(summary_json: dict) -> str:
             else:
                 lines.append(f"[... {gap} earlier exchanges ...]\n")
 
-        # Earlier in This Session — first 2 exchanges kept for origin context,
+        # Earlier in This Session — first exchanges kept for origin context,
         # placed last so they're the first thing clipped under truncation.
-        lines.append("### Earlier in This Session\n")
-        for ex in first_exs:
-            t = format_time(ex.get("timestamp"))
-            lines.append(f"**[{t}] User:**")
-            lines.append(ex["user"])
-            lines.append("")
-            if ex["assistant"]:
-                lines.append(f"**[{t}] Assistant:**")
-                lines.append(truncate_mid(ex["assistant"]))
-                lines.append("")
+        if first_exs:
+            lines.append("### Earlier in This Session\n")
+            for ex in first_exs:
+                _render_exchange(lines, ex, user_clip, asst_clip)
 
     # Contextual recall priming footer
-    topic = summary_json.get("topic", "")
     files = meta.get("files_modified", [])
     footer_parts = [f"{exchange_count} exchanges"]
     if topic:

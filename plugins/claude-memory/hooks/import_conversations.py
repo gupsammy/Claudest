@@ -13,7 +13,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import os
 import sqlite3
 import sys
 import time
@@ -33,81 +32,33 @@ from memory_lib.db import (
     DEFAULT_DB_PATH,
     DEFAULT_PROJECTS_DIR,
     IMPORT_LOCK_PATH,
+    acquire_lock,
     detect_fts_support,
     get_db_connection,
     get_db_path,
     load_settings,
+    release_lock,
     resolve_project_cwd,
     setup_logging,
 )
-from memory_lib.content import extract_text_content, is_task_notification, is_teammate_message, is_tool_result, sanitize_fts_term, parse_origin
+from memory_lib.content import extract_text_content, is_notification_content, is_tool_result, sanitize_fts_term, parse_origin
 from memory_lib.parsing import (
     parse_jsonl_file, parse_all_with_uuids, extract_session_metadata,
     find_all_branches, compute_branch_metadata, aggregate_branch_content,
 )
 from memory_lib.formatting import get_project_key, normalize_cwd, normalize_project_key, parse_project_key, extract_project_name
-from memory_lib.summarizer import compute_context_summary
+from memory_lib.summarizer import SUMMARY_VERSION, compute_context_summary
 from sync_current import parse_codex_session, sync_entries, validate_codex_thread_id
 
 
-def _process_alive(pid: int) -> bool:
-    """Return True if a process with the given PID exists and we can signal it.
-
-    Uses os.kill(pid, 0) which raises ProcessLookupError if the PID is not in
-    use, OSError(EPERM) if it exists but we can't signal it. EPERM still
-    counts as alive — different user, but the process is real.
-    """
-    if pid <= 0:
-        return False
-    try:
-        os.kill(pid, 0)
-        return True
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    except OSError:
-        return False
-
-
 def acquire_import_lock(lock_path: Path = IMPORT_LOCK_PATH) -> int | None:
-    """Acquire the bulk-import lock or return None if another import is live.
-
-    Strategy: O_CREAT|O_EXCL to atomically create the lockfile with our PID.
-    If it already exists, read the PID inside; if that process is dead, steal
-    the stale lock. Otherwise return None — caller exits silently.
-    """
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    for _ in range(2):  # Two attempts: one to try, one after stale-cleanup.
-        try:
-            fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-        except FileExistsError:
-            try:
-                holder = lock_path.read_text(encoding="utf-8").strip()
-                holder_pid = int(holder)
-            except (OSError, ValueError):
-                holder_pid = -1
-            if _process_alive(holder_pid):
-                return None
-            try:
-                lock_path.unlink()
-            except FileNotFoundError:
-                pass
-            continue
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(str(os.getpid()))
-        return os.getpid()
-    return None
+    """Acquire the bulk-import lock or return None if another import is live."""
+    return acquire_lock(lock_path)
 
 
 def release_import_lock(lock_path: Path = IMPORT_LOCK_PATH) -> None:
-    """Release the lock if we still hold it (lock contains our PID)."""
-    try:
-        holder = lock_path.read_text(encoding="utf-8").strip()
-        if holder == str(os.getpid()):
-            lock_path.unlink()
-    except (OSError, ValueError):
-        pass
+    """Release the bulk-import lock if we still hold it."""
+    release_lock(lock_path)
 
 
 def get_file_hash(filepath: Path) -> str:
@@ -254,7 +205,7 @@ def import_session(
         if not uuid or uuid not in valid_branch_uuids:
             continue
 
-        notification = 1 if (entry_type == "user" and (is_task_notification(content) or is_teammate_message(content))) else 0
+        notification = 1 if (entry_type == "user" and is_notification_content(content)) else 0
 
         text, has_tool_use, has_thinking, tool_summary = extract_text_content(content)
         if not text:
@@ -408,9 +359,9 @@ def import_session(
         try:
             summary_md, summary_json = compute_context_summary(cursor, branch_db_id)
             cursor.execute("""
-                UPDATE branches SET context_summary = ?, context_summary_json = ?, summary_version = 2
+                UPDATE branches SET context_summary = ?, context_summary_json = ?, summary_version = ?
                 WHERE id = ?
-            """, (summary_md, summary_json, branch_db_id))
+            """, (summary_md, summary_json, SUMMARY_VERSION, branch_db_id))
         except Exception:
             pass  # Don't fail import on summary errors
 

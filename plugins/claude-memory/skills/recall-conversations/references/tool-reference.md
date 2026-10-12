@@ -1,6 +1,6 @@
 # Tool Reference
 
-Both scripts share a common flag taxonomy. Default scope: **current project, auto-detected from CWD**. Use `--project NAME[,NAME]` to override, or `--all-projects` to widen scope.
+`recent_chats.py` and `search_conversations.py` share a common flag taxonomy. Default scope: **current project, auto-detected from CWD**. Use `--project NAME[,NAME]` to override, or `--all-projects` to widen scope.
 
 ## recent_chats.py
 
@@ -20,13 +20,17 @@ python3 ${CLAUDE_PLUGIN_ROOT}/skills/recall-conversations/scripts/recent_chats.p
 | `--after DATE`            | Sessions after this datetime (ISO)                                  |
 | `--verbose`, `-v`         | Include files_modified, commits, tool_counts                        |
 | `--summary`               | Emit precomputed per-session digests instead of full content (~3× smaller, single-pass). Skips the message fetch. |
+| `--timeline`              | Compact index, one line per session: date, exchanges/tool calls, branch, project, uuid, title. No message bodies; ignores `--limit`, `--verbose`, `--summary`. Uncapped, so a long-lived project returns hundreds of lines — window with `--after`. JSON shape: `{"timeline": [...], "count", "scope"}`. |
+| `--session ID[,ID]`       | Fetch sessions by uuid or 8+ char hex prefix (markdown output prints 8). Ignores project scope, `--before`/`--after`, and `--limit`; composes with `--verbose`, `--summary`, `--json`. A prefix matching nothing prints a warning to stderr. Cannot combine with `--timeline`. |
 | `--format markdown\|json` | Output format (default: markdown)                                   |
 | `--json`                  | Alias for `--format json`                                           |
-| `--include-notifications` | Include task notification messages                                  |
+| `--include-notifications` | Include turns the harness wrote: subagent results, compaction summaries, CI and inter-session messages |
 | `--db PATH`               | Database path (default: `~/.claude-memory/conversations.db`)        |
 | `--cwd PATH`              | Override CWD for project auto-detect                                |
 | `--version`               | Print version                                                       |
 | `-h, --help`              | Show help with examples                                             |
+
+`--project NAME` matches by name, and one name can belong to several project paths; all of them are merged. Resolve names with `list_projects.py` first.
 
 Use `--verbose` for lenses that need file/commit context (restore-context, review-process, run-retro).
 
@@ -37,6 +41,10 @@ Use `--summary` for broad/multi-session lenses (run-retro, find-gaps, find-antip
 ## search_conversations.py
 
 Search for sessions containing keywords using full-text search (FTS5/FTS4/LIKE cascade).
+
+Matching: the query is split on whitespace and FTS special characters are removed from each term. FTS5 OR-joins the terms and ranks by BM25; FTS4 OR-joins and orders by recency; the LIKE fallback requires every term and orders by recency. Each hit returns the whole session by default, its summary with `--summary`, or its matching passages with `--excerpts`.
+
+With `semantic_search` on in `config.json`, the keyword ranking is fused (reciprocal rank) with a ranking by embedding similarity of each exchange, so paraphrases match. A session found only by meaning has no keyword passage; under `--excerpts` it shows the message that matched. Ollama down → keyword results plus a stderr warning.
 
 ```bash
 python3 ${CLAUDE_PLUGIN_ROOT}/skills/recall-conversations/scripts/search_conversations.py --query "keyword"
@@ -50,13 +58,32 @@ python3 ${CLAUDE_PLUGIN_ROOT}/skills/recall-conversations/scripts/search_convers
 | `--all-projects`          | Widen scope to all projects (overrides auto-detect)                 |
 | `--verbose`, `-v`         | Include files_modified, commits                                     |
 | `--summary`               | Emit precomputed per-session digests instead of full content (~3× smaller, single-pass). Skips the message fetch. |
+| `--excerpts`              | Emit up to 3 matching passages per session (~48-token windows, hits in `**bold**`, conversation order) instead of full content. Same index and stemming as the ranking. Cannot combine with `--summary`. JSON: each session carries `excerpts: [{role, timestamp, text}]`; the envelope reports `total_excerpts`. |
+| `--lexical`               | Keyword ranking only, even with semantic search on                  |
 | `--format markdown\|json` | Output format (default: markdown)                                   |
 | `--json`                  | Alias for `--format json`                                           |
-| `--include-notifications` | Include task notification messages                                  |
+| `--include-notifications` | Include turns the harness wrote: subagent results, compaction summaries, CI and inter-session messages |
 | `--db PATH`               | Database path (default: `~/.claude-memory/conversations.db`)        |
 | `--cwd PATH`              | Override CWD for project auto-detect                                |
 | `--version`               | Print version                                                       |
 | `-h, --help`              | Show help with examples                                             |
+
+## list_projects.py
+
+Map project names to paths. Names are not unique: one basename can belong to many paths.
+
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/skills/recall-conversations/scripts/list_projects.py --match NAME
+```
+
+| Option                    | Effect                                                              |
+| ------------------------- | ------------------------------------------------------------------- |
+| `--match TOKEN`           | Substring filter over project name or path (case-insensitive)       |
+| `--format markdown\|json` | Output format (default: markdown)                                   |
+| `--json`                  | Alias for `--format json`                                           |
+| `--db PATH`               | Database path (default: `~/.claude-memory/conversations.db`)        |
+
+Each row: name, path, key (transcript-directory name), session count, first and last seen. JSON shape: `{"projects": [...], "count", "match"}`. Ordered most recently active first.
 
 ## Output contract
 
@@ -91,6 +118,7 @@ Single envelope object:
 
 - `scope.auto_detected: true` means the project was inferred from CWD; `false` means it was explicitly passed (or scope is unfiltered).
 - `has_more: true` indicates the result set hit the limit; more sessions may exist.
+- `retrieval` (search only, present when semantic search is on): `hybrid` when vectors ranked the results, `lexical` with `--lexical`, an empty index, or Ollama down.
 
 ## Error contract
 
@@ -103,6 +131,7 @@ Errors and warnings are emitted to **stderr** (not stdout). In JSON mode, struct
 Common error codes:
 - `db_not_found` — database file missing; hint suggests checking `~/.claude-memory/`
 - `invalid_limit` — `--limit` outside [1, 50]
+- `invalid_session` — a `--session` entry is not 8+ hex/dash characters
 - `query_failed` — runtime error during DB query
 
 In markdown mode, errors are plain text: `Error: <message>` followed by `Hint: <command>`.

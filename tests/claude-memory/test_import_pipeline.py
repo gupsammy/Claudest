@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import sqlite3
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -404,51 +405,75 @@ class TestImportCodexSessions:
         )
 
 
+def _hold_lock_in_child(lock_path):
+    """Start a child process that acquires lock_path and holds it until killed."""
+    scripts = Path(__file__).resolve().parents[2] / "plugins/claude-memory/skills/recall-conversations/scripts"
+    child = subprocess.Popen(
+        [sys.executable, "-c",
+         "import sys, time; from pathlib import Path; sys.path.insert(0, sys.argv[1]);"
+         "from memory_lib.db import acquire_lock; assert acquire_lock(Path(sys.argv[2]));"
+         "print('held', flush=True); time.sleep(60)",
+         str(scripts), str(lock_path)],
+        stdout=subprocess.PIPE, text=True,
+    )
+    assert child.stdout.readline().strip() == "held"
+    return child
+
+
 class TestImportLock:
-    """Test the cross-platform PID-based import lock."""
+    """Test the OS-held import lock: a live holder blocks, a dead one never does."""
 
     def test_acquire_succeeds_when_unheld(self, tmp_path):
         lock_path = tmp_path / "import.lock"
         pid = acquire_import_lock(lock_path)
         try:
             assert pid == os.getpid()
-            assert lock_path.exists()
             assert lock_path.read_text() == str(os.getpid())
         finally:
             release_import_lock(lock_path)
 
     def test_acquire_fails_when_held_by_live_process(self, tmp_path):
         lock_path = tmp_path / "import.lock"
-        # Plant a lockfile with the current PID — current process is alive.
-        lock_path.write_text(str(os.getpid()))
+        child = _hold_lock_in_child(lock_path)
         try:
             assert acquire_import_lock(lock_path) is None
         finally:
-            lock_path.unlink(missing_ok=True)
+            child.kill()
+            child.wait()
 
-    def test_acquire_steals_stale_lock(self, tmp_path):
-        """Lock held by a non-existent PID is stale — should be stolen."""
+    def test_acquire_succeeds_after_holder_dies(self, tmp_path):
+        """A crashed holder (SIGKILL, no cleanup) must not leave a stuck lock."""
         lock_path = tmp_path / "import.lock"
-        # PID 1 is init/launchd; we plant a fake PID that's almost certainly dead.
-        # Use a high PID unlikely to be in use.
-        lock_path.write_text("999999")
+        child = _hold_lock_in_child(lock_path)
+        child.kill()
+        child.wait()
         pid = acquire_import_lock(lock_path)
         try:
-            assert pid == os.getpid(), "Should steal stale lock"
-            assert lock_path.read_text() == str(os.getpid())
+            assert pid == os.getpid()
         finally:
             release_import_lock(lock_path)
 
-    def test_release_only_removes_own_lock(self, tmp_path):
-        """release_import_lock must not delete a lock held by another process."""
+    def test_release_does_not_free_another_process_lock(self, tmp_path):
         lock_path = tmp_path / "import.lock"
-        lock_path.write_text("999999")  # Foreign PID
-        release_import_lock(lock_path)
-        assert lock_path.exists(), "Foreign lock must not be released"
-        lock_path.unlink()
+        child = _hold_lock_in_child(lock_path)
+        try:
+            release_import_lock(lock_path)
+            assert acquire_import_lock(lock_path) is None
+        finally:
+            child.kill()
+            child.wait()
 
-    def test_acquire_handles_corrupt_lockfile(self, tmp_path):
-        """Lock file with non-integer content should be treated as stale."""
+    def test_same_process_cannot_acquire_twice(self, tmp_path):
+        lock_path = tmp_path / "import.lock"
+        assert acquire_import_lock(lock_path) == os.getpid()
+        try:
+            assert acquire_import_lock(lock_path) is None
+        finally:
+            release_import_lock(lock_path)
+        assert acquire_import_lock(lock_path) == os.getpid()
+        release_import_lock(lock_path)
+
+    def test_leftover_lockfile_contents_are_ignored(self, tmp_path):
         lock_path = tmp_path / "import.lock"
         lock_path.write_text("not-a-pid")
         pid = acquire_import_lock(lock_path)

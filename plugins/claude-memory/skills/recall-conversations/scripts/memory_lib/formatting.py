@@ -33,15 +33,24 @@ def format_time_full(ts_str: Optional[str]) -> str:
 _WORKTREE_MARKER = "/.claude/worktrees/"
 _WORKTREE_KEY_MARKER = "--claude-worktrees-"
 _CODEX_WORKTREE_MARKER = "/.codex/worktrees/"
+# Folderless Claude chats each get a fresh <account>/scratch-workspaces/<id>/<id>/scratch-<date>
+# directory. They share one project, so a new folderless chat starts with the others' context.
+_SCRATCH_MARKER = "/scratch-workspaces/"
+_SCRATCH_KEY_MARKER = "-scratch-workspaces-"
+SCRATCH_PROJECT_PATH = "/(scratch)"
 
 
 def normalize_cwd(cwd: str) -> str:
     """Strip .claude/worktrees/<name> suffix from a raw path, returning the base repo path.
 
+    Any folderless-chat scratch directory maps to SCRATCH_PROJECT_PATH.
+
     Normalizes backslashes to forward slashes first so Windows paths
     (C:\\Users\\...) match the forward-slash worktree marker.
     """
     cwd = cwd.replace("\\", "/")
+    if _SCRATCH_MARKER in cwd:
+        return SCRATCH_PROJECT_PATH
     idx = cwd.rfind(_WORKTREE_MARKER)
     return cwd[:idx] if idx != -1 else cwd
 
@@ -73,7 +82,10 @@ def normalize_project_key(key: str) -> str:
     """Strip worktree suffix from an already-encoded project key.
 
     Encoded worktree keys contain '--claude-worktrees-' (from /.claude/worktrees/).
+    Folderless-chat keys contain '-scratch-workspaces-' and all map to the scratch project.
     """
+    if _SCRATCH_KEY_MARKER in key:
+        return get_project_key(SCRATCH_PROJECT_PATH)
     idx = key.rfind(_WORKTREE_KEY_MARKER)
     return key[:idx] if idx != -1 else key
 
@@ -140,11 +152,19 @@ def format_markdown_session(session: dict, verbose: bool = False) -> str:
         lines.append("\n---\n")
         return "\n".join(lines)
 
+    if session.get("excerpts") is not None:
+        lines.append("\n### Excerpts\n")
+        for ex in session["excerpts"]:
+            role = "User" if ex["role"] == "user" else "Assistant"
+            lines.append(f"**{role}** ({format_time_full(ex.get('timestamp'))}): {ex['text']}\n")
+        lines.append("---\n")
+        return "\n".join(lines)
+
     lines.append("\n### Conversation\n")
 
     for msg in session.get("messages", []):
         if msg.get("is_notification"):
-            role = "Subagent Result"
+            role = "Notification"
         else:
             role = "User" if msg["role"] == "user" else "Assistant"
         lines.append(f"**{role}:** {msg['content']}\n")
@@ -164,6 +184,8 @@ def format_json_sessions(sessions: list[dict], extra: Optional[dict] = None) -> 
     # counter instead.
     if any("summary" in s for s in sessions):
         output["total_summaries"] = sum(1 for s in sessions if "summary" in s)
+    elif any("excerpts" in s for s in sessions):
+        output["total_excerpts"] = sum(len(s["excerpts"]) for s in sessions if "excerpts" in s)
     else:
         output["total_messages"] = sum(len(s.get("messages", [])) for s in sessions)
     if extra:

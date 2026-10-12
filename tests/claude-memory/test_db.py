@@ -212,7 +212,7 @@ class TestVersionedMigration:
         conn = _pre_migration_db()
         _migrate_columns(conn)
         version = conn.execute("PRAGMA user_version").fetchone()[0]
-        assert version == 5
+        assert version == 6
         conn.close()
 
     def test_v0_to_v2_backfills_both(self):
@@ -231,7 +231,7 @@ class TestVersionedMigration:
         assert rows[0] == (1, 0)
         assert rows[1] == (2, 1)
         assert rows[2] == (3, 1)
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 5
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 6
         conn.close()
 
     def test_v1_to_v2_backfills_only_teammate(self):
@@ -251,7 +251,7 @@ class TestVersionedMigration:
         assert rows[0] == (1, 1)  # Already flagged, untouched
         assert rows[1] == (2, 1)  # Newly flagged by version 2
         assert rows[2] == (3, 0)  # Normal, untouched
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 5
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 6
         conn.close()
 
     def test_v2_skips_data_backfills(self):
@@ -267,7 +267,7 @@ class TestVersionedMigration:
         cursor.execute("SELECT is_notification FROM messages WHERE id = 1")
         assert cursor.fetchone()[0] == 0
         # v3 migration runs from v2, bumping version to 3
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 5
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 6
         conn.close()
 
     def test_v2_to_v3_preserves_import_log(self):
@@ -283,7 +283,7 @@ class TestVersionedMigration:
         assert count == 1
         hash_val = conn.execute("SELECT file_hash FROM import_log").fetchone()[0]
         assert hash_val == "abc123"
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 5
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 6
         conn.close()
 
     def test_v3_backfill_updates_origin(self, tmp_path):
@@ -957,7 +957,7 @@ class TestV5WorktreeFoldBackup:
         conn = get_db_connection({"db_path": str(db_file)})
 
         assert list(tmp_path.glob("conversations.pre-v5-worktree-fold-*.db")), "no pre-fold backup on disk"
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 5
+        assert conn.execute("PRAGMA user_version").fetchone()[0] >= 5
         assert _sessions_in(conn.cursor(), main_id) == 3
         assert conn.execute("SELECT 1 FROM projects WHERE id = ?", (wt_id,)).fetchone() is None
         conn.close()
@@ -1000,4 +1000,37 @@ class TestV5WorktreeFoldBackup:
 
         assert _sessions_in(conn.cursor(), main_id) == 1, "half-applied fold was committed"
         assert conn.execute("SELECT 1 FROM projects WHERE id = ?", (wt_a,)).fetchone() is not None
+        conn.close()
+
+
+class TestScopedFtsUpdateTriggers:
+    def test_unscoped_triggers_upgraded_and_index_stays_correct(self, tmp_path):
+        db_file = tmp_path / "conversations.db"
+        conn = get_db_connection({"db_path": str(db_file)})
+        conn.executescript("""
+            DROP TRIGGER branches_au;
+            CREATE TRIGGER branches_au AFTER UPDATE ON branches BEGIN
+              INSERT INTO branches_fts(branches_fts, rowid, aggregated_content) VALUES('delete', old.id, old.aggregated_content);
+              INSERT INTO branches_fts(rowid, aggregated_content) VALUES (new.id, new.aggregated_content);
+            END;
+        """)
+        cursor = conn.cursor()
+        pid = _add_project(cursor, "/r/p", "-r-p", "p")
+        cursor.execute("INSERT INTO sessions (uuid, project_id) VALUES ('s', ?)", (pid,))
+        cursor.execute("INSERT INTO branches (session_id, leaf_uuid, aggregated_content) VALUES (?, 'l', 'alpha')",
+                       (cursor.lastrowid,))
+        bid = cursor.lastrowid
+        conn.commit()
+        conn.close()
+
+        conn = get_db_connection({"db_path": str(db_file)})
+        sql = conn.execute("SELECT sql FROM sqlite_master WHERE name = 'branches_au'").fetchone()[0]
+        assert "UPDATE OF aggregated_content" in sql
+
+        conn.execute("UPDATE branches SET summary_version = 9 WHERE id = ?", (bid,))
+        conn.execute("UPDATE branches SET aggregated_content = 'omega' WHERE id = ?", (bid,))
+        match = "SELECT rowid FROM branches_fts WHERE branches_fts MATCH ?"
+        assert conn.execute(match, ("omega",)).fetchall() == [(bid,)]
+        assert conn.execute(match, ("alpha",)).fetchall() == []
+        conn.execute("INSERT INTO branches_fts(branches_fts) VALUES('integrity-check')")
         conn.close()

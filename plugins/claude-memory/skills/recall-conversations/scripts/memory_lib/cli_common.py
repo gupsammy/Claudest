@@ -122,7 +122,8 @@ def add_common_args(parser: argparse.ArgumentParser, default_limit: int = 5) -> 
                         help="Emit precomputed per-session summaries instead of full message "
                              "content — token-efficient for broad/retro/multi-session queries.")
     parser.add_argument("--include-notifications", action="store_true",
-                        help="Include task notification messages (hidden by default).")
+                        help="Include harness-written turns (subagent results, compaction "
+                             "summaries, CI and inter-session messages; hidden by default).")
     parser.add_argument("--db", type=Path, default=DEFAULT_DB_PATH,
                         help=f"Database path (default: {DEFAULT_DB_PATH}).")
     parser.add_argument("--cwd", type=str, default=None,

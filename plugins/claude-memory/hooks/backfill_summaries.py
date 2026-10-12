@@ -15,16 +15,26 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR.parent / "skills" / "recall-conversations" / "scripts"))
 
-from memory_lib.db import get_db_connection, load_settings, setup_logging
-from memory_lib.summarizer import compute_context_summary
+from memory_lib.db import DEFAULT_DB_PATH, acquire_lock, get_db_connection, load_settings, release_lock, setup_logging
+from memory_lib.summarizer import NEEDS_SUMMARY_SQL, SUMMARY_VERSION, compute_context_summary
 
 BATCH_SIZE = 50
+BACKFILL_LOCK_PATH = DEFAULT_DB_PATH.parent / "backfill.lock"
 
 
 def main():
     settings = load_settings()
     logger = setup_logging(settings)
+    # Concurrent session starts each spawn a backfill; one is enough.
+    if acquire_lock(BACKFILL_LOCK_PATH) is None:
+        return
+    try:
+        backfill(settings, logger)
+    finally:
+        release_lock(BACKFILL_LOCK_PATH)
 
+
+def backfill(settings: dict, logger) -> None:
     try:
         conn = get_db_connection(settings)
     except Exception as e:
@@ -35,11 +45,10 @@ def main():
     total_updated = 0
 
     while True:
-        cursor.execute("""
-            SELECT id FROM branches
-            WHERE summary_version IS NULL OR summary_version < 2
-            LIMIT ?
-        """, (BATCH_SIZE,))
+        cursor.execute(
+            f"SELECT id FROM branches WHERE {NEEDS_SUMMARY_SQL} LIMIT ?",
+            (SUMMARY_VERSION, BATCH_SIZE),
+        )
         rows = cursor.fetchall()
 
         if not rows:
@@ -49,9 +58,9 @@ def main():
             try:
                 summary_md, summary_json = compute_context_summary(cursor, branch_id)
                 cursor.execute("""
-                    UPDATE branches SET context_summary = ?, context_summary_json = ?, summary_version = 2
+                    UPDATE branches SET context_summary = ?, context_summary_json = ?, summary_version = ?
                     WHERE id = ?
-                """, (summary_md, summary_json, branch_id))
+                """, (summary_md, summary_json, SUMMARY_VERSION, branch_id))
                 total_updated += 1
             except Exception as e:
                 # Mark as errored to avoid infinite retry

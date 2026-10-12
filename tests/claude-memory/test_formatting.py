@@ -264,7 +264,7 @@ class TestFormatMarkdownSession:
             ],
         }
         md = format_markdown_session(session)
-        assert "**Subagent Result:**" in md
+        assert "**Notification:**" in md
         assert "**User:** Start research" in md
         assert "**Assistant:** Launching agents." in md
 
@@ -279,7 +279,7 @@ class TestFormatMarkdownSession:
         }
         md = format_markdown_session(session)
         assert "**User:** Hello" in md
-        assert "Subagent Result" not in md
+        assert "Notification" not in md
 
 
 class TestCodexWorktreeRepo:

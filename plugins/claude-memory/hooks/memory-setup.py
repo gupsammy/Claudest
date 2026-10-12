@@ -15,8 +15,12 @@ from memory_lib.db import (
     CODEX_IMPORT_SENTINEL,
     DEFAULT_CODEX_SESSIONS_DIR,
     DEFAULT_DB_PATH,
+    LATEST_DATA_VERSION,
     get_db_connection,
+    load_settings,
 )
+from memory_lib.embeddings import has_pending
+from memory_lib.summarizer import NEEDS_SUMMARY_SQL, SUMMARY_VERSION
 
 
 def _spawn_background(script_name: str, *args: str) -> None:
@@ -34,13 +38,20 @@ def _spawn_background(script_name: str, *args: str) -> None:
     )
 
 
-def _ensure_schema() -> None:
-    """Open DB connection to trigger _migrate_columns (creates token_snapshots if missing)."""
+def _ensure_schema() -> bool:
+    """Apply cheap schema changes in the foreground; True when data migrations are pending.
+
+    Data migrations (backups, row rewrites) take tens of seconds on a large DB, so
+    they run in the background worker instead of delaying the session start.
+    """
     try:
-        conn = get_db_connection()
-        conn.close()
+        conn = get_db_connection(migrate=False)
+        try:
+            return conn.execute("PRAGMA user_version").fetchone()[0] < LATEST_DATA_VERSION
+        finally:
+            conn.close()
     except Exception:
-        pass
+        return False
 
 
 def _needs_reimport() -> bool:
@@ -73,12 +84,27 @@ def _needs_backfill() -> bool:
         if "summary_version" not in cols:
             conn.close()
             return False
-        cursor.execute(
-            "SELECT COUNT(*) FROM branches WHERE summary_version IS NULL OR summary_version < 2"
-        )
+        cursor.execute(f"SELECT COUNT(*) FROM branches WHERE {NEEDS_SUMMARY_SQL}", (SUMMARY_VERSION,))
         count = cursor.fetchone()[0]
         conn.close()
         return count > 0
+    except Exception:
+        return False
+
+
+def _needs_embedding() -> bool:
+    """Semantic search is on and some human turn lacks a vector. False on any error."""
+    try:
+        settings = load_settings()
+        if not settings.get("semantic_search"):
+            return False
+        import sqlite3
+        conn = sqlite3.connect(str(DEFAULT_DB_PATH))
+        conn.execute("PRAGMA busy_timeout = 2000")
+        try:
+            return has_pending(conn, settings["embedding_model"])
+        finally:
+            conn.close()
     except Exception:
         return False
 
@@ -102,6 +128,7 @@ def _codex_sessions_newer_than_sentinel() -> bool:
 
 
 def main():
+    migration_pending = False
     try:
         # Create directory
         DEFAULT_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -110,7 +137,7 @@ def main():
         if not DEFAULT_DB_PATH.exists():
             _spawn_background("import_conversations.py", "--include-codex", "--backup-on-import")
         else:
-            _ensure_schema()
+            migration_pending = _ensure_schema()
             # v3 migration nullifies file_hash for sessions with channel messages;
             # trigger reimport to re-process those sessions with the new parser
             if _needs_reimport():
@@ -118,8 +145,11 @@ def main():
             elif _codex_sessions_newer_than_sentinel():
                 _spawn_background("import_conversations.py", "--include-codex", "--backup-on-import")
 
-        if _needs_backfill():
+        # The backfill worker runs pending data migrations first, under the migration lock.
+        if migration_pending or _needs_backfill():
             _spawn_background("backfill_summaries.py")
+        if _needs_embedding():
+            _spawn_background("embed_index.py")
     except Exception:
         pass
 

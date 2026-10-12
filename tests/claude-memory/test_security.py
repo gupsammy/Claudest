@@ -38,6 +38,11 @@ class TestSanitizeFtsTerm:
         assert "hello" in result
         assert "world" in result
 
+    def test_hyphen_splits_words(self):
+        # FTS tokenizers split "trade-off" into "trade" "off"; the quoted
+        # phrase must keep both words, not fuse them into "tradeoff".
+        assert sanitize_fts_term("trade-off") == "trade off"
+
     def test_removes_near_keyword(self):
         result = sanitize_fts_term("near miss")
         # "near" is a keyword — removed, leaving "miss"

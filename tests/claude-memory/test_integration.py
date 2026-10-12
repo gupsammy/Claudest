@@ -3,7 +3,7 @@
 import sqlite3
 from pathlib import Path
 
-from memory_lib.content import extract_text_content, is_task_notification, is_teammate_message, is_tool_result
+from memory_lib.content import extract_text_content, is_notification_content, is_tool_result
 from memory_lib.db import SCHEMA, _migrate_columns
 from memory_lib.parsing import (
     aggregate_branch_content,
@@ -45,7 +45,7 @@ def _setup_db_and_import(filepath: Path) -> sqlite3.Connection:
         content = message.get("content", "")
         if entry_type == "user" and is_tool_result(content):
             continue
-        notification = 1 if (entry_type == "user" and (is_task_notification(content) or is_teammate_message(content))) else 0
+        notification = 1 if (entry_type == "user" and is_notification_content(content)) else 0
         text, has_tool_use, has_thinking, tool_summary = extract_text_content(content)
         if not text:
             continue

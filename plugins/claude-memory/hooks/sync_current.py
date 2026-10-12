@@ -51,13 +51,13 @@ from memory_lib.db import (
     resolve_project_cwd,
     setup_logging,
 )
-from memory_lib.content import extract_text_content, is_task_notification, is_teammate_message, is_tool_result, parse_origin
+from memory_lib.content import extract_text_content, is_notification_content, is_tool_result, parse_origin
 from memory_lib.parsing import (
     parse_jsonl_file, parse_all_with_uuids, extract_session_metadata,
     find_all_branches, compute_branch_metadata, aggregate_branch_content,
 )
 from memory_lib.formatting import get_project_key, normalize_project_key, parse_project_key
-from memory_lib.summarizer import compute_context_summary
+from memory_lib.summarizer import SUMMARY_VERSION, compute_context_summary
 
 
 
@@ -297,7 +297,7 @@ def sync_entries(
         if uuid not in valid_branch_uuids:
             continue
 
-        notification = 1 if (entry_type == "user" and (is_task_notification(content) or is_teammate_message(content))) else 0
+        notification = 1 if (entry_type == "user" and is_notification_content(content)) else 0
 
         text, has_tool_use, has_thinking, tool_summary = extract_text_content(content)
         if not text:
@@ -447,9 +447,9 @@ def sync_entries(
         try:
             summary_md, summary_json = compute_context_summary(cursor, branch_db_id)
             cursor.execute("""
-                UPDATE branches SET context_summary = ?, context_summary_json = ?, summary_version = 2
+                UPDATE branches SET context_summary = ?, context_summary_json = ?, summary_version = ?
                 WHERE id = ?
-            """, (summary_md, summary_json, branch_db_id))
+            """, (summary_md, summary_json, SUMMARY_VERSION, branch_db_id))
         except Exception:
             pass  # Don't fail sync on summary errors
 
@@ -581,7 +581,13 @@ def main():
         if new_messages > 0:
             output["suppressOutput"] = True  # Don't show in transcript
 
-        print(json.dumps(output))
+        print(json.dumps(output), flush=True)
+
+        # Embed the turn that just ended, so it is searchable by meaning right away.
+        # Runs after the hook output: this process is already detached from the turn.
+        if new_messages > 0 and settings.get("semantic_search"):
+            import embed_index
+            embed_index.run(settings, logger)
 
     except Exception as e:
         logger.error(f"Sync error: {e}")

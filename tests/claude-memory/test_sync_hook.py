@@ -18,6 +18,7 @@ FIXTURE_DIR = Path(__file__).parent / "fixtures"
 HOOKS_DIR = Path(__file__).parent.parent.parent / "plugins" / "claude-memory" / "hooks"
 sys.path.insert(0, str(HOOKS_DIR))
 
+from memory_lib.summarizer import SUMMARY_VERSION
 from sync_current import (
     CODEX_UNKNOWN_PROJECT_PATH,
     _codex_message_uuid,
@@ -124,7 +125,7 @@ class TestSyncSessionCreatesBranches:
             assert row is not None
             summary, version = row
             assert summary, "Active branch should have context_summary"
-            assert version == 2, "summary_version should be 2 after sync"
+            assert version == SUMMARY_VERSION, "summary_version should be current after sync"
             assert "### Session:" in summary
             assert "/recall-conversations" in summary
 

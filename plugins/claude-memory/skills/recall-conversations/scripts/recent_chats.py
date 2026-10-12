@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sqlite3
 import sys
 
@@ -20,6 +21,7 @@ from memory_lib.cli_common import (
     add_common_args,
     emit_error,
     emit_volume_signal,
+    emit_warning,
     open_db_or_exit,
     resolve_format,
     resolve_scope,
@@ -27,6 +29,24 @@ from memory_lib.cli_common import (
     volume_flags,
 )
 from memory_lib.formatting import format_markdown_session, format_json_sessions
+
+# Hex and dashes only: the prefixes go into a LIKE pattern, so % and _ must never pass.
+_SESSION_PREFIX_RE = re.compile(r"^[0-9a-fA-F-]{8,}$")
+
+
+def parse_session_prefixes(raw: str, fmt: str) -> list[str]:
+    """Split --session into uuid prefixes; exit 2 on any malformed entry."""
+    prefixes = [p.strip().lower() for p in raw.split(",") if p.strip()]
+    bad = [p for p in prefixes if not _SESSION_PREFIX_RE.match(p)]
+    if not prefixes or bad:
+        emit_error(
+            "invalid_session",
+            f"--session takes session uuids or 8+ char prefixes, got {bad or raw!r}",
+            "--session 1c634ac2  (prefix shown in timeline or search output)",
+            fmt,
+        )
+        sys.exit(2)
+    return prefixes
 
 
 EXAMPLES = """
@@ -46,6 +66,9 @@ EXAMPLES
   Full uncapped arc of a project, oldest-first (triage index, no message bodies):
     recent_chats.py --project PKM --timeline --sort-order asc
 
+  Fetch specific sessions by uuid or 8+ char prefix (from --timeline or search output):
+    recent_chats.py --session 1c634ac2,9054064f --verbose
+
   JSON output for downstream tooling:
     recent_chats.py --limit 20 --json | jq '.sessions[].project'
 
@@ -64,8 +87,13 @@ def get_recent_sessions(
     verbose: bool,
     include_notifications: bool,
     summary: bool = False,
+    session_prefixes: list[str] | None = None,
 ) -> list[dict]:
-    """Get recent sessions with their messages (or precomputed summaries if summary=True)."""
+    """Get recent sessions with their messages (or precomputed summaries if summary=True).
+
+    session_prefixes selects sessions by uuid prefix instead of by recency; every
+    match is returned, so `limit` does not apply.
+    """
     cursor = conn.cursor()
 
     cursor.execute("PRAGMA table_info(branches)")
@@ -100,10 +128,16 @@ def get_recent_sessions(
         placeholders = ",".join("?" * len(scope.values))
         sql += f" AND p.{scope.column} IN ({placeholders})"
         params.extend(scope.values)
+    if session_prefixes:
+        # Prefixes are validated as hex/dash in main(), so no LIKE wildcard can leak in.
+        sql += " AND (" + " OR ".join("s.uuid LIKE ?" for _ in session_prefixes) + ")"
+        params.extend(f"{p}%" for p in session_prefixes)
 
     order = "DESC" if sort_order == "desc" else "ASC"
-    sql += f" ORDER BY b.ended_at {order} LIMIT ?"
-    params.append(limit)
+    sql += f" ORDER BY b.ended_at {order}"
+    if not session_prefixes:
+        sql += " LIMIT ?"
+        params.append(limit)
 
     cursor.execute(sql, params)
     sessions = cursor.fetchall()
@@ -163,6 +197,14 @@ def format_markdown(sessions: list[dict], verbose: bool = False) -> str:
     for session in sessions:
         lines.append(format_markdown_session(session, verbose=verbose))
     return "\n".join(lines)
+
+
+def summary_topic(context_summary: str | None) -> str:
+    """Pull the topic out of a rendered summary; its first line is only a date header."""
+    for line in (context_summary or "").splitlines():
+        if line.startswith("**Topic:**"):
+            return line[len("**Topic:**"):].split(" | **Status:**")[0].strip()
+    return ""
 
 
 def get_timeline(
@@ -234,9 +276,7 @@ def get_timeline(
                 tools = sum(json.loads(tool_counts_json).values())
             except (ValueError, TypeError, AttributeError):
                 tools = 0
-        title = ""
-        if context_summary:
-            title = context_summary.strip().splitlines()[0][:120] if context_summary.strip() else ""
+        title = summary_topic(context_summary)[:120]
 
         results.append({
             "uuid": uuid,
@@ -281,11 +321,15 @@ def main():
                         help="Sessions before this datetime (ISO).")
     parser.add_argument("--after", type=str,
                         help="Sessions after this datetime (ISO).")
-    parser.add_argument("--timeline", action="store_true",
-                        help="Compact UNCAPPED session index (no message bodies, no 50-limit) — "
-                             "the triage primitive for reconstructing a project's full arc. "
-                             "Pair with --sort-order asc for oldest-first. "
-                             "Note: --verbose and --summary are ignored in timeline mode.")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--timeline", action="store_true",
+                      help="Compact UNCAPPED session index (no message bodies, no 50-limit) — "
+                           "the triage primitive for reconstructing a project's full arc. "
+                           "Pair with --sort-order asc for oldest-first. "
+                           "Note: --verbose and --summary are ignored in timeline mode.")
+    mode.add_argument("--session", type=str, default=None,
+                      help="Fetch specific sessions by uuid or 8+ char prefix, comma-separated. "
+                           "Ignores project scope, --before/--after, and --limit.")
 
     args = parser.parse_args()
     fmt = resolve_format(args)
@@ -312,26 +356,37 @@ def main():
         return
 
     limit = validate_limit(args, fmt)
+    prefixes = parse_session_prefixes(args.session, fmt) if args.session else None
 
     conn = open_db_or_exit(args.db, fmt)
     try:
-        scope, auto_detected = resolve_scope(args, conn, fmt)
+        # A uuid already names its session, so --session bypasses scope and dates.
+        if prefixes:
+            scope, auto_detected = None, False
+        else:
+            scope, auto_detected = resolve_scope(args, conn, fmt)
         sessions = get_recent_sessions(
             conn,
             limit=limit,
             sort_order=args.sort_order,
-            before=args.before,
-            after=args.after,
+            before=None if prefixes else args.before,
+            after=None if prefixes else args.after,
             scope=scope,
             verbose=args.verbose,
             include_notifications=args.include_notifications,
             summary=args.summary,
+            session_prefixes=prefixes,
         )
     except Exception as e:
         emit_error("query_failed", str(e), None, fmt)
         sys.exit(1)
     finally:
         conn.close()
+
+    if prefixes:
+        missing = [p for p in prefixes if not any(s["uuid"].startswith(p) for s in sessions)]
+        if missing:
+            emit_warning(f"No session matches: {', '.join(missing)}", fmt)
 
     content_chars = sum(
         len(s.get("summary") or "")
@@ -345,7 +400,7 @@ def main():
                 "projects": scope.values if scope else None,
                 "auto_detected": auto_detected,
             },
-            "has_more": len(sessions) == limit,
+            "has_more": not prefixes and len(sessions) == limit,
             **volume_flags(content_chars, args.summary),
         }
         print(format_json_sessions(sessions, meta))

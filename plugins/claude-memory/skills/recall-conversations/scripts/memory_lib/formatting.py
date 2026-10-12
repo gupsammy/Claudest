@@ -135,7 +135,8 @@ def format_markdown_session(session: dict, verbose: bool = False) -> str:
     if session.get("summary") is not None:
         lines.append("\n### Summary\n")
         summ = (session.get("summary") or "").strip()
-        lines.append(summ if summ else "_(summary unavailable — re-run this session without --summary)_")
+        uuid_prefix = session.get("uuid", "")[:8]
+        lines.append(summ if summ else f"_(summary unavailable — fetch full text with --session {uuid_prefix})_")
         lines.append("\n---\n")
         return "\n".join(lines)
 

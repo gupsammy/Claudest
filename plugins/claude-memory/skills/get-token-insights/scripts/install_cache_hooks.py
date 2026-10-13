@@ -109,10 +109,18 @@ def check_status() -> dict[str, dict]:
             cfg = json.loads(SETTINGS_PATH.read_text())
         except json.JSONDecodeError:
             cfg = {}
-        hooks_cfg = cfg.get("hooks", {})
+        hooks_cfg = cfg.get("hooks") if isinstance(cfg, dict) else None
+        if not isinstance(hooks_cfg, dict):
+            hooks_cfg = {}
+        lists = {k: v for k, v in hooks_cfg.items() if isinstance(v, list)}
         for event, spec in HOOK_BLOCKS.items():
-            wired = _already_in_hooks(hooks_cfg.get(event, []), spec["check_substr"])
+            wired = _already_in_hooks(lists.get(event, []), spec["check_substr"])
             result[f"settings:{event}"] = {"wired": wired}
+        for fname in RETIRED_HOOKS:
+            wired = any(_already_in_hooks(v, fname) for v in lists.values())
+            result[f"settings:retired:{fname}"] = {"wired": wired}
+    for fname in RETIRED_HOOKS:
+        result[f"retired:{fname}"] = {"file_exists": (HOOKS_DIR / fname).exists()}
     return result
 
 
@@ -157,7 +165,11 @@ def install(dry_run: bool = False) -> bool:
     except json.JSONDecodeError as exc:
         raise InstallError(f"settings.json is malformed: {exc}") from exc
 
+    if not isinstance(cfg, dict):
+        raise InstallError("settings.json top level is not an object")
     hooks_cfg = cfg.setdefault("hooks", {})
+    if not isinstance(hooks_cfg, dict):
+        raise InstallError("settings.json hooks is not an object")
     settings_changed = False
 
     retired_files = []

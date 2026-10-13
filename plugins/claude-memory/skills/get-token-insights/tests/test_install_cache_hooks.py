@@ -112,3 +112,21 @@ def test_non_list_owned_event_raises_install_error(home):
     settings.write_text(json.dumps(cfg))
     with pytest.raises(ich.InstallError):
         ich.install()
+
+
+@pytest.mark.parametrize("cfg", [[], {"hooks": []}])
+def test_non_object_settings_raise_install_error(home, cfg):
+    hooks, settings = home
+    settings.write_text(json.dumps(cfg))
+    with pytest.raises(ich.InstallError):
+        ich.install()
+
+
+def test_status_reports_leftover_retired_hook(home):
+    status = ich.check_status()
+    assert status["retired:cache-resume-detect.py"] == {"file_exists": True}
+    assert status["settings:retired:cache-resume-detect.py"] == {"wired": True}
+    ich.install()
+    status = ich.check_status()
+    assert status["retired:cache-resume-detect.py"] == {"file_exists": False}
+    assert status["settings:retired:cache-resume-detect.py"] == {"wired": False}

@@ -33,6 +33,10 @@ All locks (`import.lock`, `migrate.lock`, `backfill.lock`, `embed.lock`) use `ac
 
 Migration backups go to `<db>.pre-<label>-<ts>.db` via a `.partial` name renamed only after `quick_check`, in rollback-journal mode (a WAL-mode copy cannot be opened read-only).
 
+Import is append-only, so a normalization fix reaches only sessions imported after it; existing rows need a fold in `_migrate_project_paths`. A migration that moves or deletes rows must sit behind a `user_version` bump stamped only after `_backup_db_before_migration` succeeds, roll back fully on any failure (a later hook commit would persist a half-applied fold), and break ties with an explicit `ORDER BY` (unordered SQLite ties flip per connection).
+
+Detached hooks (`memory-setup`, `memory-sync`) send stderr to DEVNULL, so a crashing background import fails silently. The symptom is work repeating every SessionStart (backups, full imports) because the sentinel never advances; rerun the script in the foreground against a DB copy. Trust a JSONL `cwd` as a project path only if it encodes back to the project's directory key — sessions can start elsewhere and `/cd` later.
+
 ## Codex Desktop Integration
 
 Codex sessions land in the same `conversations.db` via a minimal adapter. `parse_codex_session` normalizes Codex JSONL events into Claude-shaped message dicts, then routes through the shared `sync_entries()`. Origin column is set to `codex`; deterministic synthetic UUIDs (`uuid5(NAMESPACE_URL, "codex:<sid>:<kind>:<ord>")`) keep re-imports idempotent.
@@ -44,6 +48,8 @@ The adapter is intentionally minimal. It imports only `event_msg.user_message` a
 Codex sessions without `session_meta.cwd` route to a single sentinel project at `(unknown-codex)` rather than fabricating a project per Codex date directory.
 
 Folderless Claude chats (`<account>/scratch-workspaces/<id>/<id>/scratch-<date>`) fold into one sentinel project `/(scratch)` via `normalize_cwd` and `normalize_project_key`; `_migrate_project_paths` merges older per-chat rows.
+
+Worktree sessions fold into their main project by design — they are about the same project and must recall like main-checkout sessions. `resolve_project_cwd` maps Claude `/.claude/worktrees/` by path and Codex `~/.codex/worktrees/<id>/<repo>` to the single non-worktree project with that name (none or several → stays its own project). `sessions.cwd` keeps the origin. Re-key folded rows (`_rekeyed_worktree_key`) or the next import recreates the duplicate project.
 
 ## Development Commands
 

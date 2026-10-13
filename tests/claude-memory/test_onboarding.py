@@ -137,6 +137,34 @@ class TestOnboardingTriggered:
         assert "write_config.py" in context
 
 
+class TestUpgradeQuestions:
+    """Users who finished an older onboarding are asked only what is new, once."""
+
+    def test_upgrader_gets_only_the_semantic_question(self, tmp_path, monkeypatch):
+        cfg = tmp_path / "config.json"
+        cfg.write_text(json.dumps({"onboarding_completed": True, "onboarding_version": 1}))
+
+        context = _run_main_captured(monkeypatch, cfg)["hookSpecificOutput"]["additionalContext"]
+
+        assert "Semantic search" in context and "semantic_setup.py" in context
+        assert "--semantic-search false" in context, "a no must be saved so it is not asked again"
+        assert "Consolidation reminders" not in context, "upgraders must not redo the whole walkthrough"
+
+    def test_upgrader_who_answered_is_not_asked_again(self, tmp_path, monkeypatch):
+        cfg = tmp_path / "config.json"
+        cfg.write_text(json.dumps({
+            "onboarding_completed": True, "onboarding_version": 1, "semantic_search": False,
+        }))
+
+        assert _run_main_captured(monkeypatch, cfg) == {}
+
+    def test_fresh_walkthrough_includes_the_semantic_question(self, tmp_path, monkeypatch):
+        context = _run_main_captured(monkeypatch, tmp_path / "none.json")["hookSpecificOutput"]["additionalContext"]
+
+        assert "Consolidation reminders" in context
+        assert "Semantic search" in context and "semantic_setup.py" in context
+
+
 class TestOnboardingResiliency:
     def test_exception_does_not_block_session(self, tmp_path, monkeypatch):
         """Any exception in main() must be swallowed and return {} to avoid blocking session start."""

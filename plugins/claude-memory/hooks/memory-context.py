@@ -28,6 +28,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR.parent / "skills" / "recall-conversations" / "scripts"))
 
 from memory_lib.db import get_db_path, load_config, load_settings, setup_logging, get_db_connection
+from memory_lib.embeddings import related_sessions
 from memory_lib.formatting import format_time, format_time_full, get_project_key, normalize_cwd
 from memory_lib.summarizer import build_exchange_pairs, render_context_summary, truncate_mid
 
@@ -438,6 +439,42 @@ def build_origin_block(source: str, sessions: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def build_related_block(conn: sqlite3.Connection, settings: dict, sessions: list[dict]) -> str:
+    """List past sessions closest in meaning to the primary one, from any project.
+
+    Empty when semantic search is off or the primary session has no vector yet.
+    """
+    if not settings.get("semantic_search") or not sessions:
+        return ""
+    uuids = [s["uuid"] for s in sessions]
+    placeholders = ",".join("?" * len(uuids))
+    ids = dict(conn.execute(f"SELECT uuid, id FROM sessions WHERE uuid IN ({placeholders})", uuids))
+    primary = ids.get(sessions[0]["uuid"])
+    if primary is None:
+        return ""
+    hits = related_sessions(conn, settings["embedding_model"], primary, exclude=tuple(ids.values()))
+    if not hits:
+        return ""
+    lines = [
+        "## Related Sessions",
+        "Past sessions closest in meaning to the latest one above. Fetch one with the "
+        "recall skill's `recent_chats.py --session <id>` when the work touches it.",
+    ]
+    for session_id, score in hits:
+        row = conn.execute("""
+            SELECT s.uuid, p.name, b.started_at, b.context_summary
+            FROM sessions s JOIN projects p ON p.id = s.project_id
+            JOIN branches b ON b.session_id = s.id AND b.is_active = 1
+            WHERE s.id = ? ORDER BY b.ended_at DESC LIMIT 1
+        """, (session_id,)).fetchone()
+        if not row:
+            continue
+        uuid, project, started_at, summary = row
+        topic = _extract_topic({"context_summary": summary or ""})[:100] or "(no topic)"
+        lines.append(f"- {format_time(started_at, '%Y-%m-%d')} · {project} · {topic} [{uuid[:8]}]")
+    return "\n".join(lines) if len(lines) > 2 else ""
+
+
 def _render_session(session: dict, max_chars: int) -> str:
     """Render one session within max_chars: re-render the stored JSON summary to the
     budget, else cut the cached markdown, else build from raw messages."""
@@ -522,6 +559,11 @@ def main():
         project_key = get_project_key(cwd)
         max_sessions = settings.get("max_context_sessions", 2)
         sessions = select_sessions(conn, project_key, session_id, max_sessions, source=source, db_path=db_path, cwd=cwd)
+        try:
+            related = build_related_block(conn, settings, sessions)
+        except Exception as e:
+            logger.error(f"Related sessions error: {e}")
+            related = ""
         conn.close()
 
         if not sessions:
@@ -539,15 +581,16 @@ def main():
         )
         origin = build_origin_block(source, sessions)
 
-        # Directive + origin + sessions stay within CONTEXT_MAX_CHARS so the harness
-        # inlines all of it instead of spilling to a file.
-        context = build_context(sessions, CONTEXT_MAX_CHARS - len(directive) - len(origin) - 4)
+        # Directive + origin + sessions + related stay within CONTEXT_MAX_CHARS so the
+        # harness inlines all of it instead of spilling to a file.
+        tail = f"\n\n{related}" if related else ""
+        context = build_context(sessions, CONTEXT_MAX_CHARS - len(directive) - len(origin) - len(tail) - 4)
         if not context:
             print(json.dumps({}))
             return
 
         logger.info(f"Injecting context from {len(sessions)} session(s) for project {project_key}")
-        full_context = f"{directive}\n\n{origin}\n\n{context}"
+        full_context = f"{directive}\n\n{origin}\n\n{context}{tail}"
 
         output = {
             "hookSpecificOutput": {

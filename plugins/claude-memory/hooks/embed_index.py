@@ -25,7 +25,14 @@ from memory_lib.db import (
     release_lock,
     setup_logging,
 )
-from memory_lib.embeddings import DOC_PROMPT, EmbeddingError, embed, pending_exchanges, store
+from memory_lib.embeddings import (
+    DOC_PROMPT,
+    EmbeddingError,
+    embed,
+    pending_exchanges,
+    refresh_session_vectors,
+    store,
+)
 
 BATCH_SIZE = 32
 EMBED_LOCK_PATH = DEFAULT_DB_PATH.parent / "embed.lock"
@@ -59,12 +66,18 @@ def run(settings: dict, logger) -> int:
     try:
         conn = get_db_connection(settings)
         try:
-            count = index_pending(conn, settings["embedding_model"], settings["ollama_url"])
-            logger.info(f"Embedding index: {count} exchanges embedded")
+            model = settings["embedding_model"]
+            try:
+                count = index_pending(conn, model, settings["ollama_url"])
+            except EmbeddingError as e:
+                logger.warning(f"Embedding index stopped, Ollama unavailable: {e}")
+                count = 0
+            # Runs even when Ollama is down: batches committed before the failure
+            # still change their sessions' means.
+            refreshed = refresh_session_vectors(conn, model)
+            conn.commit()
+            logger.info(f"Embedding index: {count} exchanges embedded, {refreshed} sessions refreshed")
             return count
-        except EmbeddingError as e:
-            logger.warning(f"Embedding index stopped, Ollama unavailable: {e}")
-            return 0
         finally:
             conn.close()
     finally:

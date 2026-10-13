@@ -11,13 +11,15 @@ On **SessionStart**, three hooks fire in order on `startup|clear`:
 2. `memory-context.py` — queries recent sessions, injects context via `hookSpecificOutput`
 3. `consolidation-check.py` — checks if memory consolidation is needed
 
+`onboarding.py` (startup only) runs the full walkthrough until `onboarding_completed`. After a `CURRENT_ONBOARDING_VERSION` bump, earlier users get only the questions in `NEW_QUESTION_KEYS` whose config key is absent; every answer, including no, is written by `write_config.py`, so nothing is asked twice. Add each new question's key there.
+
 On **SessionEnd** (matcher: `clear`), `clear-handoff.py` writes `~/.claude-memory/clear-handoff.json` with the dying session's `session_id`, `cwd`, and `transcript_path` so the next SessionStart can hard-link to the cleared-from session.
 
 On **Stop**, `memory-sync.py` writes hook input to a temp file and spawns `sync_current.py --input-file` in the background to incrementally sync the session without blocking shutdown. All hooks are Python (no bash) for cross-platform compatibility.
 
 ## Database
 
-SQLite at `~/.claude-memory/conversations.db` with WAL mode and 5s busy_timeout. Messages are stored once per session (deduped); branches (from conversation rewinds) tracked via `branch_messages` join table. Full-text search cascade: FTS5 → FTS4 → LIKE fallback. Schema auto-migrated on connection — outdated schema triggers delete-and-recreate.
+SQLite at `~/.claude-memory/conversations.db` with WAL mode and 5s busy_timeout. Messages are stored once per session (deduped); branches (from conversation rewinds) tracked via `branch_messages` join table. Full-text search cascade: FTS5 → FTS4 → LIKE fallback. Opt-in vectors: `exchange_embeddings` per typed turn; `session_embeddings` holds each session's mean, stale when its `n` differs from the session's vector count, refreshed by `embed_index.py` and read by `memory-context.py` for related sessions. Schema auto-migrated on connection — outdated schema triggers delete-and-recreate.
 
 Shared utility package: `plugins/claude-memory/skills/recall-conversations/scripts/memory_lib/` (`db.py`, `content.py`, `parsing.py`, `formatting.py`, `summarizer.py`, `embeddings.py`, `cli_common.py`). Hook scripts reach it via `sys.path.insert` at runtime.
 

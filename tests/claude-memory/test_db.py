@@ -785,11 +785,11 @@ class TestLoadSettingsWithConfig:
 
 
 class TestCurrentOnboardingVersion:
-    """Import contract: CURRENT_ONBOARDING_VERSION must exist and equal 1."""
+    """Import contract: CURRENT_ONBOARDING_VERSION must exist and equal 2."""
 
-    def test_value_is_one(self):
-        """Both write_config and onboarding.py depend on this being 1."""
-        assert CURRENT_ONBOARDING_VERSION == 1
+    def test_value_is_two(self):
+        """v2 added the semantic search question; write_config stamps this value."""
+        assert CURRENT_ONBOARDING_VERSION == 2
 
 
 class TestMigrateDbBackupGuard:

@@ -56,6 +56,11 @@ def main():
         type=int,
         help="Sessions between consolidation reminders",
     )
+    parser.add_argument(
+        "--semantic-search",
+        choices=["true", "false"],
+        help="Record the semantic search choice (semantic_setup.py --enable turns it on)",
+    )
     args = parser.parse_args()
 
     # Load existing config or start from defaults.
@@ -79,6 +84,8 @@ def main():
             config["consolidation_min_hours"] = max(1, args.consolidation_min_hours)
         if args.consolidation_min_sessions is not None:
             config["consolidation_min_sessions"] = max(1, args.consolidation_min_sessions)
+        if args.semantic_search is not None:
+            config["semantic_search"] = args.semantic_search == "true"
 
     # Mark onboarding complete
     config["onboarding_completed"] = True

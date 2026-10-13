@@ -64,9 +64,14 @@ def unpack(blob: bytes) -> array:
 
 
 def exchange_text(user: str, assistant: str) -> str:
-    """The text embedded for one exchange; '' when the human turn has no typed text."""
-    user = strip_system_reminders(user or "")[:USER_CHARS]
-    if not user:
+    """The text embedded for one exchange; '' when the human turn has no typed text.
+
+    Interrupt markers and tag-wrapped turns (shell output, delegations, command
+    caveats) are not something a person typed, and embedding them makes every
+    session that holds one look alike.
+    """
+    user = strip_system_reminders(user or "").strip()[:USER_CHARS]
+    if not user or user.startswith(("[Request interrupted", "<")):
         return ""
     assistant = (assistant or "").strip()[:ASSISTANT_CHARS]
     return f"{user}\n\n{assistant}" if assistant else user
@@ -173,3 +178,81 @@ def fuse(lexical: list[int], semantic: list[int], limit: int) -> list[int]:
     # Ties keep lexical order first, then semantic order.
     order = {bid: i for i, bid in enumerate(dict.fromkeys(lexical + semantic))}
     return sorted(scores, key=lambda b: (-scores[b], order[b]))[:limit]
+
+
+# Centered cosine floor for a related session, calibrated for embeddinggemma-2 at
+# 256 dims: about half of sessions have a neighbour above it.
+RELATED_MIN_SCORE = 0.55
+# A one-exchange session is too thin to stand for a topic.
+RELATED_MIN_EXCHANGES = 2
+
+
+def refresh_session_vectors(conn: sqlite3.Connection, model: str) -> int:
+    """Recompute the mean vector of every session whose exchange count changed.
+
+    Returns how many sessions were refreshed. A row is current iff its n equals the
+    session's count of non-empty exchange vectors, so re-running is always safe.
+    """
+    stale = conn.execute("""
+        SELECT c.session_id FROM (
+            SELECT m.session_id, COUNT(*) AS n
+            FROM exchange_embeddings e JOIN messages m ON m.id = e.message_id
+            WHERE e.model = ? AND length(e.vec) > 0
+            GROUP BY m.session_id
+        ) c
+        LEFT JOIN session_embeddings se ON se.session_id = c.session_id AND se.model = ?
+        WHERE se.n IS NULL OR se.n != c.n
+    """, (model, model)).fetchall()
+    for (session_id,) in stale:
+        total: list[float] = []
+        n = 0
+        for (blob,) in conn.execute("""
+            SELECT e.vec FROM exchange_embeddings e JOIN messages m ON m.id = e.message_id
+            WHERE m.session_id = ? AND e.model = ? AND length(e.vec) > 0
+        """, (session_id, model)):
+            v = unpack(blob)
+            total = list(map(operator.add, total, v)) if total else list(v)
+            n += 1
+        conn.execute(
+            "INSERT OR REPLACE INTO session_embeddings (session_id, model, vec, n) VALUES (?, ?, ?, ?)",
+            (session_id, model, pack([x / n for x in total]), n),
+        )
+    return len(stale)
+
+
+def related_sessions(
+    conn: sqlite3.Connection,
+    model: str,
+    session_id: int,
+    limit: int = 3,
+    min_score: float = RELATED_MIN_SCORE,
+    exclude: tuple = (),
+) -> list[tuple[int, float]]:
+    """Top-level sessions closest in meaning to session_id, as (session_id, score).
+
+    Every session vector shares one direction ("a coding conversation") that puts
+    any two of them near 0.9; subtracting the corpus mean before comparing removes
+    it, so the score reflects topic.
+    """
+    rows = conn.execute("""
+        SELECT se.session_id, se.vec, se.n FROM session_embeddings se
+        JOIN sessions s ON s.id = se.session_id
+        WHERE se.model = ? AND se.n >= ? AND s.parent_session_id IS NULL
+    """, (model, RELATED_MIN_EXCHANGES)).fetchall()
+    vecs = {sid: (unpack(blob), n) for sid, blob, n in rows}
+    if session_id not in vecs or len(vecs) < 2:
+        return []
+    total_n = sum(n for _, n in vecs.values())
+    mean = [0.0] * len(vecs[session_id][0])
+    for v, n in vecs.values():
+        mean = list(map(operator.add, mean, (x * n / total_n for x in v)))
+
+    def centered(v) -> list[float]:
+        return _unit(list(map(operator.sub, v, mean)))
+
+    target = centered(vecs[session_id][0])
+    skip = set(exclude) | {session_id}
+    scored = [(sid, sum(map(operator.mul, target, centered(v))))
+              for sid, (v, _) in vecs.items() if sid not in skip]
+    scored = [hit for hit in scored if hit[1] >= min_score]
+    return sorted(scored, key=lambda hit: hit[1], reverse=True)[:limit]

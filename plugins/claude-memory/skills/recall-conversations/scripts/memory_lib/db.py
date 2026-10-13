@@ -162,6 +162,16 @@ CREATE TABLE IF NOT EXISTS exchange_embeddings (
   vec BLOB NOT NULL
 );
 
+-- Mean of a session's exchange vectors and how many went into it, for related sessions.
+-- A row whose n differs from the session's current vector count is stale.
+CREATE TABLE IF NOT EXISTS session_embeddings (
+  session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  model TEXT NOT NULL,
+  vec BLOB NOT NULL,
+  n INTEGER NOT NULL,
+  PRIMARY KEY (session_id, model)
+);
+
 -- Import tracking
 CREATE TABLE IF NOT EXISTS import_log (
   id INTEGER PRIMARY KEY,
@@ -329,7 +339,8 @@ def migrate_db(conn: sqlite3.Connection) -> bool:
     return True
 
 
-CURRENT_ONBOARDING_VERSION = 1
+# Bump when onboarding gains a question; upgraders are asked only what is new.
+CURRENT_ONBOARDING_VERSION = 2
 
 
 def load_config() -> dict:

@@ -224,3 +224,27 @@ class TestWriteConfigCliArgs:
 
         result = json.loads(cfg.read_text())
         assert result["consolidation_min_hours"] == 1
+
+
+class TestSemanticSearchChoice:
+    def test_no_is_saved_and_stamps_the_current_version(self, tmp_path, monkeypatch):
+        """A no must land in config.json, or onboarding asks again every session."""
+        cfg = tmp_path / "config.json"
+        cfg.write_text(json.dumps({"onboarding_completed": True, "onboarding_version": 1,
+                                   "auto_inject_context": False}))
+        _patch_config_path(monkeypatch, cfg)
+
+        _run_main(["--semantic-search", "false"])
+
+        result = json.loads(cfg.read_text())
+        assert result["semantic_search"] is False
+        assert result["onboarding_version"] == CURRENT_ONBOARDING_VERSION
+        assert result["auto_inject_context"] is False, "earlier choices must survive"
+
+    def test_yes_is_saved(self, tmp_path, monkeypatch):
+        cfg = tmp_path / "config.json"
+        _patch_config_path(monkeypatch, cfg)
+
+        _run_main(["--semantic-search", "true"])
+
+        assert json.loads(cfg.read_text())["semantic_search"] is True

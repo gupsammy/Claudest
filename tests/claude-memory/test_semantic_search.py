@@ -371,3 +371,120 @@ class TestContinuousIndexing:
         finally:
             release_lock(lock)
         assert embed_index.run(settings, sync_current.setup_logging(None)) == 3
+
+
+class TestUntypedTurns:
+    def test_interrupt_markers_and_tag_wrapped_turns_are_not_embedded(self):
+        """These turns are alike in every session; embedding them links unrelated sessions."""
+        assert exchange_text("[Request interrupted by user]", "ok") == ""
+        assert exchange_text("<bash-input>git status</bash-input>", "clean") == ""
+        assert exchange_text("  <local-command-caveat>x</local-command-caveat>", "") == ""
+        assert exchange_text("fix the <div> layout", "done").startswith("fix the")
+
+
+from memory_lib.embeddings import refresh_session_vectors, related_sessions, unpack  # noqa: E402
+
+_ctx_spec = importlib.util.spec_from_file_location("memory_context_hook", HOOKS_DIR / "memory-context.py")
+memory_context = importlib.util.module_from_spec(_ctx_spec)
+_ctx_spec.loader.exec_module(memory_context)
+
+# Two exchanges each: a one-exchange session is too thin to be related.
+TOPICS = {
+    "car": [("user", "my automobile makes a noise"), ("assistant", "mounts"),
+            ("user", "the engine rattles"), ("assistant", "ok")],
+    "db": [("user", "migrate the sqlite schema"), ("assistant", "ok"),
+           ("user", "database migrate failed"), ("assistant", "ok")],
+    "lunch": [("user", "order a sandwich"), ("assistant", "ok"),
+              ("user", "food for lunch"), ("assistant", "ok")],
+}
+
+
+class TestRelatedSessions:
+    @pytest.fixture
+    def indexed(self, tmp_path, ollama):
+        db_file = tmp_path / "c.db"
+        conn, _ = _seed(db_file, TOPICS)
+        _seed(db_file, {"car2": [("user", "vehicle engine trouble"), ("assistant", "ok"),
+                                 ("user", "automobile again"), ("assistant", "ok")],
+                        "thin": [("user", "car"), ("assistant", "ok")]}, project="other")
+        embed_index.index_pending(conn, MODEL, ollama)
+        refresh_session_vectors(conn, MODEL)
+        ids = dict(conn.execute("SELECT uuid, id FROM sessions"))
+        return conn, ids
+
+    def test_session_vector_is_the_mean_and_refreshes_when_a_turn_lands(self, indexed, ollama):
+        conn, ids = indexed
+        vec, n = conn.execute("SELECT vec, n FROM session_embeddings WHERE session_id = ?",
+                              (ids["proj-car"],)).fetchone()
+        rows = [unpack(b) for (b,) in conn.execute(
+            "SELECT e.vec FROM exchange_embeddings e JOIN messages m ON m.id = e.message_id "
+            "WHERE m.session_id = ?", (ids["proj-car"],))]
+        assert n == 2
+        assert all(math.isclose(a, (x + y) / 2, abs_tol=1e-6) for a, x, y in zip(unpack(vec), *rows))
+        assert refresh_session_vectors(conn, MODEL) == 0, "current rows were recomputed"
+
+        conn.execute("INSERT INTO messages (session_id, uuid, role, content, timestamp) "
+                     "VALUES (?, 'late', 'user', 'sandwich food', '2026-01-09T00:00:00Z')",
+                     (ids["proj-car"],))
+        embed_index.index_pending(conn, MODEL, ollama)
+        assert refresh_session_vectors(conn, MODEL) == 1
+        assert conn.execute("SELECT n FROM session_embeddings WHERE session_id = ?",
+                            (ids["proj-car"],)).fetchone()[0] == 3
+
+    def test_nearest_session_across_projects_above_the_floor(self, indexed):
+        conn, ids = indexed
+        hits = related_sessions(conn, MODEL, ids["proj-car"])
+        assert [sid for sid, _ in hits] == [ids["other-car2"]], hits
+        assert ids["other-thin"] not in dict(related_sessions(conn, MODEL, ids["proj-car"], min_score=-1))
+
+    def test_excluded_sessions_never_return(self, indexed):
+        conn, ids = indexed
+        assert related_sessions(conn, MODEL, ids["proj-car"], exclude=(ids["other-car2"],)) == []
+
+    def test_shared_direction_is_removed_before_comparing(self, tmp_path):
+        """Real session vectors all lean one way (~0.9 apart raw); only the topic part may count."""
+        from memory_lib.embeddings import pack
+        conn, _ = _seed(tmp_path / "c.db", {k: [("user", k)] for k in ("car", "car2", "lunch", "db")})
+        ids = dict(conn.execute("SELECT uuid, id FROM sessions"))
+        common = {"car": (1, .3, 0), "car2": (1, .25, .05), "lunch": (1, 0, .3), "db": (1, -.2, -.2)}
+        for name, v in common.items():
+            conn.execute("INSERT INTO session_embeddings VALUES (?, ?, ?, 2)",
+                         (ids[f"proj-{name}"], MODEL, pack(list(v))))
+        hits = related_sessions(conn, MODEL, ids["proj-car"])
+        assert [sid for sid, _ in hits] == [ids["proj-car2"]], "uncentered vectors made every session related"
+
+    def test_session_start_block_lists_related_and_is_off_without_semantic(self, indexed):
+        conn, ids = indexed
+        settings = {"semantic_search": True, "embedding_model": MODEL}
+        block = memory_context.build_related_block(conn, settings, [{"uuid": "proj-car"}])
+        assert block.startswith("## Related Sessions")
+        assert "· other ·" in block and "[other-ca]" in block
+        assert memory_context.build_related_block(
+            conn, {**settings, "semantic_search": False}, [{"uuid": "proj-car"}]) == ""
+
+
+_setup_spec = importlib.util.spec_from_file_location("semantic_setup", HOOKS_DIR / "semantic_setup.py")
+semantic_setup = importlib.util.module_from_spec(_setup_spec)
+_setup_spec.loader.exec_module(semantic_setup)
+
+
+class TestSemanticSetup:
+    def _settings(self, url):
+        return {"embedding_model": MODEL, "ollama_url": url}
+
+    def test_enable_saves_the_choice_once_the_model_embeds(self, monkeypatch, ollama):
+        writes = []
+        monkeypatch.setattr(semantic_setup, "check", lambda s: {
+            "ollama_installed": True, "ollama_running": True, "model_present": True,
+            "install_command": "x"})
+        monkeypatch.setattr(semantic_setup.subprocess, "run", lambda cmd, **kw: writes.append(cmd))
+        assert semantic_setup.enable(self._settings(ollama)) is None
+        assert writes and writes[-1][-2:] == ["--semantic-search", "true"]
+
+    def test_enable_without_ollama_names_the_install_command_and_saves_nothing(self, monkeypatch, dead_url):
+        writes = []
+        monkeypatch.setattr(semantic_setup.shutil, "which", lambda _: None)
+        monkeypatch.setattr(semantic_setup.subprocess, "run", lambda cmd, **kw: writes.append(cmd))
+        error = semantic_setup.enable(self._settings(dead_url))
+        assert error and semantic_setup.install_command() in error
+        assert writes == []

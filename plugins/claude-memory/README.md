@@ -1,4 +1,4 @@
-# claude-memory ![v0.8.122](https://img.shields.io/badge/v0.8.122-blue?style=flat-square)
+# claude-memory ![v0.8.123](https://img.shields.io/badge/v0.8.123-blue?style=flat-square)
 
 Searchable conversation memory for Claude Code. Auto-syncs sessions to a SQLite database with full-text search, injects previous session context on startup, and provides on-demand recall of past conversations.
 
@@ -39,13 +39,17 @@ The search works because the agent constructs the queries, not the user. When yo
 
 ### Semantic search (optional)
 
-Keyword search misses paraphrases: "the car" never matches "the automobile". With semantic search on, each exchange (a typed message plus the start of the reply) is also embedded by EmbeddingGemma 2 running in a local [Ollama](https://ollama.com), and search fuses the keyword and meaning-based rankings. Nothing leaves your machine. To turn it on:
+Keyword search misses paraphrases: "the car" never matches "the automobile". With semantic search on, each exchange (a typed message plus the start of the reply) is also embedded by EmbeddingGemma 2 running in a local [Ollama](https://ollama.com), and search fuses the keyword and meaning-based rankings. Nothing leaves your machine.
+
+Onboarding asks once whether to turn it on, and after an update existing users are asked once too. A yes installs Ollama if it is missing and pulls the ~360 MB model; a no is saved and never asked again. To turn it on later:
 
 ```bash
-ollama pull embeddinggemma-2:270m
+python3 hooks/semantic_setup.py --enable
 ```
 
-Then add `"semantic_search": true` to `~/.claude-memory/config.json`. The next session start builds the index in the background (newest exchanges first); after that, each exchange is embedded as soon as its turn ends. `embedding_model` and `ollama_url` override the defaults. `semantic_min_score` (default 0.70, set for the default model) drops semantic hits below that cosine similarity, so a query with no real match returns keyword results only. If Ollama is not running, search falls back to keywords with a warning.
+The index builds in the background, newest exchanges first; after that, each exchange is embedded as soon as its turn ends. With the index in place, session start also lists up to three **related sessions**: past sessions from any project closest in meaning to the one being resumed. Typed turns are averaged per session, and the direction all sessions share is subtracted before comparing, so the match reflects topic rather than "a coding conversation".
+
+`embedding_model` and `ollama_url` override the defaults. `semantic_min_score` (default 0.70, set for the default model) drops semantic hits below that cosine similarity, so a query with no real match returns keyword results only. If Ollama is not running, search falls back to keywords with a warning.
 
 ### Background session sync
 
@@ -78,6 +82,7 @@ Full-text search uses a platform-adaptive cascade: FTS5 with BM25 ranking on sys
 | branch_messages | Many-to-many mapping between branches and messages |
 | messages_fts / branches_fts | Full-text search indexes (FTS5, FTS4, or absent) |
 | exchange_embeddings | One vector per typed message, for optional semantic search |
+| session_embeddings | Mean exchange vector per session, for related sessions |
 | import_log | Tracks which JSONL files have been imported |
 
 ### Hooks
@@ -85,7 +90,7 @@ Full-text search uses a platform-adaptive cascade: FTS5 with BM25 ranking on sys
 | Event | Hook | Action |
 |-------|------|--------|
 | SessionStart | memory-setup.py | Creates `~/.claude-memory/` directory, triggers initial import if DB missing, starts background summary and embedding jobs |
-| SessionStart | memory-context.py | Injects previous session context (on startup and clear events) |
+| SessionStart | memory-context.py | Injects previous session context (on startup and clear events), plus related sessions when semantic search is on |
 | Stop | memory-sync.py | Writes session data to a temp file and spawns `sync_current.py` asynchronously, which also embeds the new exchange when semantic search is on |
 
 All hooks are Python for cross-platform compatibility (macOS, Linux, Windows).

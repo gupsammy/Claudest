@@ -604,6 +604,10 @@ def main():
         print("Error: Maximum 14 input images allowed", file=sys.stderr)
         sys.exit(1)
 
+    if args.max_input_dim < 1:
+        print("Error: --max-input-dim must be a positive integer", file=sys.stderr)
+        sys.exit(1)
+
     # Validate quality range
     if args.quality is not None:
         if args.quality < 1 or args.quality > 100:

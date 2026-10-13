@@ -56,3 +56,20 @@ def test_dry_run_leaves_retired_hook_in_place(home):
 def test_second_install_is_a_no_op(home):
     ich.install()
     assert ich.install() is False
+
+
+def test_install_tolerates_hand_edited_settings(home):
+    hooks, settings = home
+    cfg = json.loads(settings.read_text())
+    cfg["hooks"]["SessionStart"] += [
+        "not-a-dict",
+        {"matcher": "*", "hooks": [{"type": "command", "command": None}, "junk"]},
+        {"matcher": "*"},
+    ]
+    cfg["hooks"]["Notification"] = {"unexpected": "shape"}
+    settings.write_text(json.dumps(cfg))
+    ich.install()
+    out = json.loads(settings.read_text())
+    assert _OLD_CMD not in settings.read_text()
+    assert out["hooks"]["Notification"] == {"unexpected": "shape"}
+    assert "not-a-dict" in out["hooks"]["SessionStart"]

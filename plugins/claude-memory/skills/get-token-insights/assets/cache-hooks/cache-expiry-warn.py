@@ -57,7 +57,12 @@ def _safe_state_path(cache_dir: Path, prefix: str, session_id: str) -> Path | No
 
 
 def _last_assistant_time(transcript_path: str) -> str:
-    """ISO timestamp of the last assistant entry in the transcript tail; '' if none."""
+    """ISO timestamp of the last assistant entry in the transcript tail; '' if none.
+
+    Reads only the last 512 KB on purpose: a hook runs on every prompt, and whole
+    transcripts can be huge. If the tail holds no assistant entry (e.g. one large
+    tool_result), the warning fails open — acceptable for an advisory hook.
+    """
     try:
         path = Path(str(transcript_path or "")).resolve()
         path.relative_to(_CLAUDE_DIR.resolve())

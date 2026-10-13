@@ -62,13 +62,22 @@ HOOK_BLOCKS = {
 RETIRED_HOOKS = ["cache-resume-detect.py"]
 
 
-def _already_in_hooks(event_list: list[dict], substr: str) -> bool:
+def _block_mentions(block: object, substr: str) -> bool:
+    """True if a matcher block has a hook command containing substr.
+
+    settings.json is user-edited, so tolerate non-dict entries and null commands.
+    """
+    if not isinstance(block, dict):
+        return False
+    return any(
+        isinstance(h, dict) and substr in str(h.get("command") or "")
+        for h in block.get("hooks") or []
+    )
+
+
+def _already_in_hooks(event_list: list, substr: str) -> bool:
     """Return True if any existing hook command contains substr."""
-    for matcher_block in event_list:
-        for hook in matcher_block.get("hooks", []):
-            if substr in hook.get("command", ""):
-                return True
-    return False
+    return any(_block_mentions(b, substr) for b in event_list)
 
 
 def check_status() -> dict[str, dict]:
@@ -141,10 +150,9 @@ def install(dry_run: bool = False) -> bool:
                 dest.unlink()
             changed = True
         for event, event_list in list(hooks_cfg.items()):
-            kept = [
-                b for b in event_list
-                if not any(fname in h.get("command", "") for h in b.get("hooks", []))
-            ]
+            if not isinstance(event_list, list):
+                continue
+            kept = [b for b in event_list if not _block_mentions(b, fname)]
             if len(kept) != len(event_list):
                 print(f"  [remove] settings.json {event} hook → {fname}")
                 if not dry_run:

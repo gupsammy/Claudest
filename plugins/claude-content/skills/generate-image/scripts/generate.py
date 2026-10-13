@@ -583,6 +583,14 @@ def main():
         action="store_true",
         help="Suppress progress output (MEDIA lines still printed)"
     )
+    parser.add_argument(
+        "--max-input-dim",
+        type=int,
+        default=MAX_DIMENSION,
+        help=f"Downscale inputs to this long-edge size before upload (default: {MAX_DIMENSION}). "
+             "Raise it when fine texture in a reference must survive — the default costs "
+             "detail on high-resolution close crops."
+    )
 
     args = parser.parse_args()
 
@@ -629,7 +637,7 @@ def main():
                 img = Image.open(img_path)
                 img.load()
                 original_size = img.size
-                img = optimize_image(img)
+                img = optimize_image(img, max_dim=args.max_input_dim)
                 input_images.append(img)
                 input_paths.append(img_path)
                 if not args.quiet:

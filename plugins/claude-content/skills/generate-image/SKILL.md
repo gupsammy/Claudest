@@ -179,8 +179,9 @@ uv run ${CLAUDE_PLUGIN_ROOT}/skills/generate-image/scripts/generate.py --prompt 
 | `--batch` | `-b` | Generate multiple variations: 1-4 (default: 1) |
 | `--json` | | Output results as JSON for agent consumption |
 | `--quiet` | | Suppress progress output (MEDIA lines still printed) |
+| `--max-input-dim` | | Long-edge size inputs are shrunk to before upload (default: 2048); raise it to keep fine texture in a close crop |
 
-The script auto-detects resolution and aspect ratio from input images when flags are omitted, and automatically resizes large inputs (>2048px) before sending to the API.
+The script auto-detects resolution and aspect ratio from input images when flags are omitted, and automatically resizes large inputs (>2048px, or `--max-input-dim`) before sending to the API.
 
 ---
 

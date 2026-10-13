@@ -62,17 +62,35 @@ HOOK_BLOCKS = {
 RETIRED_HOOKS = ["cache-resume-detect.py"]
 
 
-def _block_mentions(block: object, substr: str) -> bool:
-    """True if a matcher block has a hook command containing substr.
+def _hook_mentions(hook: object, substr: str) -> bool:
+    """True if a hook entry's command contains substr.
 
     settings.json is user-edited, so tolerate non-dict entries and null commands.
     """
-    if not isinstance(block, dict):
-        return False
-    return any(
-        isinstance(h, dict) and substr in str(h.get("command") or "")
-        for h in block.get("hooks") or []
+    return isinstance(hook, dict) and substr in str(hook.get("command") or "")
+
+
+def _block_mentions(block: object, substr: str) -> bool:
+    """True if a matcher block has a hook command containing substr."""
+    return isinstance(block, dict) and any(
+        _hook_mentions(h, substr) for h in block.get("hooks") or []
     )
+
+
+def _without_hook(event_list: list, substr: str) -> list:
+    """event_list minus hook entries mentioning substr; blocks left empty are dropped.
+
+    Filters per hook, not per block, so a user's own hook sharing a block survives.
+    """
+    kept = []
+    for b in event_list:
+        if not _block_mentions(b, substr):
+            kept.append(b)
+            continue
+        hooks = [h for h in b["hooks"] if not _hook_mentions(h, substr)]
+        if hooks:
+            kept.append({**b, "hooks": hooks})
+    return kept
 
 
 def _already_in_hooks(event_list: list, substr: str) -> bool:
@@ -142,18 +160,18 @@ def install(dry_run: bool = False) -> bool:
     hooks_cfg = cfg.setdefault("hooks", {})
     settings_changed = False
 
+    retired_files = []
     for fname in RETIRED_HOOKS:
         dest = HOOKS_DIR / fname
         if dest.exists():
             print(f"  [remove] {fname} — retired")
-            if not dry_run:
-                dest.unlink()
+            retired_files.append(dest)
             changed = True
         for event, event_list in list(hooks_cfg.items()):
             if not isinstance(event_list, list):
                 continue
-            kept = [b for b in event_list if not _block_mentions(b, fname)]
-            if len(kept) != len(event_list):
+            kept = _without_hook(event_list, fname)
+            if kept != event_list:
                 print(f"  [remove] settings.json {event} hook → {fname}")
                 if not dry_run:
                     if kept:
@@ -165,6 +183,8 @@ def install(dry_run: bool = False) -> bool:
 
     for event, spec in HOOK_BLOCKS.items():
         event_list = hooks_cfg.setdefault(event, [])
+        if not isinstance(event_list, list):
+            raise InstallError(f"settings.json hooks.{event} is not a list")
         if _already_in_hooks(event_list, spec["check_substr"]):
             print(f"  [skip] settings.json {event} hook — already wired")
             continue
@@ -182,6 +202,12 @@ def install(dry_run: bool = False) -> bool:
         print(f"  [backup] settings.json → {backup.name}")
         SETTINGS_PATH.write_text(json.dumps(cfg, indent=2))
         print("  [wrote] ~/.claude/settings.json")
+
+    # Delete retired scripts only after settings.json no longer points at them,
+    # so a failed write never leaves a registration to a missing file.
+    if not dry_run:
+        for dest in retired_files:
+            dest.unlink()
 
     return changed
 

@@ -73,3 +73,42 @@ def test_install_tolerates_hand_edited_settings(home):
     assert _OLD_CMD not in settings.read_text()
     assert out["hooks"]["Notification"] == {"unexpected": "shape"}
     assert "not-a-dict" in out["hooks"]["SessionStart"]
+
+
+def test_shared_block_keeps_users_own_hook(home):
+    hooks, settings = home
+    cfg = json.loads(settings.read_text())
+    cfg["hooks"]["SessionStart"] = [{"matcher": "*", "hooks": [
+        {"type": "command", "command": _OLD_CMD},
+        {"type": "command", "command": "python3 mine.py"},
+    ]}]
+    settings.write_text(json.dumps(cfg))
+    ich.install()
+    out = json.loads(settings.read_text())
+    assert out["hooks"]["SessionStart"] == [
+        {"matcher": "*", "hooks": [{"type": "command", "command": "python3 mine.py"}]}
+    ]
+
+
+def test_failed_settings_write_keeps_retired_script(home, monkeypatch):
+    hooks, settings = home
+    real_write = Path.write_text
+
+    def failing_write(self, *a, **kw):
+        if self == settings:
+            raise OSError("disk full")
+        return real_write(self, *a, **kw)
+
+    monkeypatch.setattr(Path, "write_text", failing_write)
+    with pytest.raises(OSError):
+        ich.install()
+    assert (hooks / "cache-resume-detect.py").exists()
+
+
+def test_non_list_owned_event_raises_install_error(home):
+    hooks, settings = home
+    cfg = json.loads(settings.read_text())
+    cfg["hooks"]["Stop"] = {"oops": True}
+    settings.write_text(json.dumps(cfg))
+    with pytest.raises(ich.InstallError):
+        ich.install()

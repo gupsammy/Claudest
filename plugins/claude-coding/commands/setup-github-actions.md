@@ -114,6 +114,10 @@ Show the generated prompt to the user and ask for confirmation before writing th
 
 Set `track_progress: true` for all review and analysis workflows.
 
+### Model — Alias, Opus for Review
+
+Pass the model as a family alias in `claude_args`: `--model opus` or `--model sonnet`, never a dated model ID. An alias resolves to the latest model in that family, so workflows never pin a retired version. Default to `opus` for PR review workflows, where missed bugs cost more than tokens; use `sonnet` for interactive, triage, and CI-fix workflows unless the user asks otherwise.
+
 ## Workflow
 
 ### Step 1 — Analyze
@@ -134,7 +138,7 @@ Do not proceed past this point until the user has run `/install-github-app`.
 For each `.yml` found, classify:
 - **Broken default**: Uses `anthropics/claude-code-action@v1`, all permissions are `read`, no `prompt` or `claude_args` configured — this is the vanilla skeleton installed by `/install-github-app`. Flag it prominently.
 - **Broken**: Uses `anthropics/claude-code-action@v1` but either (a) has no `Install Claude Code` step before the action, or (b) has the step but the `run` line is `npm install -g @anthropic-ai/claude-code` without `mkdir -p ~/.local/bin &&` as a prefix. Either condition means the workflow silently fails on every run — the action hardcodes `~/.local/bin/claude` as the binary location, and that directory is absent on fresh runners. Flag as critical and require a fix.
-- **Upgradeable**: An existing Claude Code workflow that works but uses outdated patterns (checkout@v4, generic prompt, missing `track_progress`, permissions too broad or too narrow, no `--model` in `claude_args`). Note what needs updating. Missing `--model` means the action uses its own default, which may change across releases — add `--model sonnet` to pin the family (resolves to latest Sonnet).
+- **Upgradeable**: An existing Claude Code workflow that works but uses outdated patterns (checkout@v4, generic prompt, missing `track_progress`, permissions too broad or too narrow, no `--model` in `claude_args`, a dated model ID instead of an alias, or a review workflow not on `opus`). Note what needs updating. Missing `--model` means the action uses its own default, which may change across releases — add the family alias per the Model principle.
 - **Existing Claude Code workflow**: Already correctly configured for a specific purpose. Note what it covers and its filename.
 - **Other CI**: Present but unrelated to Claude Code. Note as present, no action needed.
 
@@ -210,7 +214,7 @@ jobs:
           prompt: |
             <prompt — use project-customized 4-phase structure for review workflows>
           claude_args: |
-            --model sonnet
+            --model <opus for review workflows, sonnet otherwise>
             --allowedTools "<minimum capability-scoped tools>"
 ```
 

@@ -120,12 +120,12 @@ python3 ${CLAUDE_PLUGIN_ROOT}/skills/get-token-insights/scripts/install_cache_ho
 
 Then use AskUserQuestion with exactly three options:
 
-1. **Install** — copies 3 hook scripts to `~/.claude/hooks/` and wires them into `~/.claude/settings.json`. Backs up settings.json before any write.
+1. **Install** — copies 2 hook scripts to `~/.claude/hooks/` and wires them into `~/.claude/settings.json`. Backs up settings.json before any write.
 2. **Explain more first** — give the full explanation below, then re-ask this same question.
 3. **Skip** — exit cleanly, no changes.
 
 **Full explanation text (for option 2):**
-These hooks create a 3-step warning ladder when you go idle. When Claude stops responding, a timestamp is written. When you start a resumed session, a flag is set. When you next type a prompt after 5+ minutes of idle time, the prompt is blocked once with a cost warning — you see the message, your text stays in the box. From there:
+These hooks warn you before an expired cache costs you. When Claude stops responding, a timestamp is written (resumed sessions fall back to the transcript's last reply). When you next type a prompt after 1+ hour of idle time (the prompt-cache TTL), the prompt is blocked once with a cost warning — you see the message, your text stays in the box. From there:
 - Press ↑ to resend as-is (you accept the cache rebuild cost — the turn proceeds normally)
 - Run /compact to compress context first, then resend (smaller rebuild)
 - Run /clear to start a fresh session with zero rebuild cost

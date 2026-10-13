@@ -1177,7 +1177,7 @@ def build_output(conn: sqlite3.Connection) -> dict:
     recent_seg_sids = [r[0] for r in cur.execute("""
         SELECT session_id FROM session_metrics
         WHERE is_sidechain = 0 AND turn_count >= 8
-              AND first_turn_ts >= datetime('now', '-7 days')
+              AND datetime(first_turn_ts) >= datetime('now', '-7 days')
     """).fetchall()]
     context_segments_recent = _compute_seg_curve(recent_seg_sids, min_sessions=2)
 
@@ -1876,7 +1876,7 @@ def build_trends(conn: sqlite3.Connection) -> dict:
         SELECT tc.skill_name FROM turn_tool_calls tc
         JOIN session_metrics sm ON tc.session_id = sm.session_id
         WHERE sm.is_sidechain = 0 AND tc.skill_name IS NOT NULL
-          AND sm.first_turn_ts >= datetime('now', '-7 days')
+          AND datetime(sm.first_turn_ts) >= datetime('now', '-7 days')
         GROUP BY tc.skill_name
     """):
         current_skills.add(row[0])
@@ -1884,8 +1884,8 @@ def build_trends(conn: sqlite3.Connection) -> dict:
         SELECT tc.skill_name FROM turn_tool_calls tc
         JOIN session_metrics sm ON tc.session_id = sm.session_id
         WHERE sm.is_sidechain = 0 AND tc.skill_name IS NOT NULL
-          AND sm.first_turn_ts >= datetime('now', '-14 days')
-          AND sm.first_turn_ts < datetime('now', '-7 days')
+          AND datetime(sm.first_turn_ts) >= datetime('now', '-14 days')
+          AND datetime(sm.first_turn_ts) < datetime('now', '-7 days')
         GROUP BY tc.skill_name
     """):
         prior_skills.add(row[0])
@@ -1899,7 +1899,7 @@ def build_trends(conn: sqlite3.Connection) -> dict:
         SELECT he.hook_command FROM hook_executions he
         JOIN session_metrics sm ON he.session_id = sm.session_id
         WHERE sm.is_sidechain = 0
-          AND sm.first_turn_ts >= datetime('now', '-7 days')
+          AND datetime(sm.first_turn_ts) >= datetime('now', '-7 days')
         GROUP BY he.hook_command
     """):
         current_hooks.add(row[0])
@@ -1907,8 +1907,8 @@ def build_trends(conn: sqlite3.Connection) -> dict:
         SELECT he.hook_command FROM hook_executions he
         JOIN session_metrics sm ON he.session_id = sm.session_id
         WHERE sm.is_sidechain = 0
-          AND sm.first_turn_ts >= datetime('now', '-14 days')
-          AND sm.first_turn_ts < datetime('now', '-7 days')
+          AND datetime(sm.first_turn_ts) >= datetime('now', '-14 days')
+          AND datetime(sm.first_turn_ts) < datetime('now', '-7 days')
         GROUP BY he.hook_command
     """):
         prior_hooks.add(row[0])
@@ -1923,7 +1923,7 @@ def build_trends(conn: sqlite3.Connection) -> dict:
         SELECT he.hook_command, CAST(AVG(he.duration_ms) AS INT)
         FROM hook_executions he
         JOIN session_metrics sm ON he.session_id = sm.session_id
-        WHERE sm.is_sidechain = 0 AND sm.first_turn_ts >= datetime('now', '-7 days')
+        WHERE sm.is_sidechain = 0 AND datetime(sm.first_turn_ts) >= datetime('now', '-7 days')
         GROUP BY he.hook_command
     """):
         current_hook_perf[row[0]] = row[1]
@@ -1932,8 +1932,8 @@ def build_trends(conn: sqlite3.Connection) -> dict:
         FROM hook_executions he
         JOIN session_metrics sm ON he.session_id = sm.session_id
         WHERE sm.is_sidechain = 0
-          AND sm.first_turn_ts >= datetime('now', '-14 days')
-          AND sm.first_turn_ts < datetime('now', '-7 days')
+          AND datetime(sm.first_turn_ts) >= datetime('now', '-14 days')
+          AND datetime(sm.first_turn_ts) < datetime('now', '-7 days')
         GROUP BY he.hook_command
     """):
         prior_hook_perf[row[0]] = row[1]

@@ -25,6 +25,7 @@ from ingest_token_data import (
     JnlFile,
     ParsedSession,
     Turn,
+    build_trends,
     ensure_schema,
     import_session,
 )
@@ -527,3 +528,42 @@ class TestV3ToV4Migration:
         version = conn.execute("SELECT version FROM schema_version").fetchone()[0]
         assert version == SCHEMA_VERSION
         conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Trend windows — ISO 'T' timestamps vs SQLite datetime() space separator
+# ---------------------------------------------------------------------------
+
+class TestTrendWindowBoundary:
+    """A session just over 7 days old belongs to the prior window only.
+
+    Stored timestamps use 'T'; datetime('now', ...) uses a space. Compared
+    raw, 'T' (0x54) sorts after ' ' (0x20), so a same-day session from before
+    the boundary lands in the current window and drops out of the prior one.
+    """
+
+    def _session(self, conn, sid: str, ts: str, skill: str | None) -> None:
+        conn.execute(
+            "INSERT INTO session_metrics (session_id, first_turn_ts, turn_count) VALUES (?, ?, 1)",
+            (sid, ts),
+        )
+        cur = conn.execute(
+            "INSERT INTO turns (session_id, turn_index, timestamp) VALUES (?, 0, ?)", (sid, ts)
+        )
+        if skill:
+            conn.execute(
+                "INSERT INTO turn_tool_calls (turn_id, session_id, tool_name, skill_name) "
+                "VALUES (?, ?, 'Skill', ?)",
+                (cur.lastrowid, sid, skill),
+            )
+
+    def test_session_just_past_seven_days_counts_as_prior(self, token_db):
+        def iso(*mods: str) -> str:
+            sql = "SELECT strftime('%Y-%m-%dT%H:%M:%S', 'now'" + ", ?" * len(mods) + ")"
+            return token_db.execute(sql, mods).fetchone()[0]
+
+        self._session(token_db, "recent", iso("-1 days"), None)
+        self._session(token_db, "old", iso("-7 days", "-1 seconds"), "old-skill")
+        trends = build_trends(token_db)
+        assert "old-skill" in trends["retired_skills"]
+        assert "old-skill" not in trends["new_skills"]

@@ -2,8 +2,8 @@
 """Tests for security fixes and the _bust_overhead cost function.
 
 Coverage:
-  - _safe_state_path (all three hook files) — path traversal prevention
-  - get_cached_tokens (cache-resume-detect) — transcript bounds check
+  - _safe_state_path (both hook files) — path traversal prevention
+  - _last_assistant_time (cache-expiry-warn) — transcript bounds check
   - _bust_overhead (ingest_token_data) — incremental cache-bust cost vs _turn_cost
 """
 
@@ -42,7 +42,6 @@ def _load_hook(filename: str):
 
 # Load once at module import so parametrize can reference the functions
 _expiry_warn = _load_hook("cache-expiry-warn.py")
-_resume_detect = _load_hook("cache-resume-detect.py")
 _warn_stop = _load_hook("cache-warn-stop.py")
 
 # Load ingest script
@@ -50,12 +49,11 @@ sys.path.insert(0, str(_SCRIPTS_DIR))
 from ingest_token_data import _bust_overhead, _turn_cost, _get_pricing  # noqa: E402
 
 # ---------------------------------------------------------------------------
-# Parametrize _safe_state_path across all three hook modules
+# Parametrize _safe_state_path across both hook modules
 # ---------------------------------------------------------------------------
 
 _HOOK_MODULES = [
     pytest.param(_expiry_warn, id="cache-expiry-warn"),
-    pytest.param(_resume_detect, id="cache-resume-detect"),
     pytest.param(_warn_stop, id="cache-warn-stop"),
 ]
 
@@ -141,108 +139,60 @@ class TestSafeStatePath:
 
 
 # ---------------------------------------------------------------------------
-# get_cached_tokens — transcript bounds check in cache-resume-detect.py
+# _last_assistant_time — transcript bounds check in cache-expiry-warn.py
 # ---------------------------------------------------------------------------
 
-class TestGetCachedTokens:
-    """get_cached_tokens must refuse to read files outside ~/.claude.
+class TestLastAssistantTime:
+    """_last_assistant_time must refuse to read files outside ~/.claude.
 
-    If the bounds check is bypassed, a malicious transcript_path could read
-    arbitrary files on disk (e.g. SSH keys) by supplying an attacker-controlled
-    path as the transcript location.
+    A bypassed bounds check would let a crafted transcript_path read arbitrary
+    files on disk (e.g. SSH keys).
     """
 
-    def _write_transcript(self, path: Path, cache_creation: int, cache_read: int) -> None:
-        """Write a minimal JSONL transcript with one assistant turn."""
-        entry = {
-            "message": {
-                "role": "assistant",
-                "usage": {
-                    "cache_creation_input_tokens": cache_creation,
-                    "cache_read_input_tokens": cache_read,
-                },
-            }
-        }
-        path.write_text(json.dumps(entry) + "\n")
+    @pytest.fixture
+    def claude_dir(self, tmp_path, monkeypatch):
+        d = tmp_path / ".claude"
+        d.mkdir()
+        monkeypatch.setattr(_expiry_warn, "_CLAUDE_DIR", d)
+        return d
 
-    def test_path_inside_claude_dir_returns_tokens(self, tmp_path, monkeypatch):
-        # Redirect _CLAUDE_DIR so we don't depend on the real ~/.claude existing
-        claude_dir = tmp_path / ".claude"
-        claude_dir.mkdir()
-        monkeypatch.setattr(_resume_detect, "_CLAUDE_DIR", claude_dir)
+    @staticmethod
+    def _write(path: Path, *entries: dict) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("".join(json.dumps(e) + "\n" for e in entries), encoding="utf-8")
 
-        transcript = claude_dir / "projects" / "session.jsonl"
-        transcript.parent.mkdir(parents=True)
-        self._write_transcript(transcript, cache_creation=5000, cache_read=1000)
+    def test_returns_last_assistant_timestamp(self, claude_dir):
+        t = claude_dir / "projects" / "s.jsonl"
+        self._write(
+            t,
+            {"type": "assistant", "timestamp": "2026-10-01T10:00:00Z"},
+            {"type": "user", "timestamp": "2026-10-01T10:05:00Z"},
+            {"type": "assistant", "timestamp": "2026-10-01T10:06:00Z", "content": "こんにちは"},
+            {"type": "user", "timestamp": "2026-10-01T11:00:00Z"},
+        )
+        assert _expiry_warn._last_assistant_time(str(t)) == "2026-10-01T10:06:00Z"
 
-        result = _resume_detect.get_cached_tokens(str(transcript))
-        assert result == 6000  # cache_creation + cache_read
-
-    def test_path_outside_claude_dir_returns_zero(self, tmp_path, monkeypatch):
-        # Prevents reading /tmp/evil.jsonl (or any attacker-supplied path)
-        claude_dir = tmp_path / ".claude"
-        claude_dir.mkdir()
-        monkeypatch.setattr(_resume_detect, "_CLAUDE_DIR", claude_dir)
-
+    def test_path_outside_claude_dir_returns_empty(self, claude_dir, tmp_path):
         evil = tmp_path / "evil.jsonl"
-        self._write_transcript(evil, cache_creation=9999, cache_read=9999)
+        self._write(evil, {"type": "assistant", "timestamp": "2026-10-01T10:00:00Z"})
+        assert _expiry_warn._last_assistant_time(str(evil)) == ""
 
-        result = _resume_detect.get_cached_tokens(str(evil))
-        assert result == 0
-
-    def test_symlink_escaping_claude_dir_returns_zero(self, tmp_path, monkeypatch):
-        # Symlink inside ~/.claude pointing outside must not be followed
-        claude_dir = tmp_path / ".claude"
-        claude_dir.mkdir()
-        outside = tmp_path / "real_data.jsonl"
-        self._write_transcript(outside, cache_creation=8888, cache_read=0)
-
-        link = claude_dir / "escape_link.jsonl"
+    def test_symlink_escaping_claude_dir_returns_empty(self, claude_dir, tmp_path):
+        outside = tmp_path / "real.jsonl"
+        self._write(outside, {"type": "assistant", "timestamp": "2026-10-01T10:00:00Z"})
+        link = claude_dir / "escape.jsonl"
         link.symlink_to(outside)
-        monkeypatch.setattr(_resume_detect, "_CLAUDE_DIR", claude_dir)
+        assert _expiry_warn._last_assistant_time(str(link)) == ""
 
-        result = _resume_detect.get_cached_tokens(str(link))
-        assert result == 0
+    @pytest.mark.parametrize("arg", [None, "", "no-such.jsonl"])
+    def test_missing_or_none_path_returns_empty(self, claude_dir, arg):
+        path = arg if arg != "no-such.jsonl" else str(claude_dir / arg)
+        assert _expiry_warn._last_assistant_time(path) == ""  # type: ignore[arg-type]
 
-    def test_nonexistent_path_inside_claude_dir_returns_zero(self, tmp_path, monkeypatch):
-        claude_dir = tmp_path / ".claude"
-        claude_dir.mkdir()
-        monkeypatch.setattr(_resume_detect, "_CLAUDE_DIR", claude_dir)
-
-        missing = claude_dir / "no-such-session.jsonl"
-        result = _resume_detect.get_cached_tokens(str(missing))
-        assert result == 0
-
-    def test_empty_transcript_returns_zero(self, tmp_path, monkeypatch):
-        claude_dir = tmp_path / ".claude"
-        claude_dir.mkdir()
-        monkeypatch.setattr(_resume_detect, "_CLAUDE_DIR", claude_dir)
-
-        transcript = claude_dir / "empty.jsonl"
-        transcript.write_text("")
-        result = _resume_detect.get_cached_tokens(str(transcript))
-        assert result == 0
-
-    def test_returns_last_assistant_turn_tokens(self, tmp_path, monkeypatch):
-        # get_cached_tokens should track the latest value, not the first
-        claude_dir = tmp_path / ".claude"
-        claude_dir.mkdir()
-        monkeypatch.setattr(_resume_detect, "_CLAUDE_DIR", claude_dir)
-
-        transcript = claude_dir / "multi_turn.jsonl"
-        lines = [
-            json.dumps({"message": {"role": "assistant", "usage": {
-                "cache_creation_input_tokens": 100, "cache_read_input_tokens": 0
-            }}}),
-            json.dumps({"message": {"role": "user", "content": "hello"}}),
-            json.dumps({"message": {"role": "assistant", "usage": {
-                "cache_creation_input_tokens": 0, "cache_read_input_tokens": 4000
-            }}}),
-        ]
-        transcript.write_text("\n".join(lines) + "\n")
-
-        result = _resume_detect.get_cached_tokens(str(transcript))
-        assert result == 4000  # last assistant turn, not first
+    def test_no_assistant_entry_returns_empty(self, claude_dir):
+        t = claude_dir / "u.jsonl"
+        self._write(t, {"type": "user", "timestamp": "2026-10-01T10:00:00Z"})
+        assert _expiry_warn._last_assistant_time(str(t)) == ""
 
 
 # ---------------------------------------------------------------------------
@@ -411,39 +361,3 @@ class TestSafeStatePathExceptions:
         monkeypatch.setattr(pathlib.Path, "resolve", bad_resolve)
         result = mod._safe_state_path(tmp_path, "", "abc123")
         assert result is None
-
-
-# ---------------------------------------------------------------------------
-# get_cached_tokens — None and encoding edge cases
-# ---------------------------------------------------------------------------
-
-class TestGetCachedTokensEdgeCases:
-    def test_none_transcript_path_returns_zero(self, monkeypatch, tmp_path):
-        """get_cached_tokens(None) must not raise TypeError."""
-        claude_dir = tmp_path / ".claude"
-        claude_dir.mkdir()
-        monkeypatch.setattr(_resume_detect, "_CLAUDE_DIR", claude_dir)
-        # None passed as transcript_path — cast to str("") then bounds check returns 0
-        result = _resume_detect.get_cached_tokens(None)  # type: ignore[arg-type]
-        assert result == 0
-
-    def test_utf8_transcript_is_read_correctly(self, tmp_path, monkeypatch):
-        """Transcripts with non-ASCII content must not crash the reader."""
-        claude_dir = tmp_path / ".claude"
-        claude_dir.mkdir()
-        monkeypatch.setattr(_resume_detect, "_CLAUDE_DIR", claude_dir)
-
-        transcript = claude_dir / "utf8_session.jsonl"
-        entry = {
-            "message": {
-                "role": "assistant",
-                "usage": {
-                    "cache_creation_input_tokens": 100,
-                    "cache_read_input_tokens": 50,
-                },
-                "content": "こんにちは世界",  # non-ASCII
-            }
-        }
-        transcript.write_text(json.dumps(entry) + "\n", encoding="utf-8")
-        result = _resume_detect.get_cached_tokens(str(transcript))
-        assert result == 150

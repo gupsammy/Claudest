@@ -1,12 +1,17 @@
 #!/usr/bin/env python3
 """
-UserPromptSubmit hook: warn once when prompt cache has likely expired.
+UserPromptSubmit hook: warn once when prompt cache has expired.
 
-Claude Code uses the 5-minute prompt cache TTL (ephemeral_5m). When the user
-has been idle >5 minutes since Claude last responded, the cached context
+Claude Code uses the 1-hour prompt cache TTL (ephemeral_1h). When the user
+has been idle >1 hour since Claude last responded, the cached context
 will expire on this turn — costing full re-creation tokens. This hook fires
 before the prompt is sent and blocks once per idle gap so the user can
 compact before the expensive re-creation happens.
+
+Resumed sessions need no special case: resume keeps the session_id, so the
+idle gap is measured the same way. When no state file exists (Stop never
+fired under this hook), the last assistant timestamp in the transcript is
+used instead.
 
 State: ~/.claude-memory/cache-warn/<session_id>.json (written by cache-warn-stop.py)
   - last_stop_time: ISO timestamp of last Claude response
@@ -21,12 +26,14 @@ from __future__ import annotations
 import json
 import math
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-CACHE_TTL_SECONDS = 300       # Claude Code uses 5-minute prompt cache TTL (ephemeral_5m, changed ~Apr 3 2026)
-WARN_THRESHOLD_SECONDS = 300  # Warn at exactly 5 min (TTL expiry)
+CACHE_TTL_SECONDS = 3600       # 1-hour prompt cache TTL (ephemeral_1h, reverted ~2026-04-13)
+WARN_THRESHOLD_SECONDS = 3600  # Warn at exactly 1 hr (TTL expiry)
 CACHE_WARN_DIR = Path.home() / ".claude-memory" / "cache-warn"
+_CLAUDE_DIR = Path.home() / ".claude"
+_TRANSCRIPT_TAIL_BYTES = 512 * 1024
 
 
 def _gap_bucket(last_stop_time_iso: str) -> str:
@@ -35,10 +42,8 @@ def _gap_bucket(last_stop_time_iso: str) -> str:
     return str(math.floor(dt.timestamp() / 60))
 
 
-def _format_tokens(n: int) -> str:
-    if n >= 1000:
-        return f"{n / 1000:.0f}k"
-    return str(n)
+def _duration(minutes: float) -> str:
+    return f"{minutes:.0f} min" if minutes < 120 else f"{minutes / 60:.1f} h"
 
 
 def _safe_state_path(cache_dir: Path, prefix: str, session_id: str) -> Path | None:
@@ -51,29 +56,25 @@ def _safe_state_path(cache_dir: Path, prefix: str, session_id: str) -> Path | No
         return None
 
 
-def check_resume_warn(session_id: str) -> str | None:
-    """If a resume-pending flag exists for this session, consume it and return a warning."""
-    flag_path = _safe_state_path(CACHE_WARN_DIR, "resume-pending-", session_id)
-    if flag_path is None or not flag_path.exists():
-        return None
-
+def _last_assistant_time(transcript_path: str) -> str:
+    """ISO timestamp of the last assistant entry in the transcript tail; '' if none."""
     try:
-        flag = json.loads(flag_path.read_text())
-        cached_tokens = flag.get("cached_tokens", 0)
-    except (json.JSONDecodeError, OSError):
-        cached_tokens = 0
-    finally:
+        path = Path(str(transcript_path or "")).resolve()
+        path.relative_to(_CLAUDE_DIR.resolve())
+        with path.open("rb") as fh:
+            fh.seek(0, 2)
+            fh.seek(max(0, fh.tell() - _TRANSCRIPT_TAIL_BYTES))
+            lines = fh.read().decode("utf-8", errors="replace").splitlines()
+    except (ValueError, OSError, RuntimeError):
+        return ""
+    for line in reversed(lines):
         try:
-            flag_path.unlink()
-        except OSError:
-            pass
-
-    token_str = f"~{_format_tokens(cached_tokens)} cached tokens" if cached_tokens else "cached context"
-    return (
-        f"Resumed session: this turn will re-process {token_str} from scratch "
-        f"(5-minute cache TTL likely expired while session was inactive).\n"
-        f"Run /compact to reduce re-creation cost, then re-send — or re-send now to proceed."
-    )
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if entry.get("type") == "assistant" and entry.get("timestamp"):
+            return entry["timestamp"]
+    return ""
 
 
 def main() -> None:
@@ -108,47 +109,25 @@ def _main() -> None:
         print(json.dumps({"continue": True}))
         return
 
-    # Check resume warning first — takes priority over idle-gap warning
-    resume_warning = check_resume_warn(session_id)
-    if resume_warning:
-        # Also mark the current gap as warned so the idle-gap check doesn't
-        # double-fire on the re-send after this block.
-        state_path = _safe_state_path(CACHE_WARN_DIR, "", session_id)
-        if state_path is not None and state_path.exists():
-            try:
-                state = json.loads(state_path.read_text())
-                last_stop_iso = state.get("last_stop_time", "")
-                if last_stop_iso:
-                    warned_gaps = state.get("warned_gaps", [])
-                    bucket = _gap_bucket(last_stop_iso)
-                    if bucket not in warned_gaps:
-                        warned_gaps.append(bucket)
-                        state_path.write_text(json.dumps({
-                            "session_id": session_id,
-                            "last_stop_time": last_stop_iso,
-                            "warned_gaps": warned_gaps,
-                        }))
-            except (json.JSONDecodeError, OSError, ValueError):
-                pass
-        print(json.dumps({"decision": "block", "reason": resume_warning}))
-        return
-
     state_path = _safe_state_path(CACHE_WARN_DIR, "", session_id)
-    if state_path is None or not state_path.exists():
-        # Stop hook hasn't fired yet this session — no baseline to compare
+    if state_path is None:
         print(json.dumps({"continue": True}))
         return
 
-    try:
-        state = json.loads(state_path.read_text())
-    except (json.JSONDecodeError, OSError):
-        print(json.dumps({"continue": True}))
-        return
+    state: dict = {}
+    if state_path.exists():
+        try:
+            state = json.loads(state_path.read_text())
+        except (json.JSONDecodeError, OSError):
+            state = {}
 
-    last_stop_iso = state.get("last_stop_time", "")
+    last_stop_iso = state.get("last_stop_time", "") or _last_assistant_time(
+        hook_input.get("transcript_path", "")
+    )
     warned_gaps: list = state.get("warned_gaps", [])
 
     if not last_stop_iso:
+        # New session — no baseline to compare
         print(json.dumps({"continue": True}))
         return
 
@@ -174,6 +153,7 @@ def _main() -> None:
     # First warning for this gap — record and block
     warned_gaps.append(bucket)
     try:
+        CACHE_WARN_DIR.mkdir(parents=True, exist_ok=True)
         state_path.write_text(json.dumps({
             "session_id": session_id,
             "last_stop_time": last_stop_iso,
@@ -182,13 +162,15 @@ def _main() -> None:
     except OSError:
         pass
 
-    idle_minutes = gap_seconds / 60
-
-    overrun = gap_seconds - CACHE_TTL_SECONDS
-    status = f"expired ~{overrun / 60:.0f} min ago" if overrun >= 60 else "just expired"
-
+    expired_at = (last_stop_dt + timedelta(seconds=CACHE_TTL_SECONDS)).astimezone()
+    overrun_min = (gap_seconds - CACHE_TTL_SECONDS) / 60
+    if expired_at.date() == now.astimezone().date():
+        when = expired_at.strftime("%H:%M")
+    else:
+        when = expired_at.strftime("%b %d %H:%M")
     warning = (
-        f"Cache warning: prompt cache {status} (idle: {idle_minutes:.1f} min). "
+        f"Cache warning: prompt cache expired at {when} (~{_duration(overrun_min)} ago; "
+        f"last reply {_duration(gap_seconds / 60)} ago). "
         f"This turn will re-process full context from scratch.\n"
         f"Re-send to proceed, or run /compact first to reduce cost."
     )

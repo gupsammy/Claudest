@@ -2,11 +2,11 @@
 """
 Cache-bust hook installer for get-token-insights.
 
-Copies 3 validated hook scripts into ~/.claude/hooks/ and merges the
-corresponding hook matcher blocks into ~/.claude/settings.json.
+Copies 2 validated hook scripts into ~/.claude/hooks/ and merges the
+corresponding hook matcher blocks into ~/.claude/settings.json. Retired hooks
+from earlier versions (RETIRED_HOOKS) are removed from both.
 
 Hooks installed:
-  SessionStart  → cache-resume-detect.py  (flags resumed sessions for warn)
   Stop          → cache-warn-stop.py      (stamps last-idle timestamp)
   UserPromptSubmit → cache-expiry-warn.py (blocks prompt when cache expired)
 
@@ -32,7 +32,6 @@ HOOKS_DIR = Path.home() / ".claude" / "hooks"
 SETTINGS_PATH = Path.home() / ".claude" / "settings.json"
 
 HOOK_FILES = [
-    "cache-resume-detect.py",
     "cache-warn-stop.py",
     "cache-expiry-warn.py",
 ]
@@ -41,13 +40,6 @@ HOOK_FILES = [
 # idempotency check. The installer skips injection if any existing block's
 # command already contains the substring.
 HOOK_BLOCKS = {
-    "SessionStart": {
-        "check_substr": "cache-resume-detect.py",
-        "block": {
-            "matcher": "*",
-            "hooks": [{"type": "command", "command": "python3 ~/.claude/hooks/cache-resume-detect.py"}],
-        },
-    },
     "Stop": {
         "check_substr": "cache-warn-stop.py",
         "block": {
@@ -63,6 +55,11 @@ HOOK_BLOCKS = {
         },
     },
 }
+
+
+# Shipped by earlier versions; cache-expiry-warn.py now covers resumed sessions
+# by reading the transcript when no Stop state exists.
+RETIRED_HOOKS = ["cache-resume-detect.py"]
 
 
 def _already_in_hooks(event_list: list[dict], substr: str) -> bool:
@@ -136,6 +133,28 @@ def install(dry_run: bool = False) -> bool:
     hooks_cfg = cfg.setdefault("hooks", {})
     settings_changed = False
 
+    for fname in RETIRED_HOOKS:
+        dest = HOOKS_DIR / fname
+        if dest.exists():
+            print(f"  [remove] {fname} — retired")
+            if not dry_run:
+                dest.unlink()
+            changed = True
+        for event, event_list in list(hooks_cfg.items()):
+            kept = [
+                b for b in event_list
+                if not any(fname in h.get("command", "") for h in b.get("hooks", []))
+            ]
+            if len(kept) != len(event_list):
+                print(f"  [remove] settings.json {event} hook → {fname}")
+                if not dry_run:
+                    if kept:
+                        hooks_cfg[event] = kept
+                    else:
+                        del hooks_cfg[event]
+                settings_changed = True
+                changed = True
+
     for event, spec in HOOK_BLOCKS.items():
         event_list = hooks_cfg.setdefault(event, [])
         if _already_in_hooks(event_list, spec["check_substr"]):
@@ -188,7 +207,7 @@ def main() -> None:
         print("\n[dry-run complete] Re-run without --dry-run to apply.")
     else:
         print("\nInstall complete. Restart Claude Code for hooks to take effect.")
-        print("What changes when you idle >5 minutes:")
+        print("What changes when you idle past the 1-hour cache TTL:")
         print("  1. Your next prompt will be blocked once with a cost warning.")
         print("  2. Press ↑ to resend as-is (accepts the cache rebuild cost).")
         print("  3. Or run /compact to compress context, then resend.")

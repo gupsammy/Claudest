@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 import uuid as uuid_mod
 from pathlib import Path
 
@@ -132,6 +133,58 @@ class TestFindAllBranchesProperties:
         assert len(branches) == 1
         assert branches[0]["is_active"] is True
         assert "abc" in branches[0]["uuids"]
+
+
+def _finishes(fn, seconds: float = 10.0):
+    """Run fn in a daemon thread; return its result, or fail if it is still running.
+
+    A regression here is a hang, not a wrong answer, so the test must not hang with it.
+    """
+    out: list = []
+    worker = threading.Thread(target=lambda: out.append(fn()), daemon=True)
+    worker.start()
+    worker.join(seconds)
+    assert out, f"still running after {seconds}s"
+    return out[0]
+
+
+def _canonical(branches):
+    return sorted((b["leaf_uuid"], b["is_active"], frozenset(b["uuids"])) for b in branches)
+
+
+class TestRepeatedTranscriptLines:
+    """Issue #81: a transcript that repeats lines must not explode the branch walk."""
+
+    def _deep_rewind(self):
+        """A 3,000-turn chain with a rewind whose first user turn is 200 lines deep."""
+        entries = _build_uuid_tree(3000, [])
+        for i, e in enumerate(entries):
+            e["timestamp"] = f"2025-01-01T{i:08d}"
+        parent = entries[1500]["uuid"]
+        for j in range(201):
+            uid = str(uuid_mod.uuid4())
+            entries.append({"uuid": uid, "parentUuid": parent,
+                            "type": "user" if j == 200 else "assistant",
+                            "timestamp": f"2024-06-01T{j:08d}"})
+            parent = uid
+        return entries
+
+    def test_repeats_finish_and_match_the_deduplicated_walk(self):
+        entries = self._deep_rewind()
+        repeated = [dict(e) for e in entries for _ in range(3)]
+
+        branches = _finishes(lambda: find_all_branches(repeated))
+
+        assert _canonical(branches) == _canonical(find_all_branches(entries))
+        assert len(branches) == 2, "the rewind's first user turn sits 200 lines down"
+
+    def test_parent_cycle_terminates(self):
+        entries = [
+            {"uuid": "a", "parentUuid": "b", "type": "user", "timestamp": "2025-01-01T00:00:01Z"},
+            {"uuid": "b", "parentUuid": "a", "type": "assistant", "timestamp": "2025-01-01T00:00:02Z"},
+        ]
+        [branch] = _finishes(lambda: find_all_branches(entries))
+        assert branch["uuids"] == {"a", "b"}
 
 
 # ── Fixture-driven tests ──

@@ -96,53 +96,58 @@ def find_all_branches(all_entries: list[dict]) -> list[dict]:
     """
     uuid_to_entry: dict[str, dict] = {}
     uuid_to_parent: dict[str, str | None] = {}
-    children: dict[str, list[str]] = {}
 
     for entry in all_entries:
         uuid = entry.get("uuid")
         if not uuid:
             continue
         uuid_to_entry[uuid] = entry
-        parent = entry.get("parentUuid")
-        uuid_to_parent[uuid] = parent
-        if parent:
-            children.setdefault(parent, []).append(uuid)
+        uuid_to_parent[uuid] = entry.get("parentUuid")
 
     if not uuid_to_entry:
         return []
 
-    # Step 1: Find active branch (latest -> root)
-    latest = max(uuid_to_entry.values(), key=lambda e: e.get("timestamp") or "")
-    active_uuids: set[str] = set()
-    current: str | None = latest["uuid"]
-    while current:
-        active_uuids.add(current)
-        current = uuid_to_parent.get(current)
+    # One edge per distinct uuid. Transcripts can repeat a line many times; an
+    # edge per line turns each repeat into a fork, and walks over those forks
+    # grow exponentially with chain depth (issue #81).
+    children: dict[str, list[str]] = {}
+    for uuid, parent in uuid_to_parent.items():
+        if parent:
+            children.setdefault(parent, []).append(uuid)
 
-    branches: list[dict] = [
-        {"leaf_uuid": latest["uuid"], "uuids": active_uuids, "is_active": True, "fork_point_uuid": None}
-    ]
-
-    # Step 2: Find rewind forks on the active path
-    def has_user_descendant(uuid: str, depth: int = 0) -> bool:
-        if depth > 100:
-            return False
-        entry = uuid_to_entry.get(uuid)
-        if entry and entry.get("type") == "user":
-            return True
-        for kid in children.get(uuid, []):
-            if has_user_descendant(kid, depth + 1):
-                return True
-        return False
+    def ancestors(uuid: str) -> set[str]:
+        """uuid and every ancestor; stops at a repeat so a corrupt cycle ends."""
+        result: set[str] = set()
+        current: str | None = uuid
+        while current and current not in result:
+            result.add(current)
+            current = uuid_to_parent.get(current)
+        return result
 
     def collect_subtree(uuid: str) -> set[str]:
         result: set[str] = set()
         stack = [uuid]
         while stack:
             node = stack.pop()
+            if node in result:
+                continue
             result.add(node)
             stack.extend(children.get(node, []))
         return result
+
+    # Step 1: Find active branch (latest -> root)
+    latest = max(uuid_to_entry.values(), key=lambda e: e.get("timestamp") or "")
+    active_uuids = ancestors(latest["uuid"])
+
+    branches: list[dict] = [
+        {"leaf_uuid": latest["uuid"], "uuids": active_uuids, "is_active": True, "fork_point_uuid": None}
+    ]
+
+    # Step 2: Find rewind forks on the active path
+    def has_user_descendant(uuid: str) -> bool:
+        return any(
+            uuid_to_entry.get(node, {}).get("type") == "user" for node in collect_subtree(uuid)
+        )
 
     for uuid in active_uuids:
         kids = children.get(uuid, [])
@@ -157,11 +162,7 @@ def find_all_branches(all_entries: list[dict]) -> list[dict]:
 
             # Real rewind fork — build the abandoned branch
             # Common prefix: fork point back to root
-            prefix: set[str] = set()
-            cur: str | None = uuid
-            while cur:
-                prefix.add(cur)
-                cur = uuid_to_parent.get(cur)
+            prefix = ancestors(uuid)
 
             subtree = collect_subtree(kid)
             branch_uuids = prefix | subtree

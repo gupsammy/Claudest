@@ -25,7 +25,7 @@ Test config lives in `pyproject.toml`. The `pythonpath` setting adds the recall-
 
 ## Conventions
 
-Never delete `~/.claude-memory/conversations.db` — the DB is the sole long-term copy once JSONL files expire. Always update incrementally. Never DELETE messages or turns. For testing, duplicate the DB and work on the copy.
+Never delete `~/.claude-memory/conversations.db` — the DB is the sole long-term copy once JSONL files expire. Always update incrementally. Never DELETE `messages` rows outside a backed-up `user_version` migration. For testing, duplicate the DB and work on the copy.
 
 Commit messages: conventional commits scoped to plugin (`feat(memory):`, `fix(skills):`, `docs:`, `refactor(memory):`).
 

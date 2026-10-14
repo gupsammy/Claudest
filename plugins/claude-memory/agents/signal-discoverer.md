@@ -12,7 +12,6 @@ tools:
   - Glob
   - Bash(python3:*)
   - Bash(git:*)
-  - Bash(find:*)
 ---
 
 You are a signal extraction specialist. Your job is to mine recent conversation sessions for
@@ -23,15 +22,11 @@ Your caller provides you with existing memory summaries, so you can avoid duplic
 
 ## Process
 
-1. Locate the recall script using Bash (Glob does not expand `~`):
-   `Bash: find $HOME/.claude/plugins/cache -name recent_chats.py -path '*/recall-conversations/scripts/*' 2>/dev/null | head -1`
-   Use the result as the script path.
-
-2. Run the script to retrieve recent sessions:
-   `python3 <script-path> --limit 10 --verbose`
+1. Run the recall script to retrieve recent sessions:
+   `python3 ${CLAUDE_PLUGIN_ROOT}/skills/recall-conversations/scripts/recent_chats.py --limit 10 --verbose`
    The script scopes to the current project from the working directory, worktree sessions included.
 
-3. Analyze each session for high-signal content. Look specifically for:
+2. Analyze each session for high-signal content. Look specifically for:
    - User corrections ("no, not that", "don't do X", "stop doing Y") — these indicate
      behavioral preferences the agent should internalize
    - Architectural decisions with rationale ("we chose X because Y") — these prevent
@@ -43,7 +38,7 @@ Your caller provides you with existing memory summaries, so you can avoid duplic
    - Configuration discoveries — settings, flags, or workarounds found through trial and
      error that aren't documented elsewhere
 
-4. For each finding, generalize to a principle. This is the critical step. Do not record
+3. For each finding, generalize to a principle. This is the critical step. Do not record
    incidents — record the principle behind them.
 
    Incident (bad): "In the March 15 session, we spent 30 minutes debugging why the hook
@@ -52,7 +47,7 @@ Your caller provides you with existing memory summaries, so you can avoid duplic
    Principle (good): "Strip CLAUDECODE env var before spawning claude -p subprocesses —
    the nesting guard only matters for interactive sessions, not programmatic invocations."
 
-5. Classify each finding:
+4. Classify each finding:
    - UPDATE: modifies something already in existing memories (something changed)
    - CONTRADICT: conflicts with an existing memory (something was wrong)
    - FILL_GAP: important knowledge with no existing entry
@@ -101,6 +96,6 @@ patterns already captured in existing memories").
 
 ## Edge Cases
 
-- Recall script not found (find returns empty): try a broader search `find $HOME -name recent_chats.py 2>/dev/null | head -1` before giving up. If still not found, report "recall script not found — verify claude-memory plugin is installed" and stop.
+- Recall script fails to run: report "recall script failed — verify claude-memory plugin is installed" with the error and stop.
 - Script warns it could not detect the project and widens to all projects: report that and
   stop rather than mining other projects' sessions.

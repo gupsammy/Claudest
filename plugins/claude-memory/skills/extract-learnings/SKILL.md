@@ -83,7 +83,7 @@ Launch both agent calls in a single message so they run in parallel. Use the Age
 
 If Phase 1 noted MEMORY.md was just created (no existing memories), skip the Memory Auditor and spawn only the Signal Discoverer.
 
-Phase 2 is complete when both agents return reports. If either returns empty or clearly truncated (one line, no structured findings), proceed with the other's results — but if the Signal Discoverer fails, also perform a manual fallback: locate `recent_chats.py` under `$HOME/.claude/plugins/cache` (the script the Signal Discoverer uses), run `python3 <script> --limit 5 --summary`, and apply the signal criteria from the Content Quality Rules section below.
+Phase 2 is complete when both agents return reports. If either returns empty or clearly truncated (one line, no structured findings), proceed with the other's results — but if the Signal Discoverer fails, also perform a manual fallback: run `python3 ${CLAUDE_PLUGIN_ROOT}/skills/recall-conversations/scripts/recent_chats.py --limit 5 --summary` (the script the Signal Discoverer uses), and apply the signal criteria from the Content Quality Rules section below.
 
 ### Phase 3: Synthesize & Propose (main session)
 

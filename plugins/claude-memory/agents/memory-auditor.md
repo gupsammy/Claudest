@@ -13,7 +13,6 @@ tools:
   - Grep
   - Glob
   - Bash(git:*)
-maxTurns: 35
 ---
 
 You are a memory verification specialist. Your job is to check whether existing memory entries

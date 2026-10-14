@@ -13,7 +13,6 @@ tools:
   - Bash(python3:*)
   - Bash(git:*)
   - Bash(find:*)
-maxTurns: 35
 ---
 
 You are a signal extraction specialist. Your job is to mine recent conversation sessions for

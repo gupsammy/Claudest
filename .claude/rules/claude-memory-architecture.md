@@ -16,7 +16,7 @@ On **SessionStart**, four hooks fire in `hooks.json` order:
 
 On **SessionEnd** (matcher: `clear`), `clear-handoff.py` writes `~/.claude-memory/clear-handoff.json` with the dying session's `session_id`, `cwd`, and `timestamp`; the next SessionStart links to it when the normalized cwd matches and the file is under 30 s old.
 
-On **Stop**, `memory-sync.py` writes hook input to a temp file and spawns `sync_current.py --input-file` in the background to incrementally sync the session without blocking shutdown; when new messages land and `semantic_search` is on, `sync_current.py` also calls `embed_index.run` in the same background process. Under Codex (`CODEX_THREAD_ID` or a `/.codex/sessions/` path) it prints bare `{}`. Every hook runs as `bash run.sh <script>.py`; hook logic stays Python for cross-platform compatibility.
+On **Stop**, `memory-sync.py` writes hook input to a temp file and spawns `sync_current.py --input-file` in the background to incrementally sync the session without blocking shutdown; when new messages land and `semantic_search` is on, `sync_current.py` also calls `embed_index.run` in the same background process. Under Codex (`CODEX_THREAD_ID` or a `/.codex/sessions/` path) `memory-sync.py` prints bare `{}`. Every hook runs as `bash run.sh <script>.py`; hook logic stays Python for cross-platform compatibility.
 
 ## Database
 

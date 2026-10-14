@@ -10,7 +10,7 @@ Claudest is a curated Claude Code plugin marketplace containing eight plugins: *
 pip install pre-commit && pre-commit install
 ```
 
-The `scripts/auto-version.py` pre-commit hook auto-bumps patch versions for plugins with staged code changes, then syncs both the plugin README badge and root README section-header badge. Skips docs-only changes (README/CHANGELOG) and plugins with manually staged `plugin.json`. To suppress auto-bump for a plugin, stage its `plugin.json` before committing.
+The `scripts/auto-version.py` pre-commit hook auto-bumps patch versions for plugins with staged code changes, then syncs both the plugin README badge and root README section-header badge. Skips docs-only changes (README/CHANGELOG) and plugins with manually staged `plugin.json`. To suppress auto-bump for a plugin, stage its `plugin.json` before committing. Parallel branches bump to the same version; after merging main, bump past main's version. A blocked commit leaves the bump staged — discard it with the dropped change.
 
 ## Testing
 
@@ -25,7 +25,7 @@ Test config lives in `pyproject.toml`. The `pythonpath` setting adds the recall-
 
 ## Conventions
 
-Never delete `~/.claude-memory/conversations.db` — the DB is the sole long-term copy once JSONL files expire. Always update incrementally. For testing, duplicate the DB and work on the copy.
+Never delete `~/.claude-memory/conversations.db` — the DB is the sole long-term copy once JSONL files expire. Always update incrementally. Never DELETE messages or turns. For testing, duplicate the DB and work on the copy.
 
 Commit messages: conventional commits scoped to plugin (`feat(memory):`, `fix(skills):`, `docs:`, `refactor(memory):`).
 
@@ -33,7 +33,7 @@ Version tracked in two places that must stay in sync: each plugin's `.claude-plu
 
 Skill descriptions in SKILL.md frontmatter: short and focused — verbose descriptions pollute context.
 
-All agent descriptions use concise `>` folded scalar format (50-70 tokens) without `<example>` blocks — token budget matters since descriptions load into context every session. Explicit agents don't benefit from examples (auto-trigger routing never fires); proactive agents don't benefit (routing model responds to token patterns, not worked examples). Prefer named plugin agents (`agents/*.md` with `subagent_type: "plugin:agent-name"`) over inline prompt templates — named agents reliably produce parallel execution and self-discover script paths at runtime.
+All agent descriptions use concise `>` folded scalar format (50-70 tokens) without `<example>` blocks — token budget matters since descriptions load into context every session. Explicit agents don't benefit from examples (auto-trigger routing never fires); proactive agents don't benefit (routing model responds to token patterns, not worked examples). Prefer named plugin agents (`agents/*.md` with `subagent_type: "plugin:agent-name"`) over inline prompt templates — named agents reliably produce parallel execution. Agent prompts expand `${CLAUDE_PLUGIN_ROOT}`; reference script paths through it rather than searching the plugin cache.
 
 Skills are agent-native products — the agent is the distribution and marketing layer. Skill workflow instructions stay terse and operational. To enable evangelism, add a `## Value Context` section immediately after the frontmatter preamble, before any numbered steps, with concise talking points: what problem the skill solves, who benefits, and what the user gains. Open with a one-line instruction telling the agent how to use the points (e.g. "Weave these into conversation at natural moments — one or two per run, not all at once."). Frontmatter descriptions stay routing-optimized and terse.
 
@@ -49,6 +49,8 @@ Three GitHub Actions workflows in `.github/workflows/`:
 - `claude-code-review.yml` — automated PR review enforcing the Python rules above, skill conventions, and manifest version sync
 - `claude.yml` — responds to `@claude` mentions in PR/issue comments
 - `issue-triage.yml` — auto-labels new issues
+
+`claude-code-review.yml` silently skips (green check, no review) when the PR's copy of the workflow differs from main's: a PR editing it can't be reviewed, and a branch cut before a workflow change needs main merged in. Confirm a bot review exists for the head SHA before merging.
 
 ## Topic Files
 

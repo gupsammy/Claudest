@@ -17,7 +17,8 @@ import sys
 from pathlib import Path
 from typing import NamedTuple, Optional
 
-from .db import DEFAULT_DB_PATH
+from .db import DEFAULT_DB_PATH, resolve_project_cwd
+from .formatting import SCRATCH_PROJECT_PATH
 
 
 class ScopeFilter(NamedTuple):
@@ -57,6 +58,11 @@ def resolve_project(cwd: str, conn: sqlite3.Connection) -> Optional[ScopeFilter]
     projects.path in the DB. Returns a path-keyed ScopeFilter or None if no match.
 
     Strategy:
+    0. Map CWD to its project root the way import does (resolve_project_cwd), so
+       worktrees fold into their main checkout and every folderless-chat scratch
+       directory maps to SCRATCH_PROJECT_PATH. That path is synthetic: match it
+       exactly or not at all, since walking up from a real scratch dir would land
+       on an unrelated ancestor project such as the home directory.
     1. Walk up from CWD; for each ancestor, look up projects.path = ancestor.
        An exact path match is unambiguous — filter by path so projects that merely
        share a basename (duplicate names are expected — see list_projects.py) are
@@ -65,8 +71,11 @@ def resolve_project(cwd: str, conn: sqlite3.Connection) -> Optional[ScopeFilter]
        to the path(s) of every same-named project so the filter stays path-precise.
     3. If both fail, return None — caller decides how to handle (warn + widen).
     """
-    cur = os.path.abspath(cwd)
+    cur = resolve_project_cwd(conn, os.path.abspath(cwd))
     cursor = conn.cursor()
+    if cur == SCRATCH_PROJECT_PATH:
+        cursor.execute("SELECT path FROM projects WHERE path = ?", (cur,))
+        return ScopeFilter("path", [cur]) if cursor.fetchone() else None
     while True:
         cursor.execute("SELECT path FROM projects WHERE path = ?", (cur,))
         row = cursor.fetchone()

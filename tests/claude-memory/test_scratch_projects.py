@@ -5,6 +5,8 @@ Coverage:
 2. Existing rows — per-chat scratch projects from before the fold merge on next connection.
 3. Lookup — a brand-new scratch directory resolves to that project's key, so
    SessionStart injects earlier folderless chats.
+4. Recall scope — recall scripts run from a scratch directory scope to the scratch
+   project, never to an ancestor project such as the home directory.
 """
 
 from __future__ import annotations
@@ -13,6 +15,7 @@ import importlib.util
 import sys
 from pathlib import Path
 
+from memory_lib.cli_common import ScopeFilter, resolve_project
 from memory_lib.db import get_db_connection
 from memory_lib.formatting import SCRATCH_PROJECT_PATH, get_project_key
 
@@ -88,3 +91,27 @@ def test_new_scratch_directory_resolves_to_scratch_key(tmp_path):
     # A later folderless chat in a never-seen scratch dir, as memory-context computes it.
     new_cwd = f"{ACCOUNT}/aaaaaaaa-0000-4000-8000-000000000000/bbbbbbbb-0000-4000-8000-000000000000/scratch-2026-11-01-ffffff"
     assert conn.execute("SELECT COUNT(*) FROM projects WHERE key = ?", (get_project_key(new_cwd),)).fetchone()[0] == 1
+
+
+def _add_home_project(conn) -> None:
+    """A project at the account's home dir, an ancestor of every scratch dir."""
+    cur = conn.execute("INSERT INTO projects (path, key, name) VALUES ('/Users/me', '-Users-me', 'me')")
+    conn.execute("INSERT INTO sessions (uuid, project_id, cwd) VALUES ('home-1', ?, '/Users/me')", (cur.lastrowid,))
+    conn.commit()
+
+
+def test_recall_scope_from_scratch_dir_is_scratch_project(tmp_path):
+    conn = get_db_connection({"db_path": str(tmp_path / "c.db")})
+    project_dir = _write_session(tmp_path / "projects", _scratch_dir(1), FIXTURE_SESSION)
+    import_conversations.import_project(conn, project_dir, [])
+    _add_home_project(conn)
+
+    assert resolve_project(_scratch_dir(2), conn) == ScopeFilter("path", [SCRATCH_PROJECT_PATH])
+
+
+def test_recall_scope_from_scratch_dir_without_scratch_project_is_unresolved(tmp_path):
+    """No scratch sessions yet: return None so the caller warns, not the home project."""
+    conn = get_db_connection({"db_path": str(tmp_path / "c.db")})
+    _add_home_project(conn)
+
+    assert resolve_project(_scratch_dir(2), conn) is None

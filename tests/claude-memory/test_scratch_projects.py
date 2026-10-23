@@ -5,8 +5,9 @@ Coverage:
 2. Existing rows — per-chat scratch projects from before the fold merge on next connection.
 3. Lookup — a brand-new scratch directory resolves to that project's key, so
    SessionStart injects earlier folderless chats.
-4. Recall scope — recall scripts run from a scratch directory scope to the scratch
-   project, never to an ancestor project such as the home directory.
+4. Recall scope — recall scripts run from a scratch directory (or a Codex worktree)
+   scope to the project import filed it under, never to an ancestor project such
+   as the home directory.
 """
 
 from __future__ import annotations
@@ -115,3 +116,12 @@ def test_recall_scope_from_scratch_dir_without_scratch_project_is_unresolved(tmp
     _add_home_project(conn)
 
     assert resolve_project(_scratch_dir(2), conn) is None
+
+
+def test_recall_scope_from_codex_worktree_is_main_checkout(tmp_path):
+    conn = get_db_connection({"db_path": str(tmp_path / "c.db")})
+    _add_home_project(conn)
+    conn.execute("INSERT INTO projects (path, key, name) VALUES ('/r/tiny', '-r-tiny', 'tiny')")
+    conn.commit()
+
+    assert resolve_project("/Users/me/.codex/worktrees/aa5e/tiny/src", conn) == ScopeFilter("path", ["/r/tiny"])

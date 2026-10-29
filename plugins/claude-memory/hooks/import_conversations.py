@@ -543,24 +543,17 @@ def import_codex_session(conn: sqlite3.Connection, filepath: Path) -> tuple[int,
     project_key = get_project_key(fallback_project_path)
     sync_entries(conn, session_uuid, all_entries, messages, project_key, fallback_project_path)
 
-    cursor.execute("SELECT id FROM sessions WHERE uuid = ?", (session_uuid,))
-    session_row = cursor.fetchone()
-    if not session_row:
-        return -1, 0
-    session_id = session_row[0]
-
-    cursor.execute("SELECT COUNT(*) FROM messages WHERE session_id = ?", (session_id,))
-    total_messages = cursor.fetchone()[0]
-    if total_messages == 0:
-        return -1, 0
-
-    cursor.execute("SELECT COUNT(*) FROM branches WHERE session_id = ?", (session_id,))
-    branches_imported = cursor.fetchone()[0]
-    if branches_imported == 0:
-        return -1, 0
-
+    # Logged before any skip: a NULL hash left behind re-runs the bulk import.
+    cursor.execute("""
+        SELECT (SELECT COUNT(*) FROM messages WHERE session_id = s.id),
+               (SELECT COUNT(*) FROM branches WHERE session_id = s.id)
+        FROM sessions s WHERE s.uuid = ?
+    """, (session_uuid,))
+    total_messages, branches_imported = cursor.fetchone() or (0, 0)
     log_import(total_messages)
 
+    if total_messages == 0 or branches_imported == 0:
+        return -1, 0
     return branches_imported, total_messages
 
 

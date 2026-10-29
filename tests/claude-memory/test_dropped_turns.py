@@ -205,6 +205,15 @@ class TestImportQueueClears:
         assert [r[0] for r in memory_db.execute(
             "SELECT file_path FROM import_log WHERE file_hash IS NULL")] == [str(kept)]
 
+    def test_codex_session_that_stores_nothing_records_hash(self, memory_db, tmp_path, monkeypatch):
+        f = tmp_path / "rollout.jsonl"
+        _codex_file(f, "/p", [_user_item("hi", 1), _final("ok", 2)])
+        self._queue(memory_db, f)
+        monkeypatch.setattr(import_module, "sync_entries", lambda *a, **k: None)  # nothing stored
+
+        assert import_codex_session(memory_db, f) == (-1, 0)
+        assert self._null_rows(memory_db) == 0
+
 
 class TestSlashCommands:
     def test_command_with_args_keeps_both(self):

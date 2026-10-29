@@ -99,7 +99,7 @@ class TestV6Migration:
 
         conn = get_db_connection({"db_path": str(db_file)})
 
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 6
+        assert conn.execute("PRAGMA user_version").fetchone()[0] >= 6
         assert list(tmp_path.glob("conversations.pre-v6-harness-turns-*.db"))
         tagged = [r[0] for r in conn.execute("SELECT content FROM messages WHERE is_notification = 1")]
         assert tagged == [COMPACTION]

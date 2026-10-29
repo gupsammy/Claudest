@@ -94,16 +94,15 @@ class TestImportSessionWithBranches:
     """Test import with conversation branches (from rewinds)."""
 
     def test_import_session_with_branches(self, memory_db, project_id):
-        """Import single_rewind.jsonl and verify 3 branches are detected."""
-        fixture_file = FIXTURE_DIR / "single_rewind.jsonl"
+        """Import multi_rewind.jsonl and verify its one rewind gives 2 branches."""
+        fixture_file = FIXTURE_DIR / "multi_rewind.jsonl"
         assert fixture_file.exists(), f"Fixture {fixture_file} not found"
 
         branches_imported, total_messages = import_session(
             memory_db, fixture_file, project_id
         )
 
-        # single_rewind has 3 branches
-        assert branches_imported == 3, f"Expected 3 branches, got {branches_imported}"
+        assert branches_imported == 2, f"Expected 2 branches, got {branches_imported}"
         assert total_messages > 0, "Should import messages"
 
         # Verify branches table
@@ -112,7 +111,7 @@ class TestImportSessionWithBranches:
             "SELECT COUNT(*) FROM branches WHERE session_id IN (SELECT id FROM sessions WHERE project_id = ?)",
             (project_id,)
         )
-        assert cursor.fetchone()[0] == 3, "Exactly 3 branches should exist in DB"
+        assert cursor.fetchone()[0] == 2, "Exactly 2 branches should exist in DB"
 
         # Verify active branch is marked
         cursor.execute(
@@ -677,10 +676,10 @@ class TestFKSafeReimport:
     def test_reimport_with_branches_fk(self, memory_db, project_id):
         """Reimport of branched conversation with FK enabled should not crash."""
         memory_db.execute("PRAGMA foreign_keys = ON")
-        fixture_file = FIXTURE_DIR / "single_rewind.jsonl"
+        fixture_file = FIXTURE_DIR / "multi_rewind.jsonl"
 
         branches1, _messages1 = import_session(memory_db, fixture_file, project_id)
-        assert branches1 == 3
+        assert branches1 == 2
         memory_db.commit()
 
         # Force reimport
@@ -690,7 +689,7 @@ class TestFKSafeReimport:
         memory_db.commit()
 
         branches2, messages2 = import_session(memory_db, fixture_file, project_id)
-        assert branches2 == 3, "Reimport should produce same branch count"
+        assert branches2 == 2, "Reimport should produce same branch count"
         memory_db.commit()
 
 
@@ -866,10 +865,10 @@ class TestBranchMessagesDiffOnReimport:
 
     def test_branch_messages_identical_after_reimport(self, memory_db, project_id):
         """branch_messages rows must be the same set before and after stale-hash reimport."""
-        fixture_file = FIXTURE_DIR / "single_rewind.jsonl"
+        fixture_file = FIXTURE_DIR / "multi_rewind.jsonl"
 
         branches1, _ = import_session(memory_db, fixture_file, project_id)
-        assert branches1 == 3, "Fixture must produce 3 branches for this test to be meaningful"
+        assert branches1 == 2, "Fixture must produce 2 branches for this test to be meaningful"
 
         cursor = memory_db.cursor()
         cursor.execute("""
@@ -892,7 +891,7 @@ class TestBranchMessagesDiffOnReimport:
         memory_db.commit()
 
         branches2, _ = import_session(memory_db, fixture_file, project_id)
-        assert branches2 == 3, "Reimport must produce same branch count"
+        assert branches2 == 2, "Reimport must produce same branch count"
 
         cursor.execute("""
             SELECT branch_id, message_id FROM branch_messages

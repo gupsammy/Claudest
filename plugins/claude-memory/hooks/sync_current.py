@@ -55,6 +55,7 @@ from memory_lib.content import extract_text_content, is_notification_content, is
 from memory_lib.parsing import (
     parse_jsonl_file, parse_all_with_uuids, extract_session_metadata,
     find_all_branches, compute_branch_metadata, aggregate_branch_content,
+    prune_stale_branches,
 )
 from memory_lib.formatting import get_project_key, normalize_project_key, parse_project_key
 from memory_lib.summarizer import SUMMARY_VERSION, compute_context_summary
@@ -138,7 +139,13 @@ def parse_codex_session(filepath: Path) -> tuple[str, list[dict], list[dict], st
     fuller adapter.
     """
     session_meta: dict = {}
+    # (role, uuid key, timestamp, text). Legacy rows keep the key they always had,
+    # the kind plus their ordinal among legacy rows, so a re-import never forks
+    # rows stored before UserMessage items were read.
     raw_messages: list[tuple[str, str, str, str]] = []
+    legacy_ordinal = 0
+    has_legacy_user = False
+    item_users: list[tuple[int, str, str, str]] = []
 
     with filepath.open("r", encoding="utf-8", errors="replace") as f:
         for line in f:
@@ -161,9 +168,20 @@ def parse_codex_session(filepath: Path) -> tuple[str, list[dict], list[dict], st
             if obj_type == "event_msg":
                 event_type = payload.get("type")
                 if event_type == "user_message":
+                    has_legacy_user = True
                     text = (payload.get("message") or "").strip()
                     if text:
-                        raw_messages.append(("user", "event_msg.user_message", timestamp, text))
+                        raw_messages.append(
+                            ("user", f"event_msg.user_message:{legacy_ordinal}", timestamp, text))
+                        legacy_ordinal += 1
+                elif event_type == "item_completed":
+                    # Newer Codex builds record the typed turn only as this item.
+                    item = payload.get("item") or {}
+                    if item.get("type") == "UserMessage":
+                        text = _extract_codex_text(item)
+                        if text:
+                            item_id = item.get("id") or f"ord-{len(item_users)}"
+                            item_users.append((len(raw_messages), f"item:{item_id}", timestamp, text))
                 continue
 
             if obj_type == "response_item":
@@ -175,15 +193,27 @@ def parse_codex_session(filepath: Path) -> tuple[str, list[dict], list[dict], st
                     continue
                 text = _extract_codex_text(payload)
                 if text:
-                    raw_messages.append(("assistant", "response_item.message.final_answer", timestamp, text))
+                    raw_messages.append(
+                        ("assistant", f"response_item.message.final_answer:{legacy_ordinal}", timestamp, text))
+                    legacy_ordinal += 1
+
+    # A file with legacy user events also carries the same turns as items; read one.
+    # A resumed thread that mixes both formats keeps only its legacy turns.
+    if not has_legacy_user:
+        for pos, key, timestamp, text in reversed(item_users):
+            raw_messages.insert(pos, ("user", key, timestamp, text))
 
     session_id = session_meta.get("id") or filepath.stem
     cwd = session_meta.get("cwd")
     parent_uuid = None
     entries = []
 
-    for ordinal, (role, raw_kind, timestamp, text) in enumerate(raw_messages):
-        msg_uuid = _codex_message_uuid(session_id, raw_kind, ordinal)
+    for role, key, timestamp, text in raw_messages:
+        kind, _, ordinal = key.rpartition(":")
+        msg_uuid = (
+            _codex_message_uuid(session_id, kind, int(ordinal)) if ordinal.isdigit()
+            else str(uuidlib.uuid5(uuidlib.NAMESPACE_URL, f"codex:{session_id}:{key}"))
+        )
         entry = {
             "uuid": msg_uuid,
             "parentUuid": parent_uuid,
@@ -452,6 +482,8 @@ def sync_entries(
             """, (summary_md, summary_json, SUMMARY_VERSION, branch_db_id))
         except Exception:
             pass  # Don't fail sync on summary errors
+
+    prune_stale_branches(cursor, session_id, {b["leaf_uuid"] for b in branches})
 
     return new_count
 

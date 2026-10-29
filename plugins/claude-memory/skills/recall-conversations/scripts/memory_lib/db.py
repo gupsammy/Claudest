@@ -29,6 +29,9 @@ CODEX_IMPORT_SENTINEL = Path.home() / ".claude-memory" / ".last-codex-import"
 # Without this, missing-cwd sessions create a project per Codex date directory
 # (e.g. ".../2026/05/03" → project named "03").
 CODEX_UNKNOWN_PROJECT_PATH = "/(unknown-codex)"
+# Dayflow runs `codex exec` on screenshots many times a day from this folder.
+# Those runs hold no turns a person typed, so they never enter memory.
+DAYFLOW_CWD_MARKER = "/Application Support/Dayflow/"
 
 # Bulk-import coordination
 IMPORT_LOCK_PATH = Path.home() / ".claude-memory" / "import.lock"
@@ -37,7 +40,7 @@ BACKUP_MIN_INTERVAL_HOURS = 24
 
 # Highest PRAGMA user_version the data migrations reach. A fresh DB is stamped
 # with it, since it has no old rows to migrate.
-LATEST_DATA_VERSION = 6
+LATEST_DATA_VERSION = 7
 # Data migrations run under this lock, next to the DB, so concurrent hooks never
 # migrate (and back up) the same DB twice. Background callers wait this long.
 MIGRATE_LOCK_NAME = "migrate.lock"
@@ -434,6 +437,11 @@ def _migrate_columns(conn: sqlite3.Connection, data: bool = True) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_branches_summary_version ON branches(summary_version)")
     conn.commit()
 
+    cursor.execute("PRAGMA table_info(import_log)")
+    if "mtime_ns" not in {row[1] for row in cursor.fetchall()}:
+        cursor.execute("ALTER TABLE import_log ADD COLUMN mtime_ns INTEGER")
+        conn.commit()
+
     # token_snapshots table (new table, not a column add)
     cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='token_snapshots'")
     if not cursor.fetchone():
@@ -570,6 +578,19 @@ def _data_migrations(conn: sqlite3.Connection, db_path: Path) -> None:
             conn.execute("PRAGMA user_version = 6")
             conn.commit()
 
+    # Recall read only each session's active branch, which stopped at the last
+    # compaction, and Dayflow's automated Codex runs filled memory with turns
+    # nobody typed. Rows are deleted here, so a backup must exist first.
+    if conn.execute("PRAGMA user_version").fetchone()[0] == 6 and (
+            not db_path.name or _backup_db_before_migration(db_path, "v7-branch-repair")):
+        try:
+            _repair_branches_and_drop_dayflow(cursor)
+            conn.execute("PRAGMA user_version = 7")
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+
 
 def _tag_harness_messages(cursor: sqlite3.Cursor) -> None:
     """Flag existing harness-written user messages and rebuild only their branches.
@@ -601,6 +622,81 @@ def _tag_harness_messages(cursor: sqlite3.Cursor) -> None:
         chunk = ordered[i:i + 500]
         placeholders = ",".join("?" * len(chunk))
         cursor.execute(f"UPDATE branches SET summary_version = NULL WHERE id IN ({placeholders})", chunk)
+
+
+def _repair_branches_and_drop_dayflow(cursor: sqlite3.Cursor) -> None:
+    """Drop Dayflow sessions, then make every stored turn reachable from its active branch.
+
+    A session whose transcript is still on disk is queued for re-import (NULL
+    hash and mtime): the fixed parser rebuilds its branches from the source. A
+    session whose transcript is gone cannot be re-parsed, so every message it
+    holds joins its active branch. That can pull in text from a real rewind,
+    which is rare; leaving it out would hide everything before a compaction.
+    """
+    tables = {row[0] for row in cursor.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    if not {"sessions", "projects", "exchange_embeddings", "session_embeddings"} <= tables:
+        return  # Partial schema from an older test fixture: nothing to repair.
+    cursor.execute(
+        "SELECT id FROM sessions WHERE cwd LIKE ? ORDER BY id", (f"%{DAYFLOW_CWD_MARKER}%",)
+    )
+    dayflow = [row[0] for row in cursor.fetchall()]
+    for i in range(0, len(dayflow), 500):
+        chunk = dayflow[i:i + 500]
+        ph = ",".join("?" * len(chunk))
+        cursor.execute(f"DELETE FROM exchange_embeddings WHERE message_id IN "
+                       f"(SELECT id FROM messages WHERE session_id IN ({ph}))", chunk)
+        cursor.execute(f"DELETE FROM session_embeddings WHERE session_id IN ({ph})", chunk)
+        cursor.execute(f"DELETE FROM branch_messages WHERE branch_id IN "
+                       f"(SELECT id FROM branches WHERE session_id IN ({ph}))", chunk)
+        cursor.execute(f"DELETE FROM branches WHERE session_id IN ({ph})", chunk)
+        cursor.execute(f"DELETE FROM messages WHERE session_id IN ({ph})", chunk)
+        cursor.execute(f"DELETE FROM sessions WHERE id IN ({ph})", chunk)
+    cursor.execute("DELETE FROM projects WHERE path LIKE ? AND id NOT IN "
+                   "(SELECT project_id FROM sessions WHERE project_id IS NOT NULL)",
+                   (f"%{DAYFLOW_CWD_MARKER}%",))
+
+    # Find transcripts on disk, not only through import_log: the Stop hook never
+    # writes it, so most synced sessions have no row. A NULL hash also makes
+    # memory-setup start the bulk re-import.
+    cursor.execute("SELECT uuid FROM sessions")
+    stored = {row[0][-36:] for row in cursor.fetchall()}
+    cursor.execute("SELECT file_path FROM import_log ORDER BY id")
+    paths = {Path(row[0]) for row in cursor.fetchall()}
+    for root, pattern in ((DEFAULT_PROJECTS_DIR, "*/*.jsonl"), (DEFAULT_CODEX_SESSIONS_DIR, "**/*.jsonl")):
+        if root.exists():
+            paths.update(root.glob(pattern))
+    on_disk: set[str] = set()
+    for path in sorted(paths):
+        key = path.stem[-36:]
+        if key not in stored or not path.exists():
+            continue
+        on_disk.add(key)
+        cursor.execute("""
+            INSERT INTO import_log (file_path, file_hash, mtime_ns) VALUES (?, NULL, NULL)
+            ON CONFLICT(file_path) DO UPDATE SET file_hash = NULL, mtime_ns = NULL
+        """, (str(path),))
+
+    cursor.execute("""
+        SELECT s.uuid, b.id FROM sessions s
+        JOIN branches b ON b.session_id = s.id AND b.is_active = 1
+        WHERE EXISTS (
+            SELECT 1 FROM messages m WHERE m.session_id = s.id AND m.id NOT IN
+                (SELECT message_id FROM branch_messages WHERE branch_id = b.id))
+        ORDER BY b.id
+    """)
+    repaired = [bid for uuid, bid in cursor.fetchall() if uuid[-36:] not in on_disk]
+    for bid in repaired:
+        cursor.execute("""
+            INSERT OR IGNORE INTO branch_messages (branch_id, message_id)
+            SELECT ?, m.id FROM messages m WHERE m.session_id = (SELECT session_id FROM branches WHERE id = ?)
+        """, (bid, bid))
+        cursor.execute("""
+            UPDATE branches SET summary_version = NULL,
+                started_at = (SELECT MIN(timestamp) FROM messages WHERE session_id = branches.session_id),
+                ended_at = (SELECT MAX(timestamp) FROM messages WHERE session_id = branches.session_id)
+            WHERE id = ?
+        """, (bid,))
+    _reaggregate_notification_branches(cursor, repaired)
 
 
 # Lockfile path -> open fd for each lock this process holds.

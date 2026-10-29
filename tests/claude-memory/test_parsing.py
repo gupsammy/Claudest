@@ -17,12 +17,13 @@ from memory_lib.parsing import (
     parse_jsonl_file,
 )
 
-# Verified expected values from real fixture analysis
+# Verified expected values from real fixture analysis. single_rewind's only forks are
+# parallel tool calls, so it has one branch; multi_rewind has one typed rewind.
 EXPECTED = {
     "linear_3_exchange": {"branches": 1, "active_exchanges": 3},
     "tool_heavy": {"branches": 1, "active_exchanges": 2},
-    "single_rewind": {"branches": 3, "active_exchanges": 5},
-    "multi_rewind": {"branches": 4, "active_exchanges": 7},
+    "single_rewind": {"branches": 1, "active_exchanges": 5},
+    "multi_rewind": {"branches": 2, "active_exchanges": 7},
     "with_notifications": {"branches": 1, "active_exchanges": 2},
     "with_teammate_messages": {"branches": 1, "active_exchanges": 2},
     "channel_telegram": {"branches": 1, "active_exchanges": 2},

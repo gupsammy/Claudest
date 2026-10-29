@@ -71,8 +71,9 @@ class TestConcurrentMigration:
         outputs = [p.communicate(timeout=60)[0] for p in procs]
 
         assert all(p.returncode == 0 for p in procs)
-        assert sum(out.count("BACKUP") for out in outputs) == 1
-        assert _version(db_file) == 6
+        # One process migrated, taking one backup per pending migration.
+        assert sum(1 for out in outputs if "BACKUP" in out) == 1
+        assert _version(db_file) == LATEST_DATA_VERSION
         conn = sqlite3.connect(db_file)
         assert [r[0] for r in conn.execute("SELECT content FROM messages WHERE is_notification = 1")] == [COMPACTION]
         conn.close()
@@ -95,7 +96,7 @@ class TestMigrationLock:
 
         db_module.release_lock(lock)
         get_db_connection({"db_path": str(db_file)}).close()
-        assert _version(db_file) == 6
+        assert _version(db_file) == LATEST_DATA_VERSION
 
     def test_lock_left_by_killed_migrator_does_not_block(self, tmp_path):
         db_file = tmp_path / "conversations.db"
@@ -113,7 +114,7 @@ class TestMigrationLock:
 
         get_db_connection({"db_path": str(db_file)}).close()
 
-        assert _version(db_file) == 6
+        assert _version(db_file) == LATEST_DATA_VERSION
 
 
 class TestNoForegroundMigration:

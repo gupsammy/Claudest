@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import sqlite3
 import sys
 import time
@@ -28,6 +29,7 @@ from memory_lib.db import (
     BACKUP_RETENTION,
     CODEX_IMPORT_SENTINEL,
     CODEX_UNKNOWN_PROJECT_PATH,
+    DAYFLOW_CWD_MARKER,
     DEFAULT_CODEX_SESSIONS_DIR,
     DEFAULT_DB_PATH,
     DEFAULT_PROJECTS_DIR,
@@ -45,6 +47,7 @@ from memory_lib.content import extract_text_content, is_notification_content, is
 from memory_lib.parsing import (
     parse_jsonl_file, parse_all_with_uuids, extract_session_metadata,
     find_all_branches, compute_branch_metadata, aggregate_branch_content,
+    prune_stale_branches,
 )
 from memory_lib.formatting import get_project_key, normalize_cwd, normalize_project_key, parse_project_key, extract_project_name
 from memory_lib.summarizer import SUMMARY_VERSION, compute_context_summary
@@ -149,19 +152,31 @@ def import_session(
     if log_row and log_row[1] == file_hash:
         return -1, 0
 
+    def log_import(count: int) -> None:
+        # Every parsed file gets its hash, skipped or not: a NULL hash left
+        # behind makes SessionStart re-run the bulk import forever.
+        cursor.execute("""
+            INSERT INTO import_log (file_path, file_hash, messages_imported) VALUES (?, ?, ?)
+            ON CONFLICT(file_path) DO UPDATE SET file_hash = excluded.file_hash,
+                imported_at = CURRENT_TIMESTAMP, messages_imported = excluded.messages_imported
+        """, (str(filepath), file_hash, count))
+
     # Parse all entries for branch detection
     all_entries = list(parse_all_with_uuids(filepath))
     if not all_entries:
+        log_import(0)
         return -1, 0
 
     # Find all branches
     branches = find_all_branches(all_entries)
     if not branches:
+        log_import(0)
         return -1, 0
 
     # Parse user/assistant messages
     messages = list(parse_jsonl_file(filepath))
     if not messages:
+        log_import(0)
         return -1, 0
 
     # Extract session UUID from filename
@@ -241,6 +256,7 @@ def import_session(
     if total_messages == 0:
         # Safe to remove: session was just created with no data
         cursor.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
+        log_import(0)
         return -1, 0
 
     # Step 3: Build uuid -> message_id mapping
@@ -367,26 +383,34 @@ def import_session(
 
         branches_imported += 1
 
+    prune_stale_branches(cursor, session_id, {b["leaf_uuid"] for b in branches})
+
     # Check if session has any branches at all (pre-existing + new)
     cursor.execute("SELECT COUNT(*) FROM branches WHERE session_id = ?", (session_id,))
     if cursor.fetchone()[0] == 0:
         # Messages exist (guaranteed by early return above) but no branches —
         # nothing useful for branch-based search.
+        log_import(total_messages)
         return -1, 0
 
     # Step 5: Update import_log
-    if log_row:
-        cursor.execute(
-            "UPDATE import_log SET file_hash = ?, imported_at = CURRENT_TIMESTAMP, messages_imported = ? WHERE file_path = ?",
-            (file_hash, total_messages, str(filepath))
-        )
-    else:
-        cursor.execute(
-            "INSERT INTO import_log (file_path, file_hash, messages_imported) VALUES (?, ?, ?)",
-            (str(filepath), file_hash, total_messages)
-        )
+    log_import(total_messages)
 
     return branches_imported, total_messages
+
+
+def drop_expired_queue_rows(conn: sqlite3.Connection) -> None:
+    """Delete NULL-hash import_log rows whose transcript is gone from disk.
+
+    Migrations queue transcripts by NULLing their hash; one that expires before
+    the bulk import runs can never be hashed, and a NULL row left behind makes
+    every SessionStart re-run the bulk import. Touches import_log only.
+    """
+    cursor = conn.cursor()
+    cursor.execute("SELECT file_path FROM import_log WHERE file_hash IS NULL")
+    gone = [(path,) for (path,) in cursor.fetchall() if not Path(path).exists()]
+    cursor.executemany("DELETE FROM import_log WHERE file_path = ?", gone)
+    conn.commit()
 
 
 def import_project(
@@ -419,6 +443,13 @@ def import_project(
     project_name = extract_project_name(project_path)
 
     if exclude_projects and project_name in exclude_projects:
+        # The Stop hook still stores excluded sessions, and migrations queue
+        # their transcripts with a NULL hash; nothing here will clear them.
+        prefix = str(project_dir) + os.sep
+        cursor.execute(
+            "DELETE FROM import_log WHERE file_hash IS NULL AND substr(file_path, 1, ?) = ?",
+            (len(prefix), prefix),
+        )
         return 0, 0, 0
 
     cursor.execute("SELECT id, path FROM projects WHERE key = ?", (project_key,))
@@ -475,50 +506,54 @@ def import_codex_session(conn: sqlite3.Connection, filepath: Path) -> tuple[int,
     """
     cursor = conn.cursor()
 
-    file_hash = get_file_hash(filepath)
+    # Codex writes hundreds of multi-MB files a day; an unchanged mtime means the
+    # file was already read, so skip it before hashing.
+    mtime_ns = filepath.stat().st_mtime_ns
     cursor.execute(
-        "SELECT id, file_hash FROM import_log WHERE file_path = ?",
+        "SELECT id, file_hash, mtime_ns FROM import_log WHERE file_path = ?",
         (str(filepath),)
     )
     log_row = cursor.fetchone()
+    if log_row and log_row[2] == mtime_ns:
+        return -1, 0
+
+    file_hash = get_file_hash(filepath)
+
+    def log_import(message_count: int) -> None:
+        cursor.execute("""
+            INSERT INTO import_log (file_path, file_hash, messages_imported, mtime_ns)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(file_path) DO UPDATE SET file_hash = excluded.file_hash,
+                messages_imported = excluded.messages_imported, mtime_ns = excluded.mtime_ns,
+                imported_at = CURRENT_TIMESTAMP
+        """, (str(filepath), file_hash, message_count, mtime_ns))
+
     if log_row and log_row[1] == file_hash:
+        cursor.execute("UPDATE import_log SET mtime_ns = ? WHERE id = ?", (mtime_ns, log_row[0]))
         return -1, 0
 
     session_uuid, all_entries, messages, cwd = parse_codex_session(filepath)
-    if not validate_codex_thread_id(session_uuid) or not all_entries or not messages:
+    if (not validate_codex_thread_id(session_uuid) or not all_entries or not messages
+            or DAYFLOW_CWD_MARKER in (cwd or "")):
+        # Logged so the file is not re-read until it changes.
+        log_import(0)
         return -1, 0
 
     fallback_project_path = resolve_project_cwd(conn, cwd or CODEX_UNKNOWN_PROJECT_PATH)
     project_key = get_project_key(fallback_project_path)
     sync_entries(conn, session_uuid, all_entries, messages, project_key, fallback_project_path)
 
-    cursor.execute("SELECT id FROM sessions WHERE uuid = ?", (session_uuid,))
-    session_row = cursor.fetchone()
-    if not session_row:
+    # Logged before any skip: a NULL hash left behind re-runs the bulk import.
+    cursor.execute("""
+        SELECT (SELECT COUNT(*) FROM messages WHERE session_id = s.id),
+               (SELECT COUNT(*) FROM branches WHERE session_id = s.id)
+        FROM sessions s WHERE s.uuid = ?
+    """, (session_uuid,))
+    total_messages, branches_imported = cursor.fetchone() or (0, 0)
+    log_import(total_messages)
+
+    if total_messages == 0 or branches_imported == 0:
         return -1, 0
-    session_id = session_row[0]
-
-    cursor.execute("SELECT COUNT(*) FROM messages WHERE session_id = ?", (session_id,))
-    total_messages = cursor.fetchone()[0]
-    if total_messages == 0:
-        return -1, 0
-
-    cursor.execute("SELECT COUNT(*) FROM branches WHERE session_id = ?", (session_id,))
-    branches_imported = cursor.fetchone()[0]
-    if branches_imported == 0:
-        return -1, 0
-
-    if log_row:
-        cursor.execute(
-            "UPDATE import_log SET file_hash = ?, imported_at = CURRENT_TIMESTAMP, messages_imported = ? WHERE file_path = ?",
-            (file_hash, total_messages, str(filepath))
-        )
-    else:
-        cursor.execute(
-            "INSERT INTO import_log (file_path, file_hash, messages_imported) VALUES (?, ?, ?)",
-            (str(filepath), file_hash, total_messages)
-        )
-
     return branches_imported, total_messages
 
 
@@ -813,6 +848,9 @@ def _run_main(args, conn, db_path, exclude_projects, logger):
         total_skipped += skipped
         if sessions > 0 or messages > 0:
             print(f"Imported Codex sessions: {sessions} branches, {messages} messages")
+
+    if not args.project:
+        drop_expired_queue_rows(conn)
 
     conn.close()
 

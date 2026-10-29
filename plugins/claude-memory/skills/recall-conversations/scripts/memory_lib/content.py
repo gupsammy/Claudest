@@ -41,10 +41,15 @@ def extract_text_content(content) -> tuple[str, bool, bool, str | None]:
     tool_counts: dict[str, int] = {}
 
     if isinstance(content, str):
-        # Clean up command artifacts
+        # A slash command is the person's turn: keep "/name args" as they typed it.
+        name = re.search(r'<command-name>(.*?)</command-name>', content, flags=re.DOTALL)
+        args = re.search(r'<command-args>(.*?)</command-args>', content, flags=re.DOTALL)
+        typed = " ".join(p.strip() for p in (name and name.group(1), args and args.group(1)) if p and p.strip())
         text = re.sub(r'<command-name>.*?</command-name>', '', content, flags=re.DOTALL)
         text = re.sub(r'<command-message>.*?</command-message>', '', text, flags=re.DOTALL)
         text = re.sub(r'<command-args>.*?</command-args>', '', text, flags=re.DOTALL)
+        if typed:
+            text = typed + "\n" + text
         text = re.sub(r'<local-command-stdout>.*?</local-command-stdout>', '', text, flags=re.DOTALL)
         text = re.sub(r'<channel\b[^>]*>\n?([\s\S]*?)\n?</channel>', r'\1', text, flags=re.DOTALL)
         return text.strip(), False, False, None
@@ -129,9 +134,26 @@ def is_harness_message(content) -> bool:
     return _user_text(content).startswith(_HARNESS_PREFIXES)
 
 
+_COMMAND_ARGS_RE = re.compile(r"<command-args>(.*?)</command-args>", re.DOTALL)
+
+
+def is_bare_command(content) -> bool:
+    """A slash command with no arguments (/clear, /model, a bare skill call).
+
+    Stored as "/name" so it stays searchable, but it is not a typed turn: it must
+    not become a session topic or count as an exchange.
+    """
+    text = _user_text(content)
+    if not text.startswith(("<command-name>", "<command-message>")):
+        return False
+    args = _COMMAND_ARGS_RE.search(text)
+    return not (args and args.group(1).strip())
+
+
 def is_notification_content(content) -> bool:
     """True for any user-role message the person did not type; stored as is_notification."""
-    return is_task_notification(content) or is_teammate_message(content) or is_harness_message(content)
+    return (is_task_notification(content) or is_teammate_message(content)
+            or is_harness_message(content) or is_bare_command(content))
 
 
 def is_tool_result(content) -> bool:

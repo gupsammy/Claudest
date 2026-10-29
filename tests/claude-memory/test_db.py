@@ -11,6 +11,7 @@ from pathlib import Path
 import memory_lib.db as db_module
 from memory_lib.db import (
     CURRENT_ONBOARDING_VERSION,
+    LATEST_DATA_VERSION,
     DEFAULT_SETTINGS,
     SCHEMA,
     _migrate_columns,
@@ -213,7 +214,7 @@ class TestVersionedMigration:
         conn = _pre_migration_db()
         _migrate_columns(conn)
         version = conn.execute("PRAGMA user_version").fetchone()[0]
-        assert version == 6
+        assert version == LATEST_DATA_VERSION
         conn.close()
 
     def test_v0_to_v2_backfills_both(self):
@@ -232,7 +233,7 @@ class TestVersionedMigration:
         assert rows[0] == (1, 0)
         assert rows[1] == (2, 1)
         assert rows[2] == (3, 1)
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 6
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == LATEST_DATA_VERSION
         conn.close()
 
     def test_v1_to_v2_backfills_only_teammate(self):
@@ -252,7 +253,7 @@ class TestVersionedMigration:
         assert rows[0] == (1, 1)  # Already flagged, untouched
         assert rows[1] == (2, 1)  # Newly flagged by version 2
         assert rows[2] == (3, 0)  # Normal, untouched
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 6
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == LATEST_DATA_VERSION
         conn.close()
 
     def test_v2_skips_data_backfills(self):
@@ -268,7 +269,7 @@ class TestVersionedMigration:
         cursor.execute("SELECT is_notification FROM messages WHERE id = 1")
         assert cursor.fetchone()[0] == 0
         # v3 migration runs from v2, bumping version to 3
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 6
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == LATEST_DATA_VERSION
         conn.close()
 
     def test_v2_to_v3_preserves_import_log(self):
@@ -284,7 +285,7 @@ class TestVersionedMigration:
         assert count == 1
         hash_val = conn.execute("SELECT file_hash FROM import_log").fetchone()[0]
         assert hash_val == "abc123"
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 6
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == LATEST_DATA_VERSION
         conn.close()
 
     def test_v3_backfill_updates_origin(self, tmp_path):

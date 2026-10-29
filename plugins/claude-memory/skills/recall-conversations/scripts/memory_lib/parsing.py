@@ -102,7 +102,10 @@ def find_all_branches(all_entries: list[dict]) -> list[dict]:
         if not uuid:
             continue
         uuid_to_entry[uuid] = entry
-        uuid_to_parent[uuid] = entry.get("parentUuid")
+        # A compaction boundary starts a fresh parent chain and points back
+        # through logicalParentUuid; follow it or every compaction cuts the
+        # active branch down to the text after it.
+        uuid_to_parent[uuid] = entry.get("parentUuid") or entry.get("logicalParentUuid")
 
     if not uuid_to_entry:
         return []
@@ -143,10 +146,16 @@ def find_all_branches(all_entries: list[dict]) -> list[dict]:
         {"leaf_uuid": latest["uuid"], "uuids": active_uuids, "is_active": True, "fork_point_uuid": None}
     ]
 
-    # Step 2: Find rewind forks on the active path
+    # Step 2: Find rewind forks on the active path. Only a typed turn marks a
+    # rewind: parallel tool calls also fork, with user-type tool results below.
+    def is_typed_turn(entry: dict) -> bool:
+        return entry.get("type") == "user" and not is_tool_result(
+            (entry.get("message") or {}).get("content")
+        )
+
     def has_user_descendant(uuid: str) -> bool:
         return any(
-            uuid_to_entry.get(node, {}).get("type") == "user" for node in collect_subtree(uuid)
+            is_typed_turn(uuid_to_entry.get(node, {})) for node in collect_subtree(uuid)
         )
 
     for uuid in active_uuids:
@@ -246,3 +255,19 @@ def aggregate_branch_content(cursor: sqlite3.Cursor, branch_db_id: int) -> str:
         ORDER BY m.timestamp ASC
     """, (branch_db_id,))
     return "\n".join(row[0] for row in cursor.fetchall())
+
+
+def prune_stale_branches(cursor: sqlite3.Cursor, session_id: int, leaf_uuids: set[str]) -> None:
+    """Drop branch rows a fresh parse of the whole transcript no longer yields.
+
+    Each sync used to leave its previous active leaf behind as an extra branch.
+    Branches are derived from the transcript, so the current parse is the truth;
+    messages are untouched.
+    """
+    cursor.execute("SELECT id, leaf_uuid FROM branches WHERE session_id = ?", (session_id,))
+    stale = [bid for bid, leaf in cursor.fetchall() if leaf not in leaf_uuids]
+    for i in range(0, len(stale), 500):
+        chunk = stale[i:i + 500]
+        ph = ",".join("?" * len(chunk))
+        cursor.execute(f"DELETE FROM branch_messages WHERE branch_id IN ({ph})", chunk)
+        cursor.execute(f"DELETE FROM branches WHERE id IN ({ph})", chunk)

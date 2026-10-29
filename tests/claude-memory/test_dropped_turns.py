@@ -28,7 +28,12 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "plugins" / "claude-memory" / "hooks"))
 
 import import_conversations as import_module
-from import_conversations import import_codex_session, import_project, import_session
+from import_conversations import (
+    drop_expired_queue_rows,
+    import_codex_session,
+    import_project,
+    import_session,
+)
 from memory_lib.content import extract_text_content, is_notification_content
 from memory_lib.db import SCHEMA, _migrate_columns, get_db_connection
 from memory_lib.parsing import find_all_branches
@@ -188,6 +193,17 @@ class TestImportQueueClears:
         assert import_project(memory_db, project_dir, ["secret"]) == (0, 0, 0)
         assert [r[0] for r in memory_db.execute(
             "SELECT file_path FROM import_log WHERE file_hash IS NULL")] == [str(other)]
+
+    def test_expired_transcript_leaves_queue(self, memory_db, tmp_path):
+        kept = tmp_path / "kept.jsonl"
+        kept.write_text("")
+        self._queue(memory_db, kept)
+        self._queue(memory_db, tmp_path / "expired.jsonl")  # deleted before the import ran
+
+        drop_expired_queue_rows(memory_db)
+
+        assert [r[0] for r in memory_db.execute(
+            "SELECT file_path FROM import_log WHERE file_hash IS NULL")] == [str(kept)]
 
 
 class TestSlashCommands:

@@ -399,6 +399,20 @@ def import_session(
     return branches_imported, total_messages
 
 
+def drop_expired_queue_rows(conn: sqlite3.Connection) -> None:
+    """Delete NULL-hash import_log rows whose transcript is gone from disk.
+
+    Migrations queue transcripts by NULLing their hash; one that expires before
+    the bulk import runs can never be hashed, and a NULL row left behind makes
+    every SessionStart re-run the bulk import. Touches import_log only.
+    """
+    cursor = conn.cursor()
+    cursor.execute("SELECT file_path FROM import_log WHERE file_hash IS NULL")
+    gone = [(path,) for (path,) in cursor.fetchall() if not Path(path).exists()]
+    cursor.executemany("DELETE FROM import_log WHERE file_path = ?", gone)
+    conn.commit()
+
+
 def import_project(
     conn: sqlite3.Connection,
     project_dir: Path,
@@ -841,6 +855,9 @@ def _run_main(args, conn, db_path, exclude_projects, logger):
         total_skipped += skipped
         if sessions > 0 or messages > 0:
             print(f"Imported Codex sessions: {sessions} branches, {messages} messages")
+
+    if not args.project:
+        drop_expired_queue_rows(conn)
 
     conn.close()
 

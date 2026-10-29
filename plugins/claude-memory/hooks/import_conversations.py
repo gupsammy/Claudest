@@ -28,6 +28,7 @@ from memory_lib.db import (
     BACKUP_RETENTION,
     CODEX_IMPORT_SENTINEL,
     CODEX_UNKNOWN_PROJECT_PATH,
+    DAYFLOW_CWD_MARKER,
     DEFAULT_CODEX_SESSIONS_DIR,
     DEFAULT_DB_PATH,
     DEFAULT_PROJECTS_DIR,
@@ -45,6 +46,7 @@ from memory_lib.content import extract_text_content, is_notification_content, is
 from memory_lib.parsing import (
     parse_jsonl_file, parse_all_with_uuids, extract_session_metadata,
     find_all_branches, compute_branch_metadata, aggregate_branch_content,
+    prune_stale_branches,
 )
 from memory_lib.formatting import get_project_key, normalize_cwd, normalize_project_key, parse_project_key, extract_project_name
 from memory_lib.summarizer import SUMMARY_VERSION, compute_context_summary
@@ -367,6 +369,8 @@ def import_session(
 
         branches_imported += 1
 
+    prune_stale_branches(cursor, session_id, {b["leaf_uuid"] for b in branches})
+
     # Check if session has any branches at all (pre-existing + new)
     cursor.execute("SELECT COUNT(*) FROM branches WHERE session_id = ?", (session_id,))
     if cursor.fetchone()[0] == 0:
@@ -475,17 +479,37 @@ def import_codex_session(conn: sqlite3.Connection, filepath: Path) -> tuple[int,
     """
     cursor = conn.cursor()
 
-    file_hash = get_file_hash(filepath)
+    # Codex writes hundreds of multi-MB files a day; an unchanged mtime means the
+    # file was already read, so skip it before hashing.
+    mtime_ns = filepath.stat().st_mtime_ns
     cursor.execute(
-        "SELECT id, file_hash FROM import_log WHERE file_path = ?",
+        "SELECT id, file_hash, mtime_ns FROM import_log WHERE file_path = ?",
         (str(filepath),)
     )
     log_row = cursor.fetchone()
+    if log_row and log_row[2] == mtime_ns:
+        return -1, 0
+
+    file_hash = get_file_hash(filepath)
+
+    def log_import(message_count: int) -> None:
+        cursor.execute("""
+            INSERT INTO import_log (file_path, file_hash, messages_imported, mtime_ns)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(file_path) DO UPDATE SET file_hash = excluded.file_hash,
+                messages_imported = excluded.messages_imported, mtime_ns = excluded.mtime_ns,
+                imported_at = CURRENT_TIMESTAMP
+        """, (str(filepath), file_hash, message_count, mtime_ns))
+
     if log_row and log_row[1] == file_hash:
+        cursor.execute("UPDATE import_log SET mtime_ns = ? WHERE id = ?", (mtime_ns, log_row[0]))
         return -1, 0
 
     session_uuid, all_entries, messages, cwd = parse_codex_session(filepath)
-    if not validate_codex_thread_id(session_uuid) or not all_entries or not messages:
+    if (not validate_codex_thread_id(session_uuid) or not all_entries or not messages
+            or DAYFLOW_CWD_MARKER in (cwd or "")):
+        # Logged so the file is not re-read until it changes.
+        log_import(0)
         return -1, 0
 
     fallback_project_path = resolve_project_cwd(conn, cwd or CODEX_UNKNOWN_PROJECT_PATH)
@@ -508,16 +532,7 @@ def import_codex_session(conn: sqlite3.Connection, filepath: Path) -> tuple[int,
     if branches_imported == 0:
         return -1, 0
 
-    if log_row:
-        cursor.execute(
-            "UPDATE import_log SET file_hash = ?, imported_at = CURRENT_TIMESTAMP, messages_imported = ? WHERE file_path = ?",
-            (file_hash, total_messages, str(filepath))
-        )
-    else:
-        cursor.execute(
-            "INSERT INTO import_log (file_path, file_hash, messages_imported) VALUES (?, ?, ?)",
-            (str(filepath), file_hash, total_messages)
-        )
+    log_import(total_messages)
 
     return branches_imported, total_messages
 

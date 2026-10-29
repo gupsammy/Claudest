@@ -41,10 +41,15 @@ def extract_text_content(content) -> tuple[str, bool, bool, str | None]:
     tool_counts: dict[str, int] = {}
 
     if isinstance(content, str):
-        # Clean up command artifacts
+        # A slash command is the person's turn: keep "/name args" as they typed it.
+        name = re.search(r'<command-name>(.*?)</command-name>', content, flags=re.DOTALL)
+        args = re.search(r'<command-args>(.*?)</command-args>', content, flags=re.DOTALL)
+        typed = " ".join(p.strip() for p in (name and name.group(1), args and args.group(1)) if p and p.strip())
         text = re.sub(r'<command-name>.*?</command-name>', '', content, flags=re.DOTALL)
         text = re.sub(r'<command-message>.*?</command-message>', '', text, flags=re.DOTALL)
         text = re.sub(r'<command-args>.*?</command-args>', '', text, flags=re.DOTALL)
+        if typed:
+            text = typed + "\n" + text
         text = re.sub(r'<local-command-stdout>.*?</local-command-stdout>', '', text, flags=re.DOTALL)
         text = re.sub(r'<channel\b[^>]*>\n?([\s\S]*?)\n?</channel>', r'\1', text, flags=re.DOTALL)
         return text.strip(), False, False, None

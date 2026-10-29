@@ -599,10 +599,14 @@ class TestSyncBranchMessagesDiff:
             )
             links_after_full = set(cursor.fetchall())
 
-            # All links from the partial sync must still exist (append-only for existing links)
-            assert links_after_partial.issubset(links_after_full), (
-                "branch_messages from partial sync were removed after full sync — "
-                f"missing: {links_after_partial - links_after_full}"
+            # Every message linked after the partial sync must stay linked. The
+            # partial sync's leaf is no longer a leaf, so its branch row is pruned
+            # and the messages now hang off the grown active branch.
+            msgs_after_partial = {m for _, m in links_after_partial}
+            msgs_after_full = {m for _, m in links_after_full}
+            assert msgs_after_partial.issubset(msgs_after_full), (
+                "messages from partial sync lost their branch link after full sync — "
+                f"missing: {msgs_after_partial - msgs_after_full}"
             )
 
             # The full sync must have added new links (growth was actually recorded)

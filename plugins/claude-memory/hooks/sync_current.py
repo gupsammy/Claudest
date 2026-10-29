@@ -180,8 +180,8 @@ def parse_codex_session(filepath: Path) -> tuple[str, list[dict], list[dict], st
                     if item.get("type") == "UserMessage":
                         text = _extract_codex_text(item)
                         if text:
-                            item_users.append(
-                                (len(raw_messages), f"item:{item.get('id')}", timestamp, text))
+                            item_id = item.get("id") or f"ord-{len(item_users)}"
+                            item_users.append((len(raw_messages), f"item:{item_id}", timestamp, text))
                 continue
 
             if obj_type == "response_item":
@@ -198,6 +198,7 @@ def parse_codex_session(filepath: Path) -> tuple[str, list[dict], list[dict], st
                     legacy_ordinal += 1
 
     # A file with legacy user events also carries the same turns as items; read one.
+    # A resumed thread that mixes both formats keeps only its legacy turns.
     if not has_legacy_user:
         for pos, key, timestamp, text in reversed(item_users):
             raw_messages.insert(pos, ("user", key, timestamp, text))

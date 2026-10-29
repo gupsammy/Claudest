@@ -134,9 +134,26 @@ def is_harness_message(content) -> bool:
     return _user_text(content).startswith(_HARNESS_PREFIXES)
 
 
+_COMMAND_ARGS_RE = re.compile(r"<command-args>(.*?)</command-args>", re.DOTALL)
+
+
+def is_bare_command(content) -> bool:
+    """A slash command with no arguments (/clear, /model, a bare skill call).
+
+    Stored as "/name" so it stays searchable, but it is not a typed turn: it must
+    not become a session topic or count as an exchange.
+    """
+    text = _user_text(content)
+    if not text.startswith(("<command-name>", "<command-message>")):
+        return False
+    args = _COMMAND_ARGS_RE.search(text)
+    return not (args and args.group(1).strip())
+
+
 def is_notification_content(content) -> bool:
     """True for any user-role message the person did not type; stored as is_notification."""
-    return is_task_notification(content) or is_teammate_message(content) or is_harness_message(content)
+    return (is_task_notification(content) or is_teammate_message(content)
+            or is_harness_message(content) or is_bare_command(content))
 
 
 def is_tool_result(content) -> bool:

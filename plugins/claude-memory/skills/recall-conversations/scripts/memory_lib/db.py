@@ -655,14 +655,26 @@ def _repair_branches_and_drop_dayflow(cursor: sqlite3.Cursor) -> None:
                    "(SELECT project_id FROM sessions WHERE project_id IS NOT NULL)",
                    (f"%{DAYFLOW_CWD_MARKER}%",))
 
-    on_disk: set[str] = set()
+    # Find transcripts on disk, not only through import_log: the Stop hook never
+    # writes it, so most synced sessions have no row. A NULL hash also makes
+    # memory-setup start the bulk re-import.
+    cursor.execute("SELECT uuid FROM sessions")
+    stored = {row[0][-36:] for row in cursor.fetchall()}
     cursor.execute("SELECT file_path FROM import_log ORDER BY id")
-    for (file_path,) in cursor.fetchall():
-        if not Path(file_path).exists():
+    paths = {Path(row[0]) for row in cursor.fetchall()}
+    for root, pattern in ((DEFAULT_PROJECTS_DIR, "*/*.jsonl"), (DEFAULT_CODEX_SESSIONS_DIR, "**/*.jsonl")):
+        if root.exists():
+            paths.update(root.glob(pattern))
+    on_disk: set[str] = set()
+    for path in sorted(paths):
+        key = path.stem[-36:]
+        if key not in stored or not path.exists():
             continue
-        on_disk.add(Path(file_path).stem[-36:])
-        cursor.execute("UPDATE import_log SET file_hash = NULL, mtime_ns = NULL WHERE file_path = ?",
-                       (file_path,))
+        on_disk.add(key)
+        cursor.execute("""
+            INSERT INTO import_log (file_path, file_hash, mtime_ns) VALUES (?, NULL, NULL)
+            ON CONFLICT(file_path) DO UPDATE SET file_hash = NULL, mtime_ns = NULL
+        """, (str(path),))
 
     cursor.execute("""
         SELECT s.uuid, b.id FROM sessions s

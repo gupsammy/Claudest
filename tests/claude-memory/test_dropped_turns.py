@@ -27,7 +27,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "plugins" / "claude
 
 import import_conversations as import_module
 from import_conversations import import_codex_session, import_session
-from memory_lib.content import extract_text_content
+from memory_lib.content import extract_text_content, is_notification_content
 from memory_lib.db import SCHEMA, _migrate_columns, get_db_connection
 from memory_lib.parsing import find_all_branches
 from sync_current import _codex_message_uuid, parse_codex_session
@@ -168,6 +168,14 @@ class TestSlashCommands:
         text = "<command-message>clean-branches</command-message>\n<command-name>/clean-branches</command-name>"
         assert extract_text_content(text)[0] == "/clean-branches"
 
+    def test_bare_command_is_not_a_typed_turn(self):
+        # Stored and searchable, but kept out of topics, exchange counts and embeddings.
+        bare = "<command-name>/clear</command-name><command-message>clear</command-message><command-args></command-args>"
+        assert extract_text_content(bare)[0] == "/clear"
+        assert is_notification_content(bare)
+        assert not is_notification_content(
+            "<command-name>/ask-matt</command-name><command-args>issue 12</command-args>")
+
     def test_local_command_output_still_dropped(self):
         assert extract_text_content("<local-command-stdout>Set model to opus</local-command-stdout>")[0] == ""
 
@@ -209,6 +217,16 @@ class TestCodexUserTurns:
             ("user", "start the website please"), ("assistant", "Started.")]
         # The answer keeps the UUID it got when only final answers were read.
         assert messages[1]["uuid"] == _codex_message_uuid(sid, "response_item.message.final_answer", 0)
+
+    def test_items_without_id_stay_distinct(self, tmp_path):
+        f = tmp_path / "rollout.jsonl"
+        a, b = _user_item("first", 1), _user_item("second", 3)
+        del a["payload"]["item"]["id"], b["payload"]["item"]["id"]
+        _codex_file(f, "/repo", [a, _final("one", 2), b, _final("two", 4)])
+
+        _, _, messages, _ = parse_codex_session(f)
+
+        assert len({m["uuid"] for m in messages}) == 4
 
     def test_legacy_event_wins_over_item(self, tmp_path):
         f = tmp_path / "rollout.jsonl"
@@ -267,6 +285,32 @@ def _db_at_v6(db_file: Path, on_disk: Path):
 
 
 class TestV7Migration:
+    @pytest.fixture(autouse=True)
+    def _empty_transcript_dirs(self, tmp_path, monkeypatch):
+        import memory_lib.db as db_module
+        monkeypatch.setattr(db_module, "DEFAULT_PROJECTS_DIR", tmp_path / "projects")
+        monkeypatch.setattr(db_module, "DEFAULT_CODEX_SESSIONS_DIR", tmp_path / "codex")
+
+    def test_unlogged_transcript_on_disk_is_queued_not_merged(self, tmp_path):
+        # The Stop hook never writes import_log, so a synced session can have its
+        # transcript on disk and no log row.
+        db_file = tmp_path / "conversations.db"
+        ids = _db_at_v6(db_file, tmp_path / "uuid-disk.jsonl")
+        transcript = tmp_path / "projects" / "-p" / "uuid-gone.jsonl"
+        transcript.parent.mkdir(parents=True)
+        transcript.write_text("{}\n")
+
+        conn = get_db_connection({"db_path": str(db_file)})
+
+        assert conn.execute("SELECT file_hash FROM import_log WHERE file_path = ?",
+                            (str(transcript),)).fetchone() == (None,)
+        users = conn.execute("""
+            SELECT COUNT(*) FROM branches b JOIN branch_messages bm ON bm.branch_id = b.id
+            JOIN messages m ON m.id = bm.message_id
+            WHERE b.session_id = ? AND b.is_active = 1 AND m.role = 'user'""", (ids["gone"],)).fetchone()[0]
+        assert users == 1  # left for the re-import, not merged from the DB
+        conn.close()
+
     def test_repairs_branches_and_drops_dayflow(self, tmp_path):
         db_file = tmp_path / "conversations.db"
         on_disk = tmp_path / "uuid-disk.jsonl"

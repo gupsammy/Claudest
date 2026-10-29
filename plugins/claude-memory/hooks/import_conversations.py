@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import sqlite3
 import sys
 import time
@@ -151,19 +152,31 @@ def import_session(
     if log_row and log_row[1] == file_hash:
         return -1, 0
 
+    def log_import(count: int) -> None:
+        # Every parsed file gets its hash, skipped or not: a NULL hash left
+        # behind makes SessionStart re-run the bulk import forever.
+        cursor.execute("""
+            INSERT INTO import_log (file_path, file_hash, messages_imported) VALUES (?, ?, ?)
+            ON CONFLICT(file_path) DO UPDATE SET file_hash = excluded.file_hash,
+                imported_at = CURRENT_TIMESTAMP, messages_imported = excluded.messages_imported
+        """, (str(filepath), file_hash, count))
+
     # Parse all entries for branch detection
     all_entries = list(parse_all_with_uuids(filepath))
     if not all_entries:
+        log_import(0)
         return -1, 0
 
     # Find all branches
     branches = find_all_branches(all_entries)
     if not branches:
+        log_import(0)
         return -1, 0
 
     # Parse user/assistant messages
     messages = list(parse_jsonl_file(filepath))
     if not messages:
+        log_import(0)
         return -1, 0
 
     # Extract session UUID from filename
@@ -243,6 +256,7 @@ def import_session(
     if total_messages == 0:
         # Safe to remove: session was just created with no data
         cursor.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
+        log_import(0)
         return -1, 0
 
     # Step 3: Build uuid -> message_id mapping
@@ -376,19 +390,11 @@ def import_session(
     if cursor.fetchone()[0] == 0:
         # Messages exist (guaranteed by early return above) but no branches —
         # nothing useful for branch-based search.
+        log_import(total_messages)
         return -1, 0
 
     # Step 5: Update import_log
-    if log_row:
-        cursor.execute(
-            "UPDATE import_log SET file_hash = ?, imported_at = CURRENT_TIMESTAMP, messages_imported = ? WHERE file_path = ?",
-            (file_hash, total_messages, str(filepath))
-        )
-    else:
-        cursor.execute(
-            "INSERT INTO import_log (file_path, file_hash, messages_imported) VALUES (?, ?, ?)",
-            (str(filepath), file_hash, total_messages)
-        )
+    log_import(total_messages)
 
     return branches_imported, total_messages
 
@@ -423,6 +429,13 @@ def import_project(
     project_name = extract_project_name(project_path)
 
     if exclude_projects and project_name in exclude_projects:
+        # The Stop hook still stores excluded sessions, and migrations queue
+        # their transcripts with a NULL hash; nothing here will clear them.
+        prefix = str(project_dir) + os.sep
+        cursor.execute(
+            "DELETE FROM import_log WHERE file_hash IS NULL AND substr(file_path, 1, ?) = ?",
+            (len(prefix), prefix),
+        )
         return 0, 0, 0
 
     cursor.execute("SELECT id, path FROM projects WHERE key = ?", (project_key,))

@@ -9,7 +9,9 @@ Coverage:
 4. Codex — new-format UserMessage items import as user turns without shifting
    the synthetic UUIDs of rows imported before; Dayflow runs are skipped and,
    once logged, not re-read.
-5. Migration v7 — drops Dayflow sessions, queues on-disk transcripts for
+5. Bulk import — every transcript it reaches leaves a hash in import_log,
+   skipped or excluded, so a queued NULL row cannot re-trigger it forever.
+6. Migration v7 — drops Dayflow sessions, queues on-disk transcripts for
    re-import, puts every stored message of a lost transcript on its active
    branch, and waits when the backup fails.
 """
@@ -26,7 +28,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "plugins" / "claude-memory" / "hooks"))
 
 import import_conversations as import_module
-from import_conversations import import_codex_session, import_session
+from import_conversations import import_codex_session, import_project, import_session
 from memory_lib.content import extract_text_content, is_notification_content
 from memory_lib.db import SCHEMA, _migrate_columns, get_db_connection
 from memory_lib.parsing import find_all_branches
@@ -155,6 +157,37 @@ class TestImportKeepsTurns:
         import_session(memory_db, f, project_id)
 
         assert memory_db.execute("SELECT COUNT(*), SUM(is_active) FROM branches").fetchone() == (1, 1)
+
+
+class TestImportQueueClears:
+    """A NULL import_log hash makes SessionStart re-run the bulk import."""
+
+    def _queue(self, conn, path):
+        conn.execute("INSERT INTO import_log (file_path, file_hash) VALUES (?, NULL)", (str(path),))
+
+    def _null_rows(self, conn):
+        return conn.execute("SELECT COUNT(*) FROM import_log WHERE file_hash IS NULL").fetchone()[0]
+
+    def test_skipped_session_records_hash(self, memory_db, project_id, tmp_path):
+        f = tmp_path / "11111111-1111-1111-1111-111111111111.jsonl"
+        _write(f, [_entry("a1", None, "assistant", _tool_use("t1"), 0)])  # no text to store
+        self._queue(memory_db, f)
+
+        assert import_session(memory_db, f, project_id) == (-1, 0)
+        assert self._null_rows(memory_db) == 0
+
+    def test_excluded_project_clears_its_queue(self, memory_db, tmp_path):
+        project_dir = tmp_path / "-home-u-secret"
+        project_dir.mkdir()
+        f = project_dir / "11111111-1111-1111-1111-111111111111.jsonl"
+        _write(f, [_entry("u1", None, "user", "hi", 0, cwd="/home/u/secret")])
+        self._queue(memory_db, f)
+        other = tmp_path / "-home-u-secret2" / "x.jsonl"  # shares the prefix, not the dir
+        self._queue(memory_db, other)
+
+        assert import_project(memory_db, project_dir, ["secret"]) == (0, 0, 0)
+        assert [r[0] for r in memory_db.execute(
+            "SELECT file_path FROM import_log WHERE file_hash IS NULL")] == [str(other)]
 
 
 class TestSlashCommands:
